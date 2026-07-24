@@ -1,0 +1,455 @@
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Roboto:wght@400;500;600;700&display=swap");
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@font-face {
+  font-family: "Aeonik";
+  src: url("/__l5e/assets-v1/863b9fe4-b0d0-43dc-a2a7-4419c64b3fd9/Aeonik-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Aeonik";
+  src: url("/__l5e/assets-v1/91baa8ac-4afb-4777-a32e-89a06d2f63e4/Aeonik-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Aeonik";
+  src: url("/__l5e/assets-v1/e480ac8d-31f7-4931-87bd-32bffa5aab10/Aeonik-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: "Roboto", "Aeonik", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque", "Aeonik", ui-sans-serif, system-ui, sans-serif;
+
+  /* Naboo brand */
+  --color-naboo: #eff779;
+  --color-naboo-hover: #e3ec5f;
+  --color-navy: #101f34;
+
+  /* Neutral scale aligned to the Naboo Tracker design */
+  --color-slate-50: #fafaf8;
+  --color-slate-100: #f3f4f6;
+  --color-slate-200: #e5e7eb;
+  --color-slate-300: #d1d5db;
+  --color-slate-400: #9ca3af;
+  --color-slate-500: #6b7280;
+  --color-slate-600: #4b5563;
+  --color-slate-700: #374151;
+  --color-slate-800: #1c2c44;
+  --color-slate-900: #101f34;
+
+  /* Client section (teal) — replaces the old sky palette */
+  --color-sky-50: #f5fbfc;
+  --color-sky-100: #e8f6f9;
+  --color-sky-200: #cdeaf0;
+  --color-sky-300: #9fd8e2;
+  --color-sky-600: #0e8493;
+  --color-sky-700: #0f766e;
+  --color-sky-800: #115e59;
+
+  /* Partner section (Naboo lime) — replaces the old indigo palette */
+  --color-indigo-50: #f8fadf;
+  --color-indigo-100: #f6f9d8;
+  --color-indigo-200: #e9efa8;
+  --color-indigo-300: #dbe57a;
+  --color-indigo-600: #77851b;
+  --color-indigo-700: #5b6511;
+  --color-indigo-800: #4a520e;
+
+  /* Status greens */
+  --color-emerald-100: #e7f8f3;
+  --color-emerald-200: #c2ede0;
+  --color-emerald-600: #00875a;
+  --color-emerald-700: #00734d;
+  --color-emerald-800: #00593c;
+
+  /* Status reds */
+  --color-rose-50: #fef2f2;
+  --color-rose-100: #fee2e2;
+  --color-rose-200: #fecaca;
+  --color-rose-600: #dc2626;
+  --color-rose-700: #b91c1c;
+  --color-rose-800: #991b1b;
+
+  /* Status ambers */
+  --color-amber-100: #ffeed4;
+  --color-amber-200: #fde0b2;
+  --color-amber-600: #b45309;
+  --color-amber-700: #a34d0a;
+  --color-amber-800: #92400e;
+
+  /* "Due" pills (teal in the redesign) — replaces the old violet palette */
+  --color-violet-100: #e8f6f9;
+  --color-violet-200: #cdeaf0;
+  --color-violet-600: #0f766e;
+  --color-violet-700: #0f766e;
+  --color-violet-800: #0f766e;
+}
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design system definition.
+ *
+ * The @theme inline block maps CSS custom properties to Tailwind utility
+ * classes (e.g. --color-primary -> bg-primary, text-primary).
+ *
+ * The :root and .dark blocks define the actual color values using oklch.
+ * All colors MUST use oklch format.
+ *
+ * To add a new semantic color:
+ * 1. Add the variable to :root (light value) and .dark (dark value)
+ * 2. Register it in @theme inline as --color-<name>: var(--<name>)
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-bg-accent: var(--bg-accent);
+  --color-bg-warning: var(--bg-warning);
+  --color-surface-1: var(--surface-1);
+  --color-text-danger: var(--text-danger);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--muted-foreground);
+  --color-text-primary: var(--foreground);
+}
+
+:root {
+  /* Cards 8–12px, tags/buttons 4px (radius - 4 = 4px) */
+  --radius: 0.5rem;
+
+  /* Surfaces */
+  --background: #fafaf8;                      /* Naboo page background */
+  --foreground: #101f34;                      /* Naboo navy */
+  --card: #ffffff;
+  --card-foreground: #101f34;
+  --popover: #ffffff;
+  --popover-foreground: #101f34;
+
+  /* Primary = navy stats #1B2B5E */
+  --primary: #101f34;
+  --primary-foreground: #ffffff;
+
+  /* Secondary tone (subtle surface) */
+  --secondary: #f3f4f6;
+  --secondary-foreground: #101f34;
+
+  /* Muted / body / secondary text */
+  --muted: #f3f4f6;
+  --muted-foreground: #6b7280;
+
+  /* Accent = vert #C6E278 with dark green text #1A2E00 */
+  --accent: #eff779;
+  --accent-foreground: #101f34;
+
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(1 0 0);
+
+  /* Borders 0.5px #E5E5E5 */
+  --border: #e5e7eb;
+  --input: #d1d5db;
+  --ring: #101f34;
+
+  --chart-1: #101f34;                         /* navy */
+  --chart-2: #eff779;                         /* Naboo yellow */
+  --chart-3: oklch(0.6 0 0);
+  --chart-4: oklch(0.42 0 0);
+  --chart-5: oklch(0.28 0.08 130);
+
+  --sidebar: #101f34;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #eff779;
+  --sidebar-primary-foreground: #101f34;
+  --sidebar-accent: #eff779;
+  --sidebar-accent-foreground: #101f34;
+  --sidebar-border: rgba(255, 255, 255, 0.1);
+  --sidebar-ring: #eff779;
+
+  --bg-accent: oklch(0.96 0.05 118);          /* pale lime tint */
+  --bg-warning: oklch(0.97 0.04 90);
+  --surface-1: oklch(0.985 0 0);
+  --text-danger: oklch(0.55 0.22 25);
+  --text-secondary: oklch(0.42 0 0);          /* #555555 corps */
+}
+
+
+.dark {
+  --background: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.984 0.003 247.858);
+  --card: oklch(0.208 0.042 265.755);
+  --card-foreground: oklch(0.984 0.003 247.858);
+  --popover: oklch(0.208 0.042 265.755);
+  --popover-foreground: oklch(0.984 0.003 247.858);
+  --primary: oklch(0.929 0.013 255.508);
+  --primary-foreground: oklch(0.208 0.042 265.755);
+  --secondary: oklch(0.279 0.041 260.031);
+  --secondary-foreground: oklch(0.984 0.003 247.858);
+  --muted: oklch(0.279 0.041 260.031);
+  --muted-foreground: oklch(0.704 0.04 256.788);
+  --accent: oklch(0.279 0.041 260.031);
+  --accent-foreground: oklch(0.984 0.003 247.858);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.551 0.027 264.364);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.208 0.042 265.755);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.279 0.041 260.031);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --bg-accent: oklch(0.28 0.05 240);
+  --bg-warning: oklch(0.3 0.05 75);
+  --surface-1: oklch(0.22 0.04 265);
+  --text-danger: oklch(0.72 0.2 22);
+  --text-secondary: oklch(0.85 0.02 250);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+}
+
+/* North America tracker table */
+.na-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+.na-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--background);
+}
+.na-table .na-group {
+  padding: 6px 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  text-align: left;
+  background: var(--background);
+  border-bottom: 0.5px solid var(--border);
+}
+.na-table .na-group-event { border-top: 2px solid transparent; }
+.na-table .na-group-client {
+  background: #e8f6f9;
+  color: #0f766e;
+  border-top: 2px solid #cdeaf0;
+}
+.na-table .na-group-partner {
+  background: #f6f9d8;
+  color: #5b6511;
+  border-top: 2px solid #e9efa8;
+}
+.na-table .na-head-row th {
+  padding: 8px 6px;
+  border-bottom: 0.5px solid var(--border);
+  background: var(--background);
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.na-table .na-head-row th.na-col-client { background: #EAF2FD; color: #5B7FA6; }
+.na-table .na-head-row th.na-col-partner { background: #F0EAFB; color: #8B6FC4; }
+.na-table .na-cell {
+  padding: 10px 6px;
+  border-bottom: 0.5px solid var(--border);
+  vertical-align: top;
+  background: var(--background);
+  font-size: 12px;
+}
+.na-table .na-cell.na-col-client { background: #F7FAFF; }
+.na-table .na-cell.na-col-partner { background: #FAF8FE; }
+/* Very subtle zebra — only darken the DEAL block; tinted cells get their own zebra */
+.na-table .na-zebra .na-cell {
+  background: color-mix(in oklab, var(--surface-1) 30%, var(--background));
+}
+.na-table .na-zebra .na-cell.na-col-client {
+  background: color-mix(in oklab, #E4EEFB 45%, #F7FAFF);
+}
+.na-table .na-zebra .na-cell.na-col-partner {
+  background: color-mix(in oklab, #E9E1F7 40%, #FAF8FE);
+}
+.na-table .na-body-row:hover .na-cell {
+  background: color-mix(in oklab, var(--accent) 40%, var(--background));
+}
+.na-table .na-body-row:hover .na-cell.na-col-client {
+  background: color-mix(in oklab, #DCE8F8 55%, #F7FAFF);
+}
+.na-table .na-body-row:hover .na-cell.na-col-partner {
+  background: color-mix(in oklab, #E2D6F3 55%, #FAF8FE);
+}
+.na-table .na-drawer-row .na-drawer-wrap {
+  padding: 8px 12px 18px;
+  background: var(--background);
+  border-bottom: 0.5px solid var(--border);
+}
+.na-zebra + .na-drawer-row .na-drawer-wrap {
+  background: color-mix(in oklab, var(--surface-1) 30%, var(--background));
+}
+
+/* Sectioned card inside drawer */
+.na-section-card {
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  overflow: hidden;
+}
+.na-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 0.5px solid var(--border);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.na-section-caption {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.na-sub-table { width: 100%; border-collapse: collapse; }
+.na-sub-table th {
+  padding: 10px 14px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--surface-1) 60%, var(--background));
+  border-bottom: 0.5px solid var(--border);
+}
+.na-sub-table th:not(.text-right) { text-align: left; }
+.na-sub-table th.text-right { text-align: right; }
+.na-sub-table td {
+  padding: 11px 14px;
+  border-bottom: 0.5px solid var(--border);
+  vertical-align: top;
+  font-size: 12.5px;
+}
+.na-sub-table tbody tr:last-child td { border-bottom: 0; }
+.na-sub-table .na-sub-subtotal td {
+  background: color-mix(in oklab, var(--surface-1) 70%, var(--background));
+  border-top: 0.5px solid var(--border);
+  font-weight: 500;
+}
+.na-sub-table .na-sub-provision td { color: var(--muted-foreground); }
+
+/* Partner-tinted drawer card */
+.na-section-card-partner { background: #FAF8FE; border-color: #E1D6F5; }
+.na-section-card-partner .na-section-head {
+  background: #F0EAFB;
+  color: #8B6FC4;
+  border-bottom-color: #E1D6F5;
+}
+.na-section-card-partner .na-sub-table th {
+  background: #F0EAFB;
+  color: #8B6FC4;
+  border-bottom-color: #E1D6F5;
+}
+.na-section-card-partner .na-sub-table td { border-bottom-color: #ECE4F7; }
+.na-section-card-partner .na-sub-table tbody tr:nth-child(even) td {
+  background: color-mix(in oklab, #E9E1F7 35%, #FAF8FE);
+}
+.na-section-card-partner .na-sub-table .na-sub-subtotal td {
+  background: #F0EAFB;
+  border-top-color: #E1D6F5;
+}
+
+/* Pastel pills */
+.na-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 20px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  border: none;
+  white-space: nowrap;
+}
+.na-pill-green { background: #E7F6EC; color: #1A7F37; }
+.na-pill-red { background: #FDECEC; color: #B4534B; }
+.na-pill-amber { background: #FEF3D7; color: #854F0B; }
+.na-pill-lavender { background: #EDE9FE; color: #6D28D9; }
+.na-pill-neutral { background: var(--surface-1); color: var(--muted-foreground); }
+.na-pill-orange { background: #FEECD6; color: #B4570B; }
+.na-pill-clawback { background: #FDECEC; color: #B4534B; font-weight: 500; }
+
+
