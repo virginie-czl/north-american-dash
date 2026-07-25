@@ -44,6 +44,10 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
+  SummaryStrip,
+  useRegisterTrackerActions,
+} from "@/components/tracker-chrome";
+import {
   BarChart,
   Bar,
   XAxis,
@@ -228,14 +232,14 @@ function payoutSla(
 
 function PaymentBadge({ status }: { status: ReturnType<typeof paymentStatus> }) {
   const map: Record<string, string> = {
-    paid: "bg-emerald-100 text-emerald-800 border-emerald-200",
-    partial: "bg-sky-100 text-sky-800 border-sky-200",
-    due: "bg-violet-100 text-violet-800 border-violet-200",
-    overdue: "bg-rose-100 text-rose-800 border-rose-200",
-    muted: "bg-slate-100 text-slate-600 border-slate-200",
+    paid: "bg-emerald-100 text-emerald-800",
+    partial: "bg-sky-100 text-sky-800",
+    due: "bg-violet-100 text-violet-800",
+    overdue: "bg-rose-100 text-rose-800",
+    muted: "bg-slate-100 text-slate-600",
   };
   return (
-    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${map[status.variant]}`}>
+    <span className={`pill ${map[status.variant]}`}>
       {status.label}
     </span>
   );
@@ -776,54 +780,50 @@ function SlaPage() {
   };
   const collapseAll = () => setExpanded({});
 
+  useRegisterTrackerActions(
+    {
+      onRefresh: () => refetch(),
+      isFetching,
+      exports: [
+                {
+                  label: "Export unpaid partners",
+                  onClick: () => exportUnpaidPartners(decorated),
+                  disabled: isLoading || decorated.length === 0,
+                },
+                {
+                  label: "Export contact to-do",
+                  onClick: () => exportContactToBeDone(decorated, statusMap),
+                  disabled: isLoading || decorated.length === 0,
+                },
+      ],
+    },
+    [isFetching, isLoading, decorated.length],
+  );
+
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header>
-        <div className="mx-auto flex max-w-[1500px] flex-wrap items-end justify-between gap-4 px-6 pb-0 pt-7">
-          <div>
-            <h1 className="font-display text-[32px] font-extrabold leading-tight tracking-tight">
-              L'Oréal Canada — SLA Tracker
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Bookings, partner payouts, client invoicing &amp; receivables
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => exportUnpaidPartners(decorated)}
-              disabled={isLoading || decorated.length === 0}
-            >
-              <FileText className="mr-2 h-4 w-4" />
-              Export unpaid partners
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => exportContactToBeDone(decorated, statusMap)}
-              disabled={isLoading || decorated.length === 0}
-            >
-              <FileText className="mr-2 h-4 w-4" />
-              Export contact to-do
-            </Button>
-            <Button size="sm" onClick={() => refetch()} disabled={isFetching} className="border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover">
-              <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-[1500px] space-y-6 px-6 py-6">
-        {error && (
-          <Card className="border-rose-200 bg-rose-50">
-            <CardContent className="pt-6 text-sm text-rose-800">
-              Failed to load data: {String((error as Error).message ?? error)}
-            </CardContent>
-          </Card>
-        )}
-
+    <div className="flex min-h-0 flex-1 flex-col bg-white">
+      <SummaryStrip
+        title="L'Oréal Canada"
+        stats={[
+          { label: "Events", value: isLoading ? "…" : String(kpis.total) },
+          {
+            label: "Not sent",
+            value: isLoading
+              ? "…"
+              : String(kpis.invoiceIssuedNotSent + kpis.notInvoiced),
+          },
+          {
+            label: "Client outstanding",
+            value: isLoading ? "…" : fmtMultiCcy(kpis.clientByCcy),
+          },
+          {
+            label: "Owed to partners",
+            value: isLoading ? "…" : fmtMultiCcy(kpis.partnerByCcy),
+          },
+        ]}
+        alert={breached.length > 0 ? `${breached.length} breached` : null}
+      >
+        {/* Summary detail (collapsed by default) */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <KpiCard icon={<Receipt className="h-4 w-4" />} label="Total events" value={isLoading ? "…" : kpis.total.toString()} />
           <KpiCard
@@ -879,17 +879,31 @@ function SlaPage() {
         </div>
 
 
-        <Tabs defaultValue="table">
-          <TabsList>
+      </SummaryStrip>
+
+      {error != null && (
+        <div
+          role="alert"
+          className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-2.5 text-sm text-rose-800"
+        >
+          Failed to load data: {String((error as Error).message ?? error)}
+        </div>
+      )}
+
+      <Tabs defaultValue="table" className="flex min-h-0 flex-1 flex-col gap-0">
+          <TabsList className="mx-5 mt-2.5 flex-none self-start">
             <TabsTrigger value="table">Detailed table</TabsTrigger>
             <TabsTrigger value="charts">Breakdown</TabsTrigger>
             <TabsTrigger value="breached">Breached ({breached.length})</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="table" className="space-y-4">
-            <Card>
-              <CardContent className="space-y-4 pt-6">
-                <div className="flex flex-wrap items-center gap-3">
+          <TabsContent
+            value="table"
+            className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+          >
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2.5">
                   <Input
                     placeholder="Search ref, event type, partner name/email, invoice…"
                     value={search}
@@ -939,8 +953,8 @@ function SlaPage() {
                   </div>
                 </div>
 
-                <div className="overflow-x-auto rounded-md border bg-white">
-                  <Table>
+                <div className="sla-scroll">
+                  <Table className="sla-table">
                     <TableHeader>
                       <TableRow className="border-b-0">
                         <TableHead className="w-8"></TableHead>
@@ -1145,7 +1159,7 @@ function SlaPage() {
                                     const outreach = partnerOutreach(partners, r.readable_id ?? r.client_request_id ?? "", hasPo);
                                     if (!outreach) return <span className="text-xs text-muted-foreground">—</span>;
                                     return (
-                                      <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${outreach.cls}`}>
+                                      <span className={`pill ${outreach.cls}`}>
                                         {outreach.label}
                                       </span>
                                     );
@@ -1176,8 +1190,8 @@ function SlaPage() {
                     </TableBody>
                   </Table>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </TabsContent>
 
           <TabsContent value="charts" className="grid gap-4 md:grid-cols-2">
@@ -1267,7 +1281,7 @@ function SlaPage() {
                               {issues.map((i) => (
                                 <span
                                   key={i}
-                                  className="inline-flex items-center rounded-md border border-rose-200 bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800"
+                                  className="pill bg-rose-100 text-rose-800"
                                 >
                                   {i}
                                 </span>
@@ -1292,8 +1306,7 @@ function SlaPage() {
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
-      </main>
+      </Tabs>
     </div>
   );
 }
@@ -1380,7 +1393,7 @@ function EventDetails({
                       <td className="px-2 py-1.5">
                         {derived ? (
                           <span
-                            className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium ${opt.cls}`}
+                            className={`pill ${opt.cls}`}
                             title="Derived from amounts"
                           >
                             {opt.label}
@@ -1573,7 +1586,7 @@ function EventComments({ eventRef }: { eventRef: string }) {
                     </button>
                   )}
                 </div>
-                <div className="mt-0.5 whitespace-pre-wrap text-xs text-slate-800">
+                <div className="comment-body mt-0.5 whitespace-pre-wrap text-slate-800">
                   {c.body}
                 </div>
               </div>

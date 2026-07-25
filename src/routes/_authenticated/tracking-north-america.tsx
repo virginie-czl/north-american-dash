@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  SummaryStrip,
+  useRegisterTrackerActions,
+} from "@/components/tracker-chrome";
+import {
   useAddComment,
   useCommentSummaries,
   useCurrentUser,
@@ -492,57 +496,60 @@ function NaPage() {
     return { clients, partnerLines };
   }, [filtered]);
 
-  return (
-    <div className="min-h-screen bg-background px-6 py-8">
-      <div className="mx-auto w-full max-w-[100vw] px-2 space-y-6">
-        <header className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="font-display text-[32px] font-extrabold leading-tight tracking-tight text-foreground">
-              Tracking North America
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Accepted bookings from the North America sales desk — client invoicing and partner payouts.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => exportCsv(sorted)} disabled={sorted.length === 0}>
-              Export CSV
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => exportRecoverCsv(sorted)}
-              disabled={
-                sorted.reduce(
-                  (n, { partners }) =>
-                    n +
-                    partners.reduce((m, p) => {
-                      const cb = partnerClawback(p);
-                      return m + (cb.commission > 0.01 || cb.refund > 0.01 ? 1 : 0);
-                    }, 0),
-                  0,
-                ) === 0
-              }
-            >
-              Export to recover
-            </Button>
-            <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
-              <RefreshCw className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
-          </div>
-        </header>
+  const recoverCount = useMemo(
+    () =>
+      sorted.reduce(
+        (n, { partners }) =>
+          n +
+          partners.reduce((m, p) => {
+            const cb = partnerClawback(p);
+            return m + (cb.commission > 0.01 || cb.refund > 0.01 ? 1 : 0);
+          }, 0),
+        0,
+      ),
+    [sorted],
+  );
 
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+  useRegisterTrackerActions(
+    {
+      onRefresh: () => refetch(),
+      isFetching,
+      exports: [
+        { label: "Export CSV", onClick: () => exportCsv(sorted), disabled: sorted.length === 0 },
+        {
+          label: "Export to recover",
+          onClick: () => exportRecoverCsv(sorted),
+          disabled: recoverCount === 0,
+        },
+      ],
+    },
+    [isFetching, sorted.length, recoverCount],
+  );
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-white">
+      <SummaryStrip
+        title="Marketplace North America"
+        stats={[
+          { label: "Bookings", value: isLoading ? "…" : String(totals.clients) },
+          { label: "Partner lines", value: isLoading ? "…" : String(totals.partnerLines) },
+          { label: "Sales referents", value: String(salesList.length) },
+          { label: "Currencies", value: String(ccyList.length) },
+        ]}
+        alert={recoverCount > 0 ? `${recoverCount} to recover` : null}
+      >
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Kpi title="Bookings" value={totals.clients.toString()} />
           <Kpi title="Partner lines" value={totals.partnerLines.toString()} />
           <Kpi title="Sales referents" value={salesList.length.toString()} />
           <Kpi title="Currencies" value={ccyList.length.toString()} />
         </div>
+      </SummaryStrip>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <CardTitle className="mr-auto">Deals</CardTitle>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex-none border-b border-border px-5 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="mr-auto text-sm font-semibold">Deals</h2>
               <Input
                 placeholder="Search booking, company, partner…"
                 value={search}
@@ -589,16 +596,16 @@ function NaPage() {
                 Include bookings &gt; 100d old
               </label>
             </div>
-          </CardHeader>
-          <CardContent className="p-0">
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col">
             {isLoading && <div className="p-6 text-sm text-muted-foreground">Loading…</div>}
             {error && (
-              <div className="p-6 text-sm text-destructive">
+              <div role="alert" className="p-6 text-sm text-destructive">
                 Failed to load data: {(error as Error).message}
               </div>
             )}
             {!isLoading && !error && (
-              <div className="overflow-x-auto px-2">
+              <div className="sla-scroll px-2">
                 <table className="na-table w-full border-collapse text-[12px]">
                   <thead>
                     <tr className="na-group-row">
@@ -747,10 +754,8 @@ function NaPage() {
                 </table>
               </div>
             )}
-
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </div>
     </div>
   );
 }
