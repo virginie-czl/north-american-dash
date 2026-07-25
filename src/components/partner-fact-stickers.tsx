@@ -5,6 +5,7 @@
  */
 import { CreditCard, Landmark, Mail, Receipt } from "lucide-react";
 import type { PartnerFacts } from "@/lib/use-gmail";
+import type { PartnerAction } from "@/lib/partner-actions";
 
 function shortDate(iso: string | null): string {
   if (!iso) return "";
@@ -62,6 +63,40 @@ function Sticker({
 }
 
 const ICON = "h-2.5 w-2.5 shrink-0";
+
+
+/** Colour by who owes the next move: amber = partner, navy = us, grey = closed. */
+const ACTION_TONE: Record<string, string> = {
+  settled: "bg-slate-100 text-slate-500",
+  ours_pay: "bg-sky-100 text-sky-800",
+  ours_record_tax: "bg-sky-100 text-sky-800",
+  ask_card: "bg-amber-100 text-amber-800",
+  ask_bank: "bg-amber-100 text-amber-800",
+  ask_tax: "bg-amber-100 text-amber-800",
+  ask_bank_and_tax: "bg-rose-100 text-rose-800",
+  await_reply: "bg-amber-100 text-amber-800",
+  blocked_no_po: "bg-slate-100 text-slate-500",
+};
+
+export function ActionSticker({ action }: { action: PartnerAction }) {
+  const tax = action.tax;
+  const taxNote = tax.usable
+    ? `Taxes en base : ${[tax.gst, tax.qst, tax.vat].filter(Boolean).join(" / ")}`
+    : tax.unparsed
+      ? `Taxes en base illisibles : « ${tax.unparsed} »`
+      : "Aucun numéro de taxes en base";
+  return (
+    <span
+      title={`${action.detail}\n${taxNote}`}
+      aria-label={`${action.label} — ${action.detail}`}
+      className={`inline-flex items-center rounded-full px-1.5 py-[1px] text-[10px] font-medium leading-tight ${
+        ACTION_TONE[action.code] ?? "bg-slate-100 text-slate-500"
+      }`}
+    >
+      {action.label}
+    </span>
+  );
+}
 
 /** Builds the four stickers for one partner, or null when never scanned. */
 export function PartnerFactStickers({ facts }: { facts: PartnerFacts | undefined }) {

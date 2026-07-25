@@ -4,6 +4,11 @@ export interface PartnerLine {
   name: string | null;
   email: string | null;
   phone: string | null;
+  /** Free-text tax registration as held on the owner record — needs parsing. */
+  vat_raw: string | null;
+  /** Structured tax identifier, used for non-venue service owners. */
+  tax_identifier: string | null;
+  country: string | null;
   currency: string | null;
   amount_due: number | null;
   amount_paid: number | null;
@@ -81,9 +86,12 @@ partner_detail AS (
     fi.clientRequestId AS client_request_id,
     prt.quoteid        AS quote_id,
     prt.houseownerid   AS house_owner_id,
-    o.company_name     AS service_provider_name,
-    o.email            AS service_provider_email,
-    o.phone            AS service_provider_phone,
+    COALESCE(o.company_name, so.company_name) AS service_provider_name,
+    COALESCE(o.email, so.email)                AS service_provider_email,
+    COALESCE(o.phone, so.phone)                AS service_provider_phone,
+    NULLIF(TRIM(COALESCE(o.vat_number, so.vat_number, '')), '') AS provider_vat_raw,
+    NULLIF(TRIM(COALESCE(so.tax_identifier, '')), '')           AS provider_tax_identifier,
+    COALESCE(o.country_iso_code, so.country_iso_code)           AS provider_country,
     prt.currency       AS provider_currency,
     ROUND(prt.outstandingpayable / 10000, 2) AS amount_due_provider,
     ROUND(prt.netdisbursed       / 10000, 2) AS amount_paid_provider,
@@ -100,6 +108,9 @@ partner_detail AS (
        UNNEST(fi.partners) prt
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o
     ON prt.houseownerid = o.owner_id
+  -- Non-venue providers (ad-hoc services) hang off service_owners instead.
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.service_owners\` so
+    ON prt.houseownerid = so.owner_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q
     ON prt.quoteid = q.quote_id
   WHERE fi.deleted = false
@@ -110,6 +121,7 @@ partners_agg AS (
     ARRAY_AGG(STRUCT(
       quote_id, house_owner_id, service_provider_name,
       service_provider_email, service_provider_phone, provider_currency,
+      provider_vat_raw, provider_tax_identifier, provider_country,
       amount_due_provider, amount_paid_provider, amount_disbursed_total,
       net_payable_ttc, payout_fx_date, quote_cancelled_at,
       is_cancelled_quote, is_provision_quote, provision_name, is_outstanding
@@ -344,6 +356,9 @@ SELECT
                   LIMIT 1), 0)
         )
       END AS amount_paid,
+      sp.provider_vat_raw AS vat_raw,
+      sp.provider_tax_identifier AS tax_identifier,
+      sp.provider_country AS country,
       CAST(sp.net_payable_ttc AS FLOAT64) AS net_payable_ttc,
       sp.is_outstanding AS is_outstanding,
       sp.is_cancelled_quote AS is_cancelled,
@@ -488,6 +503,9 @@ function mergeInto(existing: PartnerLine, p: PartnerLine) {
   existing.is_cancelled = Boolean(existing.is_cancelled) && Boolean(p.is_cancelled);
   if (!existing.email && p.email) existing.email = p.email;
   if (!existing.phone && p.phone) existing.phone = p.phone;
+  if (!existing.vat_raw && p.vat_raw) existing.vat_raw = p.vat_raw;
+  if (!existing.tax_identifier && p.tax_identifier) existing.tax_identifier = p.tax_identifier;
+  if (!existing.country && p.country) existing.country = p.country;
   if (!existing.currency && p.currency) existing.currency = p.currency;
   if (!existing.payout_fx_date || (p.payout_fx_date && p.payout_fx_date > existing.payout_fx_date)) {
     existing.payout_fx_date = p.payout_fx_date;

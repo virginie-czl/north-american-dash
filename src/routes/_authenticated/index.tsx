@@ -49,9 +49,11 @@ import {
 } from "@/components/tracker-chrome";
 import { PartnerEmails } from "@/components/partner-emails";
 import {
+  ActionSticker,
   EventFactStickers,
   PartnerFactStickers,
 } from "@/components/partner-fact-stickers";
+import { useActionIndex } from "@/lib/use-partner-actions";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
 import {
   BarChart,
@@ -431,7 +433,7 @@ function SlaPage() {
   const poDates = usePoEmissionDates(rawRows);
   const { data: statusMap } = usePartnerStatuses();
   const { data: commentSummaries } = useCommentSummaries();
-  const { data: factsMap } = usePartnerFacts();
+  const { factsMap, actionFor, eventNeedsScan } = useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const rows = useMemo(() => {
@@ -972,10 +974,30 @@ function SlaPage() {
                       disabled={scanProgress.running || filtered.length === 0}
                       onClick={() =>
                         startScan(
-                          filtered.map(({ row: r, partners: ps }) => ({
-                            event_ref: r.readable_id ?? r.client_request_id ?? "",
-                            partners: ps.map((p) => ({ name: p.name ?? "", email: p.email })),
-                          })),
+                          filtered
+                            .filter(({ row: r, partners: ps }) =>
+                              eventNeedsScan(
+                                r.readable_id ?? r.client_request_id ?? "",
+                                ps,
+                                Boolean(r.purchase_order_number),
+                              ),
+                            )
+                            .map(({ row: r, partners: ps }) => ({
+                              event_ref: r.readable_id ?? r.client_request_id ?? "",
+                              // Only partners with an open question — a settled or
+                              // already-answered partner cannot learn anything new.
+                              partners: ps
+                                .filter(
+                                  (p) =>
+                                    !p.is_cancelled &&
+                                    actionFor(
+                                      r.readable_id ?? r.client_request_id ?? "",
+                                      p,
+                                      Boolean(r.purchase_order_number),
+                                    ).scanUseful,
+                                )
+                                .map((p) => ({ name: p.name ?? "", email: p.email })),
+                            })),
                         )
                       }
                       title="Recherche dans vos emails les échanges liés à ces partenaires, puis met à jour les stickers partagés"
@@ -983,7 +1005,15 @@ function SlaPage() {
                       <Mail className="h-3.5 w-3.5" aria-hidden="true" />
                       {scanProgress.running
                         ? `Recherche… ${scanProgress.done}/${scanProgress.total}`
-                        : "Rechercher dans mes emails"}
+                        : `Rechercher dans mes emails (${
+                            filtered.filter(({ row: r, partners: ps }) =>
+                              eventNeedsScan(
+                                r.readable_id ?? r.client_request_id ?? "",
+                                ps,
+                                Boolean(r.purchase_order_number),
+                              ),
+                            ).length
+                          })`}
                     </Button>
                   )}
                   <div className="ml-auto text-xs text-muted-foreground">
@@ -1386,7 +1416,7 @@ function EventDetails({
 }) {
   const eventRef = row.readable_id ?? row.client_request_id ?? "";
   const { data: statusMap } = usePartnerStatuses();
-  const { data: factsMap } = usePartnerFacts();
+  const { factsMap, actionFor } = useActionIndex();
   const setStatus = useSetPartnerStatus();
   return (
     <div className="grid gap-6 md:grid-cols-2">
@@ -1443,6 +1473,15 @@ function EventDetails({
                         {p.is_cancelled && (
                           <span className="ml-1 text-[10px] text-muted-foreground">(cancelled)</span>
                         )}
+                        <span className="mt-1 flex flex-wrap gap-1">
+                          <ActionSticker
+                            action={actionFor(
+                              eventRef,
+                              p,
+                              Boolean(row.purchase_order_number),
+                            )}
+                          />
+                        </span>
                         <PartnerFactStickers facts={factsMap?.get(key)} />
                       </td>
                       <td className="px-2 py-1.5 text-muted-foreground">

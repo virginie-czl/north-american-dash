@@ -71,3 +71,45 @@ overwrite: one person's results never erase another's.
 The rules are heuristics over the vocabulary the team actually uses, in French and
 English, plus high-confidence identifier formats (IBAN, GST/BN `123456789 RT0001`,
 QST `1234567890 TQ0001`, EU VAT). Expect to tune them against real mail.
+
+
+### What gets scanned, and what does not
+
+Scanning is targeted. For each partner the tracker combines three sources — the
+warehouse (amount outstanding, tax registration), the email scan (what was asked
+and answered) and cross-event memory (has this partner ever accepted a card?) —
+and decides who owes the next move. The rules live in `src/lib/partner-actions.ts`
+(`npx tsx src/lib/partner-actions.test.mjs`).
+
+Events are skipped when no email could change the answer:
+
+| Situation | Verdict | Scanned |
+| --- | --- | --- |
+| Paid, tax numbers on file | Rien à faire | no |
+| Paid, tax already requested (or recorded but unreadable) | Enregistrer les taxes — ours | no |
+| Owed, bank details in hand | À payer (virement) — ours | no |
+| Owed, partner accepted card before | À payer (carte) — ours | no |
+| No PO yet | Bloqué — nothing to ask | no |
+| Owed, nothing asked yet | Demander bancaire + taxes | yes |
+| Asked, no reply yet | En attente de réponse | yes |
+| Asked, partner replied | Réponse à traiter | yes |
+
+The button label shows how many events actually qualify, so a run costs only what
+it needs to.
+
+**Card before bank.** A partner who has accepted a card payment on *any* event is
+never asked for an IBAN again — the tracker proposes the card instead. That memory
+is keyed on the partner, not the booking.
+
+### Tax registration comes from BigQuery, not from email
+
+`owners.vat_number` (venues) and `service_owners.vat_number` / `tax_identifier`
+(ad-hoc providers) are joined on `partners.houseownerid`. The field is free text,
+so `parseTaxRegistration` reads out Canadian GST (`123456789RT0001`), Quebec QST
+(`1234567890TQ0001`) and EU VAT, and flags anything unreadable rather than treating
+it as valid. Canadian partners need both GST and QST to count as complete.
+
+Coverage is thin today — of 100 L'Oréal Canada partner lines only 5 have anything
+recorded, 2 a readable GST and 1 a QST — which is exactly why the scan targets the
+gaps. Note that `owners.stripe_status` is empty across all 2,856 partner lines, so
+card acceptance cannot be read from the warehouse; it comes from the email scan.
