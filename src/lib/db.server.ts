@@ -64,9 +64,11 @@ const SCHEMA_STATEMENTS = [
      updated_at timestamptz NOT NULL DEFAULT now(),
      PRIMARY KEY (event_ref, partner_key)
    )`,
-  // Derived facts only — never subjects, bodies or any message content. Every
-  // user of the tracker may read these stickers; the underlying mail stays private
-  // to the mailbox owner.
+  // Derived facts only — never subjects, bodies, thread ids or any message
+  // content. Every user of the tracker may read these stickers, so anything added
+  // here becomes visible to the whole team: a stored thread id would hand a
+  // colleague a link into a mailbox that is not theirs. Thread links are resolved
+  // live from the caller's own session instead (see components/partner-emails.tsx).
   `CREATE TABLE IF NOT EXISTS partner_email_facts (
      event_ref text NOT NULL,
      partner_key text NOT NULL,

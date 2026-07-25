@@ -108,7 +108,11 @@ export type PartnerFacts = {
   scanned_by: string | null;
 };
 
-/** Readable by any signed-in user — these are shared verdicts, not mail. */
+/**
+ * Readable by any signed-in user — these are shared verdicts, not mail.
+ * PartnerFacts deliberately has no thread id, link, subject or snippet field:
+ * that is what keeps it safe to expose to the whole team.
+ */
 export const fetchPartnerFacts = createServerFn({ method: "GET" }).handler(
   async (): Promise<PartnerFacts[]> => {
     const { requireSession } = await import("./session.server");

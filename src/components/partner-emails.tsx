@@ -1,6 +1,13 @@
 /**
- * Per-event Gmail panel: shows the latest exchange with each partner and lets the
- * user draft or send a reminder without leaving the tracker.
+ * Per-event Gmail panel — strictly the signed-in user's own mailbox.
+ *
+ * INVARIANT: everything shown here (thread links, subjects, dates) is resolved
+ * live from the caller's session on the server. No thread id, link or subject is
+ * ever persisted, so it cannot reach another user. The shared stickers above this
+ * panel are the opposite: derived verdicts only, readable by the whole team.
+ * If you ever add a column to `partner_email_facts`, keep it on the verdict side
+ * of that line — a stored thread id would hand a colleague a link into a mailbox
+ * that is not theirs.
  *
  * Nothing is fetched until the user asks for it — opening an event should not
  * silently query someone's mailbox — and sending always requires a second click.
@@ -60,8 +67,9 @@ export function PartnerEmails({
   if (!connection?.connected) {
     return (
       <div className="rounded-lg border border-border bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
-        <span className="font-medium">Connect Gmail</span> from the account menu to see whether
-        these partners have been contacted, and to draft reminders from here.
+        <span className="font-medium">Connectez Gmail</span> depuis le menu de votre compte pour
+        retrouver vos propres échanges avec ces partenaires et préparer des relances d'ici. Les
+        pastilles ci-dessus restent visibles sans cela.
       </div>
     );
   }
@@ -71,8 +79,9 @@ export function PartnerEmails({
       <header className="flex items-center gap-2 border-b border-border px-3.5 py-2">
         <Mail className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
         <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-slate-600">
-          Email history
+          Ma boîte Gmail
         </span>
+        <span className="text-[10px] text-slate-400">visible uniquement par vous</span>
         <div className="ml-auto flex items-center gap-1.5">
           {enabled && (
             <Button
@@ -86,7 +95,7 @@ export function PartnerEmails({
                 className={`mr-1 h-3 w-3 ${isFetching ? "animate-spin" : ""}`}
                 aria-hidden="true"
               />
-              Refresh
+              Actualiser
             </Button>
           )}
           {!enabled && (
@@ -96,7 +105,7 @@ export function PartnerEmails({
               className="h-6 px-2 text-[11px]"
               onClick={() => setEnabled(true)}
             >
-              Check Gmail
+              Chercher dans ma boîte
             </Button>
           )}
         </div>
@@ -104,13 +113,14 @@ export function PartnerEmails({
 
       {!enabled && (
         <p className="px-3.5 py-2.5 text-[11.5px] text-slate-500">
-          Searches your mailbox for the {addresses.length} partner{addresses.length > 1 ? "s" : ""}{" "}
-          on this event.
+          Recherche dans votre boîte les {addresses.length} partenaire
+          {addresses.length > 1 ? "s" : ""} de cet événement. Rien n'est enregistré : seules les
+          pastilles partagées, sans contenu, sont visibles par l'équipe.
         </p>
       )}
 
       {enabled && isFetching && !data && (
-        <p className="px-3.5 py-2.5 text-[11.5px] text-slate-500">Searching…</p>
+        <p className="px-3.5 py-2.5 text-[11.5px] text-slate-500">Recherche…</p>
       )}
 
       {error != null && (
@@ -131,14 +141,14 @@ export function PartnerEmails({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[12.5px] font-medium">{partner.name ?? address}</span>
                   {match == null ? (
-                    <span className="pill bg-slate-100 text-slate-600">Never emailed</span>
+                    <span className="pill bg-slate-100 text-slate-600">Rien dans ma boîte</span>
                   ) : match.replied ? (
                     <span className="pill bg-emerald-100 text-emerald-800">
-                      Replied {fmtWhen(match.lastInboundAt)}
+                      Répondu le {fmtWhen(match.lastInboundAt)}
                     </span>
                   ) : (
                     <span className="pill bg-amber-100 text-amber-800">
-                      No reply{since != null ? ` · ${since}d` : ""}
+                      Sans réponse{since != null ? ` · ${since}j` : ""}
                     </span>
                   )}
                   <div className="ml-auto flex items-center gap-1.5">
@@ -149,7 +159,7 @@ export function PartnerEmails({
                         rel="noreferrer"
                         className="inline-flex items-center gap-1 text-[11px] text-slate-600 underline-offset-2 hover:underline"
                       >
-                        Open thread
+                        Ouvrir le fil
                         <ExternalLink className="h-3 w-3" aria-hidden="true" />
                       </a>
                     )}
@@ -159,13 +169,13 @@ export function PartnerEmails({
                       className="h-6 px-2 text-[11px]"
                       onClick={() => setComposeFor(partner)}
                     >
-                      Reminder
+                      Relance
                     </Button>
                   </div>
                 </div>
                 {match && (
                   <p className="mt-0.5 text-[10.5px] text-slate-400">
-                    Last sent {fmtWhen(match.lastOutboundAt)} · {match.subject}
+                    Dernier envoi {fmtWhen(match.lastOutboundAt)} · {match.subject}
                   </p>
                 )}
               </li>
@@ -220,7 +230,7 @@ function ComposeReminder({
           onClick={onClose}
           className="ml-auto text-[11px] text-slate-500 underline-offset-2 hover:underline"
         >
-          Close
+          Fermer
         </button>
       </div>
       <input
@@ -244,7 +254,7 @@ function ComposeReminder({
           disabled={busy}
           onClick={() => draft.mutate({ to, subject, body })}
         >
-          {draft.isPending ? "Saving…" : "Save as draft"}
+          {draft.isPending ? "Enregistrement…" : "Enregistrer en brouillon"}
         </Button>
         {confirmSend ? (
           <>
@@ -255,7 +265,7 @@ function ComposeReminder({
               onClick={() => send.mutate({ to, subject, body })}
             >
               <Send className="h-3 w-3" aria-hidden="true" />
-              {send.isPending ? "Sending…" : `Confirm send to ${to}`}
+              {send.isPending ? "Envoi…" : `Confirmer l\u2019envoi à ${to}`}
             </Button>
             <button
               type="button"
@@ -274,24 +284,24 @@ function ComposeReminder({
             onClick={() => setConfirmSend(true)}
           >
             <Send className="h-3 w-3" aria-hidden="true" />
-            Send now
+            Envoyer maintenant
           </Button>
         )}
       </div>
       {result && (
         <p className="text-[11px] text-emerald-800">
-          Draft saved.{" "}
+          Brouillon enregistré.{" "}
           <a
             href={result.link}
             target="_blank"
             rel="noreferrer"
             className="underline underline-offset-2"
           >
-            Open in Gmail
+            Ouvrir dans Gmail
           </a>
         </p>
       )}
-      {sent && <p className="text-[11px] text-emerald-800">Sent to {to}.</p>}
+      {sent && <p className="text-[11px] text-emerald-800">Envoyé à {to}.</p>}
       {(draft.isError || send.isError) && (
         <p role="alert" className="text-[11px] text-rose-800">
           {String(

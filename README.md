@@ -113,3 +113,21 @@ Coverage is thin today — of 100 L'Oréal Canada partner lines only 5 have anyt
 recorded, 2 a readable GST and 1 a QST — which is exactly why the scan targets the
 gaps. Note that `owners.stripe_status` is empty across all 2,856 partner lines, so
 card acceptance cannot be read from the warehouse; it comes from the email scan.
+
+
+### The privacy line
+
+Two things sit side by side in the event drawer, and they are not the same:
+
+- **Shared stickers** — derived verdicts only (contacted / replied / bank / tax /
+  card, with dates and the acting colleague's name). Stored in
+  `partner_email_facts`, readable by every tracker user.
+- **"Ma boîte Gmail" panel** — subjects, dates and thread links for the *signed-in
+  user's own mailbox only*. Resolved live from the caller's session on each
+  request; never stored, so it cannot reach anyone else. A colleague without Gmail
+  connected sees the stickers but no panel; a colleague with Gmail connected sees
+  their own threads, not yours.
+
+If you extend `partner_email_facts`, keep the new column on the verdict side of
+that line. A stored thread id or subject would turn a shared table into a window
+into someone else's mailbox.
