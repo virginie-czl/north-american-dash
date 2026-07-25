@@ -434,8 +434,8 @@ function SlaPage() {
   const poDates = usePoEmissionDates(rawRows);
   const { data: statusMap } = usePartnerStatuses();
   const { data: commentSummaries } = useCommentSummaries();
-  const { factsMap, actionFor, eventNeedsScan } = useActionIndex();
-  const { data: gmailConnection } = useGmailConnection();
+  const { factsMap, factsError, actionFor, eventNeedsScan } = useActionIndex();
+  const { data: gmailConnection, error: gmailError } = useGmailConnection();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const rows = useMemo(() => {
     if (!poDates) return rawRows;
@@ -967,6 +967,26 @@ function SlaPage() {
                   <Button variant="ghost" size="sm" onClick={collapseAll}>
                     Collapse
                   </Button>
+                  {gmailError != null && (
+                    <span
+                      role="alert"
+                      className="inline-flex items-center rounded-md bg-rose-100 px-2 py-1 text-[11px] text-rose-800"
+                      title={String((gmailError as Error).message ?? gmailError)}
+                    >
+                      Recherche email indisponible
+                    </span>
+                  )}
+                  {gmailConnection?.connected === false && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.location.href = "/api/gmail/connect";
+                      }}
+                      className="text-[11.5px] text-slate-600 underline-offset-2 hover:underline"
+                    >
+                      Connecter Gmail
+                    </button>
+                  )}
                   {gmailConnection?.connected && (
                     <Button
                       variant="outline"
@@ -1022,6 +1042,15 @@ function SlaPage() {
                   </div>
                 </div>
 
+                {factsError != null && (
+                  <div
+                    role="alert"
+                    className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-1.5 text-xs text-rose-800"
+                  >
+                    Pastilles email non chargées :{" "}
+                    {String((factsError as Error).message ?? factsError)}
+                  </div>
+                )}
                 {(scanProgress.running || scanProgress.error) && (
                   <div
                     role="status"

@@ -19,7 +19,7 @@ export type ActionablePartner = {
 };
 
 export function useActionIndex() {
-  const { data: factsMap } = usePartnerFacts();
+  const { data: factsMap, error: factsError } = usePartnerFacts();
 
   // A partner who accepted a card once will accept it again — that memory has to
   // span events, otherwise we keep asking for an IBAN we do not need.
@@ -59,5 +59,5 @@ export function useActionIndex() {
     [actionFor],
   );
 
-  return { factsMap, actionFor, eventNeedsScan, cardEverAccepted };
+  return { factsMap, factsError, actionFor, eventNeedsScan, cardEverAccepted };
 }

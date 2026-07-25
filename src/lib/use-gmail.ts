@@ -20,9 +20,21 @@ export function useGmailConnection() {
     queryKey: ["gmail-connection"],
     queryFn: async (): Promise<GmailConnection> => {
       const res = await fetch("/api/gmail/status", { credentials: "include" });
-      if (!res.ok) return { connected: false };
-      return (await res.json()) as GmailConnection;
+      // 200 is the only answer that actually tells us about the connection.
+      // Treating a 500 as "not connected" hides the Gmail button and makes a
+      // backend outage look like the user never connected — surface it instead.
+      if (res.ok) return (await res.json()) as GmailConnection;
+      if (res.status === 401) return { connected: false };
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (body?.error) detail = body.error;
+      } catch {
+        /* keep the status code */
+      }
+      throw new Error(`État Gmail indisponible (${detail})`);
     },
+    retry: 1,
     staleTime: 5 * 60_000,
   });
 }
