@@ -64,3 +64,91 @@ export function useSendEmail() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["partner-emails"] }),
   });
 }
+
+// --- Shared partner facts (readable by everyone, no mail access needed) ------
+
+import { useCallback, useState } from "react";
+import {
+  fetchPartnerFacts,
+  scanEventsForFacts,
+  type PartnerFacts,
+  type ScanEventInput,
+} from "@/lib/gmail.functions";
+
+export type { PartnerFacts };
+
+/** The stickers every tracker user sees. Keyed `${event_ref}::${partner_key}`. */
+export function usePartnerFacts() {
+  return useQuery({
+    queryKey: ["partner-facts"],
+    queryFn: async () => {
+      const rows = await fetchPartnerFacts();
+      const map = new Map<string, PartnerFacts>();
+      rows.forEach((r) => map.set(`${r.event_ref}::${r.partner_key}`, r));
+      return map;
+    },
+    staleTime: 60_000,
+  });
+}
+
+const CHUNK = 3;
+
+export type ScanProgress = {
+  running: boolean;
+  done: number;
+  total: number;
+  matched: number;
+  error: string | null;
+};
+
+/**
+ * Drives the scan in small chunks so each request is short and the user sees
+ * progress. Runs only when explicitly started — never on a table refresh.
+ */
+export function useFactScan() {
+  const qc = useQueryClient();
+  const [progress, setProgress] = useState<ScanProgress>({
+    running: false,
+    done: 0,
+    total: 0,
+    matched: 0,
+    error: null,
+  });
+
+  const start = useCallback(
+    async (events: ScanEventInput[]) => {
+      const queue = events.filter((e) => e.partners.length > 0);
+      if (queue.length === 0) return;
+      setProgress({ running: true, done: 0, total: queue.length, matched: 0, error: null });
+      let matched = 0;
+      try {
+        for (let i = 0; i < queue.length; i += CHUNK) {
+          const batch = queue.slice(i, i + CHUNK);
+          const outcomes = await scanEventsForFacts({ data: { events: batch } });
+          matched += outcomes.filter((o) => o.matched_by !== "none").length;
+          setProgress({
+            running: true,
+            done: Math.min(i + CHUNK, queue.length),
+            total: queue.length,
+            matched,
+            error: null,
+          });
+          // Show results as they land rather than only at the end.
+          qc.invalidateQueries({ queryKey: ["partner-facts"] });
+        }
+        setProgress((p) => ({ ...p, running: false, done: queue.length }));
+      } catch (error) {
+        setProgress((p) => ({
+          ...p,
+          running: false,
+          error: String((error as Error)?.message ?? error),
+        }));
+      } finally {
+        qc.invalidateQueries({ queryKey: ["partner-facts"] });
+      }
+    },
+    [qc],
+  );
+
+  return { progress, start };
+}

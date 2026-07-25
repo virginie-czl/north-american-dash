@@ -64,6 +64,32 @@ const SCHEMA_STATEMENTS = [
      updated_at timestamptz NOT NULL DEFAULT now(),
      PRIMARY KEY (event_ref, partner_key)
    )`,
+  // Derived facts only — never subjects, bodies or any message content. Every
+  // user of the tracker may read these stickers; the underlying mail stays private
+  // to the mailbox owner.
+  `CREATE TABLE IF NOT EXISTS partner_email_facts (
+     event_ref text NOT NULL,
+     partner_key text NOT NULL,
+     partner_name text,
+     matched_by text NOT NULL DEFAULT 'email',
+     contacted_at timestamptz,
+     contacted_by text,
+     replied_at timestamptz,
+     bank_details text NOT NULL DEFAULT 'not_asked',
+     bank_asked_at timestamptz,
+     bank_asked_by text,
+     bank_received_at timestamptz,
+     tax_info text NOT NULL DEFAULT 'not_asked',
+     tax_asked_at timestamptz,
+     tax_asked_by text,
+     tax_received_at timestamptz,
+     card_payment text NOT NULL DEFAULT 'unknown',
+     card_decided_at timestamptz,
+     message_count integer NOT NULL DEFAULT 0,
+     scanned_at timestamptz NOT NULL DEFAULT now(),
+     scanned_by text,
+     PRIMARY KEY (event_ref, partner_key)
+   )`,
   `CREATE TABLE IF NOT EXISTS google_credentials (
      user_email text PRIMARY KEY,
      refresh_token text NOT NULL,

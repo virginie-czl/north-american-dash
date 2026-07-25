@@ -49,6 +49,11 @@ import {
 } from "@/components/tracker-chrome";
 import { PartnerEmails } from "@/components/partner-emails";
 import {
+  EventFactStickers,
+  PartnerFactStickers,
+} from "@/components/partner-fact-stickers";
+import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
+import {
   BarChart,
   Bar,
   XAxis,
@@ -61,6 +66,7 @@ import {
   Legend,
 } from "recharts";
 import {
+  Mail,
   AlertTriangle,
   Clock,
   CheckCircle2,
@@ -425,6 +431,9 @@ function SlaPage() {
   const poDates = usePoEmissionDates(rawRows);
   const { data: statusMap } = usePartnerStatuses();
   const { data: commentSummaries } = useCommentSummaries();
+  const { data: factsMap } = usePartnerFacts();
+  const { data: gmailConnection } = useGmailConnection();
+  const { progress: scanProgress, start: startScan } = useFactScan();
   const rows = useMemo(() => {
     if (!poDates) return rawRows;
     return rawRows.map((r) => {
@@ -956,11 +965,47 @@ function SlaPage() {
                   <Button variant="ghost" size="sm" onClick={collapseAll}>
                     Collapse
                   </Button>
+                  {gmailConnection?.connected && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      disabled={scanProgress.running || filtered.length === 0}
+                      onClick={() =>
+                        startScan(
+                          filtered.map(({ row: r, partners: ps }) => ({
+                            event_ref: r.readable_id ?? r.client_request_id ?? "",
+                            partners: ps.map((p) => ({ name: p.name ?? "", email: p.email })),
+                          })),
+                        )
+                      }
+                      title="Recherche dans vos emails les échanges liés à ces partenaires, puis met à jour les stickers partagés"
+                    >
+                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                      {scanProgress.running
+                        ? `Recherche… ${scanProgress.done}/${scanProgress.total}`
+                        : "Rechercher dans mes emails"}
+                    </Button>
+                  )}
                   <div className="ml-auto text-xs text-muted-foreground">
                     {filtered.length} / {rows.length} events
                   </div>
                 </div>
 
+                {(scanProgress.running || scanProgress.error) && (
+                  <div
+                    role="status"
+                    className={`flex-none border-b px-5 py-1.5 text-xs ${
+                      scanProgress.error
+                        ? "border-rose-200 bg-rose-50 text-rose-800"
+                        : "border-border bg-slate-50 text-slate-600"
+                    }`}
+                  >
+                    {scanProgress.error
+                      ? `Recherche interrompue : ${scanProgress.error}`
+                      : `Analyse de vos emails — ${scanProgress.done}/${scanProgress.total} événements, ${scanProgress.matched} partenaires rapprochés. Les contenus ne sont jamais stockés.`}
+                  </div>
+                )}
                 <div className="sla-scroll">
                   <Table className="sla-table">
                     <TableHeader>
@@ -1172,11 +1217,21 @@ function SlaPage() {
                                   {(() => {
                                     const hasPo = !!(r.purchase_order_number && String(r.purchase_order_number).trim());
                                     const outreach = partnerOutreach(partners, r.readable_id ?? r.client_request_id ?? "", hasPo);
-                                    if (!outreach) return <span className="text-xs text-muted-foreground">—</span>;
                                     return (
-                                      <span className={`pill ${outreach.cls}`}>
-                                        {outreach.label}
-                                      </span>
+                                      <>
+                                        {outreach ? (
+                                          <span className={`pill ${outreach.cls}`}>
+                                            {outreach.label}
+                                          </span>
+                                        ) : (
+                                          <span className="cell-sub">—</span>
+                                        )}
+                                        <EventFactStickers
+                                          eventRef={r.readable_id ?? r.client_request_id ?? ""}
+                                          partnerKeys={partners.map((p) => partnerKey(p.name))}
+                                          factsMap={factsMap}
+                                        />
+                                      </>
                                     );
                                   })()}
                                 </TableCell>
@@ -1337,6 +1392,7 @@ function EventDetails({
 }) {
   const eventRef = row.readable_id ?? row.client_request_id ?? "";
   const { data: statusMap } = usePartnerStatuses();
+  const { data: factsMap } = usePartnerFacts();
   const setStatus = useSetPartnerStatus();
   return (
     <div className="grid gap-6 md:grid-cols-2">
@@ -1393,6 +1449,7 @@ function EventDetails({
                         {p.is_cancelled && (
                           <span className="ml-1 text-[10px] text-muted-foreground">(cancelled)</span>
                         )}
+                        <PartnerFactStickers facts={factsMap?.get(key)} />
                       </td>
                       <td className="px-2 py-1.5 text-muted-foreground">
                         <div>{p.email || "—"}</div>

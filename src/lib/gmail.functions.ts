@@ -75,3 +75,198 @@ export const sendPartnerEmail = createServerFn({ method: "POST" })
     const { sendMessage } = await import("./gmail.server");
     return sendMessage(session.email, data.to, data.subject, data.body);
   });
+
+// ---------------------------------------------------------------------------
+// Partner fact scanning
+//
+// Scanning reads the caller's own mailbox and stores only the derived verdicts
+// (contacted / replied / bank / tax / card, with dates and who acted). No subject,
+// body or snippet is ever persisted, so every tracker user can read the stickers
+// without gaining access to anyone's correspondence.
+// ---------------------------------------------------------------------------
+
+export type PartnerFacts = {
+  event_ref: string;
+  partner_key: string;
+  partner_name: string | null;
+  matched_by: "email" | "deal_code" | "none";
+  contacted_at: string | null;
+  contacted_by: string | null;
+  replied_at: string | null;
+  bank_details: "not_asked" | "asked" | "received";
+  bank_asked_at: string | null;
+  bank_asked_by: string | null;
+  bank_received_at: string | null;
+  tax_info: "not_asked" | "asked" | "received";
+  tax_asked_at: string | null;
+  tax_asked_by: string | null;
+  tax_received_at: string | null;
+  card_payment: "unknown" | "accepted" | "refused";
+  card_decided_at: string | null;
+  message_count: number;
+  scanned_at: string | null;
+  scanned_by: string | null;
+};
+
+/** Readable by any signed-in user — these are shared verdicts, not mail. */
+export const fetchPartnerFacts = createServerFn({ method: "GET" }).handler(
+  async (): Promise<PartnerFacts[]> => {
+    const { requireSession } = await import("./session.server");
+    await requireSession();
+    const { db, isoOrNull } = await import("./db.server");
+    const sql = await db();
+    const rows = await sql<Record<string, unknown>[]>`
+      SELECT event_ref, partner_key, partner_name, matched_by,
+             contacted_at, contacted_by, replied_at,
+             bank_details, bank_asked_at, bank_asked_by, bank_received_at,
+             tax_info, tax_asked_at, tax_asked_by, tax_received_at,
+             card_payment, card_decided_at,
+             message_count, scanned_at, scanned_by
+      FROM partner_email_facts
+    `;
+    const dateKeys = [
+      "contacted_at",
+      "replied_at",
+      "bank_asked_at",
+      "bank_received_at",
+      "tax_asked_at",
+      "tax_received_at",
+      "card_decided_at",
+      "scanned_at",
+    ];
+    return rows.map((r) => {
+      const out = { ...r } as Record<string, unknown>;
+      for (const k of dateKeys) out[k] = isoOrNull(r[k]);
+      return out as PartnerFacts;
+    });
+  },
+);
+
+export type ScanEventInput = {
+  event_ref: string;
+  partners: Array<{ name: string; email: string | null }>;
+};
+
+export type ScanOutcome = {
+  event_ref: string;
+  partner_key: string;
+  partner_name: string;
+  matched_by: "email" | "deal_code" | "none";
+  message_count: number;
+  /** Rule names that fired — shown to the scanning user only, never stored. */
+  signals: string[];
+};
+
+/**
+ * Scans a small batch of events. The client calls this repeatedly with chunks so
+ * each request stays short and the user sees progress, rather than one long
+ * request that risks a serverless timeout.
+ */
+export const scanEventsForFacts = createServerFn({ method: "POST" })
+  .validator((input: { events: ScanEventInput[] }) => {
+    if (!Array.isArray(input?.events)) throw new Error("events is required");
+    const events = input.events
+      .filter((e) => e && typeof e.event_ref === "string" && e.event_ref.length > 0)
+      .slice(0, 5) // hard cap per request
+      .map((e) => ({
+        event_ref: e.event_ref,
+        partners: (Array.isArray(e.partners) ? e.partners : [])
+          .slice(0, 10)
+          .map((p) => ({
+            name: typeof p?.name === "string" ? p.name : "",
+            email: typeof p?.email === "string" && p.email.includes("@") ? p.email : null,
+          }))
+          .filter((p) => p.name || p.email),
+      }));
+    return { events };
+  })
+  .handler(async ({ data }): Promise<ScanOutcome[]> => {
+    const { requireSession } = await import("./session.server");
+    const session = await requireSession();
+    const { scanEventPartners } = await import("./gmail.server");
+    const { extractFacts } = await import("./email-facts");
+    const { partnerKey } = await import("./annotations.functions");
+    const { db } = await import("./db.server");
+    const sql = await db();
+    const outcomes: ScanOutcome[] = [];
+
+    for (const event of data.events) {
+      const targets = event.partners.map((p) => ({
+        partnerKey: partnerKey(p.name || p.email || ""),
+        partnerName: p.name || p.email || "",
+        address: p.email,
+      }));
+      if (targets.length === 0) continue;
+
+      const scanned = await scanEventPartners(session.email, event.event_ref, targets);
+
+      for (const result of scanned) {
+        const facts = extractFacts(result.messages, session.email);
+        await sql`
+          INSERT INTO partner_email_facts (
+            event_ref, partner_key, partner_name, matched_by,
+            contacted_at, contacted_by, replied_at,
+            bank_details, bank_asked_at, bank_asked_by, bank_received_at,
+            tax_info, tax_asked_at, tax_asked_by, tax_received_at,
+            card_payment, card_decided_at,
+            message_count, scanned_at, scanned_by
+          ) VALUES (
+            ${event.event_ref}, ${result.partnerKey}, ${result.partnerName}, ${result.matchedBy},
+            ${facts.contactedAt}, ${facts.contactedBy}, ${facts.repliedAt},
+            ${facts.bankDetails}, ${facts.bankAskedAt}, ${facts.bankAskedBy}, ${facts.bankReceivedAt},
+            ${facts.taxInfo}, ${facts.taxAskedAt}, ${facts.taxAskedBy}, ${facts.taxReceivedAt},
+            ${facts.cardPayment}, ${facts.cardDecidedAt},
+            ${result.messageCount}, now(), ${session.email}
+          )
+          ON CONFLICT (event_ref, partner_key) DO UPDATE SET
+            partner_name = EXCLUDED.partner_name,
+            matched_by = EXCLUDED.matched_by,
+            -- Keep the earliest known contact and the latest of everything else,
+            -- so one person's scan never erases what another's found.
+            contacted_at = LEAST(
+              COALESCE(partner_email_facts.contacted_at, EXCLUDED.contacted_at),
+              COALESCE(EXCLUDED.contacted_at, partner_email_facts.contacted_at)
+            ),
+            contacted_by = COALESCE(EXCLUDED.contacted_by, partner_email_facts.contacted_by),
+            replied_at = GREATEST(
+              COALESCE(partner_email_facts.replied_at, EXCLUDED.replied_at),
+              COALESCE(EXCLUDED.replied_at, partner_email_facts.replied_at)
+            ),
+            bank_details = CASE
+              WHEN EXCLUDED.bank_details = 'received' OR partner_email_facts.bank_details = 'received'
+                THEN 'received'
+              WHEN EXCLUDED.bank_details = 'asked' OR partner_email_facts.bank_details = 'asked'
+                THEN 'asked'
+              ELSE 'not_asked' END,
+            bank_asked_at = COALESCE(partner_email_facts.bank_asked_at, EXCLUDED.bank_asked_at),
+            bank_asked_by = COALESCE(partner_email_facts.bank_asked_by, EXCLUDED.bank_asked_by),
+            bank_received_at = COALESCE(EXCLUDED.bank_received_at, partner_email_facts.bank_received_at),
+            tax_info = CASE
+              WHEN EXCLUDED.tax_info = 'received' OR partner_email_facts.tax_info = 'received'
+                THEN 'received'
+              WHEN EXCLUDED.tax_info = 'asked' OR partner_email_facts.tax_info = 'asked'
+                THEN 'asked'
+              ELSE 'not_asked' END,
+            tax_asked_at = COALESCE(partner_email_facts.tax_asked_at, EXCLUDED.tax_asked_at),
+            tax_asked_by = COALESCE(partner_email_facts.tax_asked_by, EXCLUDED.tax_asked_by),
+            tax_received_at = COALESCE(EXCLUDED.tax_received_at, partner_email_facts.tax_received_at),
+            card_payment = CASE
+              WHEN EXCLUDED.card_payment <> 'unknown' THEN EXCLUDED.card_payment
+              ELSE partner_email_facts.card_payment END,
+            card_decided_at = COALESCE(EXCLUDED.card_decided_at, partner_email_facts.card_decided_at),
+            message_count = EXCLUDED.message_count,
+            scanned_at = now(),
+            scanned_by = EXCLUDED.scanned_by
+        `;
+        outcomes.push({
+          event_ref: event.event_ref,
+          partner_key: result.partnerKey,
+          partner_name: result.partnerName,
+          matched_by: result.matchedBy,
+          message_count: result.messageCount,
+          signals: facts.signals,
+        });
+      }
+    }
+    return outcomes;
+  });

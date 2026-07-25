@@ -160,3 +160,139 @@ export async function sendMessage(
   });
   return { messageId: sent.id, threadId: sent.threadId };
 }
+
+
+// --- Scanning for partner facts ---------------------------------------------
+
+import type { MessageInput } from "./email-facts";
+
+type RawMessage = {
+  id: string;
+  threadId: string;
+  internalDate?: string;
+  payload?: GmailPart;
+};
+
+type GmailPart = {
+  mimeType?: string;
+  filename?: string;
+  headers?: Array<{ name: string; value: string }>;
+  body?: { data?: string; size?: number };
+  parts?: GmailPart[];
+};
+
+function decodePart(part: GmailPart): string {
+  if (part.body?.data) {
+    try {
+      return Buffer.from(part.body.data, "base64url").toString("utf8");
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+/** Flattens a MIME tree into plain text plus the attachment file names. */
+function flatten(payload: GmailPart | undefined): { text: string; attachments: string[] } {
+  const texts: string[] = [];
+  const attachments: string[] = [];
+  const walk = (part?: GmailPart) => {
+    if (!part) return;
+    if (part.filename) attachments.push(part.filename);
+    const mime = part.mimeType ?? "";
+    if (mime === "text/plain" || mime === "text/html") {
+      const raw = decodePart(part);
+      texts.push(mime === "text/html" ? raw.replace(/<[^>]+>/g, " ") : raw);
+    }
+    (part.parts ?? []).forEach(walk);
+  };
+  walk(payload);
+  return { text: texts.join("\n").slice(0, 40_000), attachments };
+}
+
+async function fetchMessages(email: string, ids: string[]): Promise<MessageInput[]> {
+  const out: MessageInput[] = [];
+  for (const id of ids) {
+    const detail = await gmail<RawMessage>(email, `/messages/${id}?format=full`);
+    const headers = detail.payload?.headers ?? [];
+    const at = detail.internalDate
+      ? new Date(Number(detail.internalDate)).toISOString()
+      : null;
+    if (!at) continue;
+    const from = header(headers, "From");
+    const { text, attachments } = flatten(detail.payload);
+    out.push({
+      outbound: from.toLowerCase().includes(email.toLowerCase()),
+      at,
+      from: (from.match(/<([^>]+)>/)?.[1] ?? from).trim(),
+      subject: header(headers, "Subject"),
+      body: text,
+      attachmentNames: attachments,
+    });
+  }
+  return out;
+}
+
+async function search(email: string, q: string, max: number): Promise<string[]> {
+  const list = await gmail<{ messages?: Array<{ id: string }> }>(
+    email,
+    `/messages?q=${encodeURIComponent(q)}&maxResults=${max}`,
+  );
+  return (list.messages ?? []).map((m) => m.id);
+}
+
+export type PartnerScanTarget = { partnerKey: string; partnerName: string; address: string | null };
+
+export type PartnerScanResult = {
+  partnerKey: string;
+  partnerName: string;
+  matchedBy: "email" | "deal_code" | "none";
+  messageCount: number;
+  messages: MessageInput[];
+};
+
+/**
+ * For one event: look each partner up by address first, and fall back to a search
+ * on the deal code (which Gmail matches in subject *and* body) when that finds
+ * nothing. Message ids are collected first so we only download what matched.
+ */
+export async function scanEventPartners(
+  email: string,
+  eventRef: string,
+  partners: PartnerScanTarget[],
+): Promise<PartnerScanResult[]> {
+  let dealCodeIds: string[] | null = null;
+  const results: PartnerScanResult[] = [];
+
+  for (const partner of partners.slice(0, 10)) {
+    let ids: string[] = [];
+    let matchedBy: PartnerScanResult["matchedBy"] = "none";
+
+    if (partner.address) {
+      const addr = partner.address.trim().toLowerCase();
+      ids = await search(email, `(from:${addr} OR to:${addr}) newer_than:2y`, 12);
+      if (ids.length > 0) matchedBy = "email";
+    }
+
+    if (ids.length === 0 && eventRef) {
+      // Searched once per event, then reused for every partner on it.
+      if (dealCodeIds == null) {
+        dealCodeIds = await search(email, `"${eventRef}" newer_than:2y`, 12);
+      }
+      if (dealCodeIds.length > 0) {
+        ids = dealCodeIds;
+        matchedBy = "deal_code";
+      }
+    }
+
+    const messages = ids.length > 0 ? await fetchMessages(email, ids) : [];
+    results.push({
+      partnerKey: partner.partnerKey,
+      partnerName: partner.partnerName,
+      matchedBy: messages.length > 0 ? matchedBy : "none",
+      messageCount: messages.length,
+      messages,
+    });
+  }
+  return results;
+}

@@ -47,3 +47,27 @@ npm run build      # must pass before committing
 
 Deploys on Vercel out of the box: `vite.config.ts` forces the nitro `vercel` preset when
 `VERCEL=1` (Vercel sets it automatically). Add the four env vars in the Vercel project.
+
+
+### Partner fact scanning
+
+*Rechercher dans mes emails* (table toolbar, visible once Gmail is connected) scans
+the user's own mailbox for each partner: first by email address, and when that finds
+nothing, by the deal code — Gmail matches it in the subject *and* the body. It never
+runs on a table refresh; only on that button.
+
+From the matched messages it derives six things per partner — contacted (when, by
+whom), replied, whether bank details were asked or received, same for tax numbers,
+and whether the partner accepts card payment. Detection rules live in
+`src/lib/email-facts.ts` (pure, no I/O); run `npx tsx src/lib/email-facts.test.mjs`
+after changing them.
+
+Only these verdicts are stored, in `partner_email_facts` — no subject, body, snippet
+or sender beyond the acting colleague's address. So every tracker user sees the
+stickers and their hover attribution ("Demandé par Shayma le 10 avril") while the
+correspondence itself stays private to the mailbox owner. Scans merge rather than
+overwrite: one person's results never erase another's.
+
+The rules are heuristics over the vocabulary the team actually uses, in French and
+English, plus high-confidence identifier formats (IBAN, GST/BN `123456789 RT0001`,
+QST `1234567890 TQ0001`, EU VAT). Expect to tune them against real mail.
