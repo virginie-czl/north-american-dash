@@ -165,13 +165,39 @@ export async function runBigQuery(
   );
 
   if (!response.ok) {
-    throw new Error(`BigQuery query failed: ${await response.text()}`);
+    const raw = await response.text();
+    let message = raw;
+    try {
+      message = (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? raw;
+    } catch {
+      /* keep the raw body */
+    }
+    // The annotation tables live in a dataset that has to be created once by hand;
+    // say so explicitly rather than surfacing a bare "Not found".
+    if (/finance_ops/.test(message) && /not found/i.test(message)) {
+      throw new Error(
+        "BigQuery dataset finance_ops is missing — run sql/finance_ops.sql once to create the annotation tables.",
+      );
+    }
+    if (/permission|denied/i.test(message) && /finance_ops/.test(message)) {
+      throw new Error(
+        "No write access to finance_ops — grant the BIG_QUERY_JSON service account BigQuery Data Editor on that dataset.",
+      );
+    }
+    throw new Error(`BigQuery: ${message}`);
   }
 
   const result = (await response.json()) as {
+    jobComplete?: boolean;
     schema?: { fields: Array<{ name: string; type: string }> };
     rows?: Array<{ f: Array<{ v: unknown }> }>;
   };
+
+  // A timed-out job returns 200 with no rows; treat that as an error rather than
+  // reporting an empty result (or, for writes, a silent no-op).
+  if (result.jobComplete === false) {
+    throw new Error("BigQuery job did not complete in time — please retry.");
+  }
   const schema = result.schema?.fields || [];
 
   return (result.rows || []).map((row) => {

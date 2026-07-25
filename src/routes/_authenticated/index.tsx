@@ -1624,6 +1624,16 @@ function EventComments({ eventRef }: { eventRef: string }) {
             {addComment.isPending ? "Posting…" : "Post"}
           </Button>
         </div>
+        {addComment.isError && (
+          <div role="alert" className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+            Comment not saved: {String((addComment.error as Error)?.message ?? addComment.error)}
+          </div>
+        )}
+        {deleteComment.isError && (
+          <div role="alert" className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+            Comment not deleted: {String((deleteComment.error as Error)?.message ?? deleteComment.error)}
+          </div>
+        )}
       </div>
     </div>
   );
