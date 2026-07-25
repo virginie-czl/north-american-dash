@@ -320,8 +320,8 @@
   color: var(--muted-foreground);
   white-space: nowrap;
 }
-.na-table .na-head-row th.na-col-client { background: #EAF2FD; color: #5B7FA6; }
-.na-table .na-head-row th.na-col-partner { background: #F0EAFB; color: #8B6FC4; }
+.na-table .na-head-row th.na-col-client { background: #E8F6F9; color: #0F766E; }
+.na-table .na-head-row th.na-col-partner { background: #F6F9D8; color: #5B6511; }
 .na-table .na-cell {
   padding: 10px 6px;
   border-bottom: 0.5px solid var(--border);
@@ -329,26 +329,26 @@
   background: var(--background);
   font-size: 12px;
 }
-.na-table .na-cell.na-col-client { background: #F7FAFF; }
-.na-table .na-cell.na-col-partner { background: #FAF8FE; }
+.na-table .na-cell.na-col-client { background: #F9FDFD; }
+.na-table .na-cell.na-col-partner { background: #FDFEF4; }
 /* Very subtle zebra — only darken the DEAL block; tinted cells get their own zebra */
 .na-table .na-zebra .na-cell {
   background: color-mix(in oklab, var(--surface-1) 30%, var(--background));
 }
 .na-table .na-zebra .na-cell.na-col-client {
-  background: color-mix(in oklab, #E4EEFB 45%, #F7FAFF);
+  background: color-mix(in oklab, #DCF0F4 45%, #F9FDFD);
 }
 .na-table .na-zebra .na-cell.na-col-partner {
-  background: color-mix(in oklab, #E9E1F7 40%, #FAF8FE);
+  background: color-mix(in oklab, #EFF5C9 40%, #FDFEF4);
 }
 .na-table .na-body-row:hover .na-cell {
   background: color-mix(in oklab, var(--accent) 40%, var(--background));
 }
 .na-table .na-body-row:hover .na-cell.na-col-client {
-  background: color-mix(in oklab, #DCE8F8 55%, #F7FAFF);
+  background: color-mix(in oklab, #CDEAF0 55%, #F9FDFD);
 }
 .na-table .na-body-row:hover .na-cell.na-col-partner {
-  background: color-mix(in oklab, #E2D6F3 55%, #FAF8FE);
+  background: color-mix(in oklab, #E9EFA8 55%, #FDFEF4);
 }
 .na-table .na-drawer-row .na-drawer-wrap {
   padding: 8px 12px 18px;
@@ -411,24 +411,24 @@
 .na-sub-table .na-sub-provision td { color: var(--muted-foreground); }
 
 /* Partner-tinted drawer card */
-.na-section-card-partner { background: #FAF8FE; border-color: #E1D6F5; }
+.na-section-card-partner { background: #FDFEF4; border-color: #E9EFA8; }
 .na-section-card-partner .na-section-head {
-  background: #F0EAFB;
-  color: #8B6FC4;
-  border-bottom-color: #E1D6F5;
+  background: #F6F9D8;
+  color: #5B6511;
+  border-bottom-color: #E9EFA8;
 }
 .na-section-card-partner .na-sub-table th {
-  background: #F0EAFB;
-  color: #8B6FC4;
-  border-bottom-color: #E1D6F5;
+  background: #F6F9D8;
+  color: #5B6511;
+  border-bottom-color: #E9EFA8;
 }
 .na-section-card-partner .na-sub-table td { border-bottom-color: #ECE4F7; }
 .na-section-card-partner .na-sub-table tbody tr:nth-child(even) td {
-  background: color-mix(in oklab, #E9E1F7 35%, #FAF8FE);
+  background: color-mix(in oklab, #EFF5C9 35%, #FDFEF4);
 }
 .na-section-card-partner .na-sub-table .na-sub-subtotal td {
-  background: #F0EAFB;
-  border-top-color: #E1D6F5;
+  background: #F6F9D8;
+  border-top-color: #E9EFA8;
 }
 
 /* Pastel pills */
@@ -541,4 +541,44 @@
       scroll-behavior: auto !important;
     }
   }
+}
+
+/* Table density -----------------------------------------------------------
+   These trackers carry 12 columns of finance data, so the base type is a step
+   down from the app default and the identifying columns (ref/event/booked/PO)
+   are tighter still, leaving the money columns room without a horizontal
+   scroll on a 1440px screen. */
+.sla-table {
+  font-size: 12px;
+}
+.sla-table thead > tr > th {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.sla-table thead tr:nth-child(2) > th {
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.sla-table .pill {
+  font-size: 10.5px;
+  padding: 0.09375rem 0.5rem;
+}
+.sla-table tbody > tr > td {
+  padding: 6px 8px;
+}
+/* Identifying columns (chevron → PO #) run one step smaller than the money
+   columns; they are scan targets, not figures to compare. */
+.sla-table tbody > tr > td:nth-child(-n + 6) {
+  font-size: 11.5px;
+}
+.sla-table .cell-sub {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--color-slate-400);
+}
+.sla-table .cell-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
 }

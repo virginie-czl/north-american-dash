@@ -106,6 +106,12 @@ function fmtCurrency(value: number | null | undefined, currency: string | null |
   }
 }
 
+/** Range end dates drop the year when it adds no information. */
+function fmtDateShort(v: string | null | undefined): string {
+  const full = fmtDate(v);
+  return full.length === 10 ? full.slice(5) : full;
+}
+
 function fmtDate(value: string | null | undefined) {
   if (!value) return "—";
   return value.slice(0, 10);
@@ -184,7 +190,7 @@ function invoicingSla(
   }
   if (now <= deadline) {
     const daysLeft = Math.max(0, Math.ceil((deadline - now) / 86_400_000));
-    return { label: `To be issued+sent in ${daysLeft}d`, variant: "due" };
+    return { label: `Issue+send in ${daysLeft}d`, variant: "due" };
   }
   const overBy = Math.ceil((now - deadline) / 86_400_000);
   return { label: `Breached ${overBy}d`, variant: "overdue" };
@@ -211,7 +217,7 @@ function payoutSla(
   if (allPartnersSettled) return { label: "Fully paid", variant: "paid" };
   if (owed <= 0.01 && remaining <= 0.01) {
     if (row.payout_sla_status === "NO_PARTNER_LIABILITY")
-      return { label: "No partner liability", variant: "muted" };
+      return { label: "No liability", variant: "muted" };
     return { label: "Fully paid", variant: "paid" };
   }
   if (remaining <= 0.01) return { label: "Fully paid", variant: "paid" };
@@ -728,13 +734,13 @@ function SlaPage() {
       return paid > 0.01;
     });
     if (anyPartial)
-      return { label: "Payout to be done", cls: "bg-sky-100 text-sky-800 border-sky-200" };
+      return { label: "Payout to do", cls: "bg-sky-100 text-sky-800" };
     const statuses = active.map((p) => {
       const k = `${eventRef}::${partnerKey(p.name)}`;
       return statusMap?.get(k)?.status ?? "not_contacted";
     });
     if (statuses.every((s) => s === "not_contacted"))
-      return { label: "Contact to be done asap", cls: "bg-rose-100 text-rose-800 border-rose-200" };
+      return { label: "Contact asap", cls: "bg-rose-100 text-rose-800" };
     if (statuses.every((s) => s !== "not_contacted"))
       return { label: "Contacted — Bank details pending", cls: "bg-amber-100 text-amber-800 border-amber-200" };
     return null;
@@ -974,14 +980,14 @@ function SlaPage() {
                         <TableHead>Ref</TableHead>
                         <TableHead>Event</TableHead>
                         <TableHead>Booked</TableHead>
-                        <TableHead className="text-right">Days ago</TableHead>
-                        <TableHead>PO #</TableHead>
+                        <TableHead className="whitespace-nowrap text-right">Days</TableHead>
+                        <TableHead className="whitespace-nowrap">PO #</TableHead>
                         <TableHead className="border-l-2 border-sky-200 bg-sky-50/60">Invoicing SLA</TableHead>
-                        <TableHead className="bg-sky-50/60 text-right">Client outstanding</TableHead>
-                        <TableHead className="bg-sky-50/60">Payment status</TableHead>
+                        <TableHead className="bg-sky-50/60 text-right">Outstanding</TableHead>
+                        <TableHead className="bg-sky-50/60">Payment</TableHead>
                         <TableHead className="border-l-2 border-indigo-200 bg-indigo-50/60">Payout SLA</TableHead>
                         <TableHead className="bg-indigo-50/60">Outreach</TableHead>
-                        <TableHead className="bg-indigo-50/60 text-right">Owed to partners</TableHead>
+                        <TableHead className="bg-indigo-50/60 text-right">Owed</TableHead>
                       </TableRow>
                       <TableRow className="bg-slate-50/70">
                         <TableHead className="w-8"></TableHead>
@@ -1092,11 +1098,11 @@ function SlaPage() {
                                     )
                                   ) : null}
                                 </TableCell>
-                                <TableCell className="font-mono text-xs font-medium">
+                                <TableCell className="whitespace-nowrap font-mono font-medium">
                                   {r.readable_id || "—"}
                                   {childCount > 0 && (
-                                    <span className="ml-1 text-[10px] text-muted-foreground">
-                                      ({partners.length}p · {invoices.length}i)
+                                    <span className="ml-1 text-[9.5px] text-muted-foreground">
+                                      ({partners.length}p·{invoices.length}i)
                                     </span>
                                   )}
                                   <CommentersChip summary={commentSummaries?.get(r.readable_id ?? r.client_request_id ?? "")} />
@@ -1106,19 +1112,21 @@ function SlaPage() {
                                     </div>
                                   ) : null}
                                 </TableCell>
-                                <TableCell className="max-w-[200px]">
+                                <TableCell className="max-w-[150px]">
                                   <div className="truncate font-medium">
                                     {(r.event_type || "—").replaceAll("_", " ").toLowerCase()}
                                   </div>
-                                  <div className="text-xs text-muted-foreground">
+                                  <div className="cell-sub truncate">
                                     {r.country_iso_code} · {r.billing_entity}
                                   </div>
                                 </TableCell>
                                 <TableCell className="whitespace-nowrap">
                                   <div>{fmtDate(r.booking_created_at)}</div>
-                                  <div className="text-xs text-muted-foreground">
-                                    event {fmtDate(r.booking_date)}
-                                    {r.end_date && r.end_date !== r.booking_date ? ` → ${fmtDate(r.end_date)}` : ""}
+                                  <div className="cell-sub">
+                                    {fmtDate(r.booking_date)}
+                                    {r.end_date && r.end_date !== r.booking_date
+                                      ? ` → ${fmtDateShort(r.end_date)}`
+                                      : ""}
                                   </div>
                                 </TableCell>
                                 <TableCell className="text-right tabular-nums">
@@ -1127,13 +1135,13 @@ function SlaPage() {
                                 <TableCell className="whitespace-nowrap">
                                   {r.purchase_order_number ? (
                                     <>
-                                      <div className="font-mono text-xs">{r.purchase_order_number}</div>
-                                      <div className="text-[10px] text-muted-foreground">
+                                      <div className="cell-mono">{r.purchase_order_number}</div>
+                                      <div className="cell-sub">
                                         since {fmtDate(r.purchase_order_updated_at)}
                                       </div>
                                     </>
                                   ) : (
-                                    <span className="text-xs text-muted-foreground">—</span>
+                                    <span className="cell-sub">—</span>
                                   )}
                                 </TableCell>
                                 <TableCell className="border-l-2 border-sky-200 bg-sky-50/40">
@@ -1722,7 +1730,7 @@ function ColFilter({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onClick={(e) => e.stopPropagation()}
-      className={`h-6 w-full max-w-[130px] rounded border px-1 text-[11px] font-normal ${
+      className={`h-[22px] w-full max-w-[92px] rounded border px-1 text-[10.5px] font-normal ${
         active
           ? "border-slate-400 bg-white text-slate-900"
           : "border-slate-200 bg-white/60 text-muted-foreground"
