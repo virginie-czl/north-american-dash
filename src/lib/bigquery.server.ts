@@ -172,18 +172,6 @@ export async function runBigQuery(
     } catch {
       /* keep the raw body */
     }
-    // The annotation tables live in a dataset that has to be created once by hand;
-    // say so explicitly rather than surfacing a bare "Not found".
-    if (/finance_ops/.test(message) && /not found/i.test(message)) {
-      throw new Error(
-        "BigQuery dataset finance_ops is missing — run sql/finance_ops.sql once to create the annotation tables.",
-      );
-    }
-    if (/permission|denied/i.test(message) && /finance_ops/.test(message)) {
-      throw new Error(
-        "No write access to finance_ops — grant the BIG_QUERY_JSON service account BigQuery Data Editor on that dataset.",
-      );
-    }
     throw new Error(`BigQuery: ${message}`);
   }
 

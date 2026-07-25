@@ -1,0 +1,104 @@
+/**
+ * Postgres connection for the annotation layer (server-only).
+ *
+ * The store is provisioned from the Vercel dashboard (Storage tab); Vercel injects
+ * the connection string as an environment variable. Nothing has to be created by
+ * hand: the schema is applied on first use, so a fresh database works immediately.
+ */
+import postgres from "postgres";
+
+type Sql = ReturnType<typeof postgres>;
+
+let client: Sql | null = null;
+let schemaPromise: Promise<void> | null = null;
+
+function connectionString(): string {
+  // Vercel names this differently depending on which provider was chosen.
+  const url =
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.DATABASE_POSTGRES_URL;
+  if (!url) {
+    throw new Error(
+      "No Postgres connection string found. Create a Postgres store in the Vercel " +
+        "dashboard (Storage tab) and redeploy, or set DATABASE_URL locally.",
+    );
+  }
+  return url;
+}
+
+function getClient(): Sql {
+  if (!client) {
+    client = postgres(connectionString(), {
+      // One connection per serverless instance; the provider's pooler does the rest.
+      max: 1,
+      idle_timeout: 20,
+      connect_timeout: 10,
+      // Prepared statements are not supported through transaction-mode poolers.
+      prepare: false,
+    });
+  }
+  return client;
+}
+
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS sla_event_comments (
+     id text PRIMARY KEY,
+     event_ref text NOT NULL,
+     user_id text NOT NULL,
+     user_email text NOT NULL,
+     user_name text,
+     user_avatar_url text,
+     body text NOT NULL,
+     created_at timestamptz NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS sla_event_comments_event_ref_idx
+     ON sla_event_comments (event_ref)`,
+  `CREATE TABLE IF NOT EXISTS sla_partner_status (
+     event_ref text NOT NULL,
+     partner_key text NOT NULL,
+     partner_name text,
+     status text NOT NULL,
+     updated_by text,
+     updated_at timestamptz NOT NULL DEFAULT now(),
+     PRIMARY KEY (event_ref, partner_key)
+   )`,
+  `CREATE TABLE IF NOT EXISTS sla_po_emission (
+     event_ref text PRIMARY KEY,
+     purchase_order_number text NOT NULL,
+     emitted_at timestamptz NOT NULL DEFAULT now(),
+     updated_by text,
+     updated_at timestamptz NOT NULL DEFAULT now()
+   )`,
+];
+
+/** Applies the schema once per instance. Every statement is idempotent. */
+async function ensureSchema(sql: Sql): Promise<void> {
+  if (!schemaPromise) {
+    schemaPromise = (async () => {
+      for (const statement of SCHEMA_STATEMENTS) {
+        await sql.unsafe(statement);
+      }
+    })().catch((error) => {
+      // Let the next call retry rather than caching the failure forever.
+      schemaPromise = null;
+      throw error;
+    });
+  }
+  return schemaPromise;
+}
+
+/** Returns a ready-to-use client with the schema guaranteed to exist. */
+export async function db(): Promise<Sql> {
+  const sql = getClient();
+  await ensureSchema(sql);
+  return sql;
+}
+
+/** ISO-8601 for the client, or null. Postgres returns Date objects. */
+export function isoOrNull(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}

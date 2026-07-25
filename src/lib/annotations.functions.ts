@@ -1,17 +1,14 @@
 /**
  * Annotation storage server functions — comments, partner outreach statuses and
- * PO emission tracking, stored in BigQuery (`finance_ops` dataset) instead of Supabase.
+ * PO first-emission dates. These are the things the warehouse cannot know: they
+ * are created by the team inside the tracker, so they live in the app's own
+ * Postgres store rather than in BigQuery.
  *
  * All mutations require an authenticated @naboo.app session; author attribution is
  * resolved server-side from the session cookie, never trusted from the client.
- * All queries are parameterized — no string interpolation of user input.
+ * Every query is parameterised through the driver — no string interpolation.
  */
 import { createServerFn } from "@tanstack/react-start";
-
-const DATASET = "finance_ops";
-const T_COMMENTS = `\`${DATASET}.sla_event_comments\``;
-const T_PARTNER_STATUS = `\`${DATASET}.sla_partner_status\``;
-const T_PO_EMISSION = `\`${DATASET}.sla_po_emission\``;
 
 export type PartnerStatusValue =
   | "not_contacted"
@@ -77,13 +74,19 @@ export const fetchPartnerStatuses = createServerFn({ method: "GET" }).handler(
   async (): Promise<PartnerStatusRow[]> => {
     const { requireSession } = await import("./session.server");
     await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
-    const rows = await runBigQuery(
-      `SELECT event_ref, partner_key, partner_name, status,
-              FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', updated_at) AS updated_at
-       FROM ${T_PARTNER_STATUS}`,
-    );
-    return rows as unknown as PartnerStatusRow[];
+    const { db, isoOrNull } = await import("./db.server");
+    const sql = await db();
+    const rows = await sql<
+      {
+        event_ref: string;
+        partner_key: string;
+        partner_name: string | null;
+        status: PartnerStatusValue;
+        updated_at: Date | null;
+      }[]
+    >`SELECT event_ref, partner_key, partner_name, status, updated_at
+      FROM sla_partner_status`;
+    return rows.map((r) => ({ ...r, updated_at: isoOrNull(r.updated_at) }));
   },
 );
 
@@ -101,25 +104,21 @@ export const savePartnerStatus = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { requireSession } = await import("./session.server");
     const session = await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
-    await runBigQuery(
-      `MERGE ${T_PARTNER_STATUS} t
-       USING (SELECT @event_ref AS event_ref, @partner_key AS partner_key) s
-       ON t.event_ref = s.event_ref AND t.partner_key = s.partner_key
-       WHEN MATCHED THEN UPDATE SET
-         status = @status, partner_name = @partner_name,
-         updated_by = @updated_by, updated_at = CURRENT_TIMESTAMP()
-       WHEN NOT MATCHED THEN INSERT
-         (event_ref, partner_key, partner_name, status, updated_by, updated_at)
-         VALUES (@event_ref, @partner_key, @partner_name, @status, @updated_by, CURRENT_TIMESTAMP())`,
-      {
-        event_ref: data.event_ref,
-        partner_key: partnerKey(data.partner_name),
-        partner_name: data.partner_name,
-        status: data.status,
-        updated_by: session.email,
-      },
-    );
+    const { db } = await import("./db.server");
+    const sql = await db();
+    await sql`
+      INSERT INTO sla_partner_status
+        (event_ref, partner_key, partner_name, status, updated_by, updated_at)
+      VALUES (
+        ${data.event_ref}, ${partnerKey(data.partner_name)}, ${data.partner_name},
+        ${data.status}, ${session.email}, now()
+      )
+      ON CONFLICT (event_ref, partner_key) DO UPDATE SET
+        partner_name = EXCLUDED.partner_name,
+        status = EXCLUDED.status,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = now()
+    `;
   });
 
 // ---------------------------------------------------------------------------
@@ -136,30 +135,29 @@ export const fetchEventComments = createServerFn({ method: "GET" })
   .handler(async ({ data }): Promise<EventComment[]> => {
     const { requireSession } = await import("./session.server");
     await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
-    const rows = await runBigQuery(
-      `SELECT id, event_ref, user_id, user_email, user_name, user_avatar_url, body,
-              FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', created_at) AS created_at
-       FROM ${T_COMMENTS}
-       WHERE event_ref = @event_ref
-       ORDER BY created_at ASC`,
-      { event_ref: data.event_ref },
-    );
-    return rows as unknown as EventComment[];
+    const { db, isoOrNull } = await import("./db.server");
+    const sql = await db();
+    const rows = await sql<(Omit<EventComment, "created_at"> & { created_at: Date })[]>`
+      SELECT id, event_ref, user_id, user_email, user_name, user_avatar_url, body, created_at
+      FROM sla_event_comments
+      WHERE event_ref = ${data.event_ref}
+      ORDER BY created_at ASC
+    `;
+    return rows.map((r) => ({ ...r, created_at: isoOrNull(r.created_at) ?? "" }));
   });
 
 export const fetchCommentSummaries = createServerFn({ method: "GET" }).handler(
   async (): Promise<CommentSummaryRow[]> => {
     const { requireSession } = await import("./session.server");
     await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
-    const rows = await runBigQuery(
-      `SELECT event_ref, user_id, user_name, user_email, user_avatar_url,
-              FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', created_at) AS created_at
-       FROM ${T_COMMENTS}
-       ORDER BY created_at ASC`,
-    );
-    return rows as unknown as CommentSummaryRow[];
+    const { db, isoOrNull } = await import("./db.server");
+    const sql = await db();
+    const rows = await sql<(Omit<CommentSummaryRow, "created_at"> & { created_at: Date })[]>`
+      SELECT event_ref, user_id, user_name, user_email, user_avatar_url, created_at
+      FROM sla_event_comments
+      ORDER BY created_at ASC
+    `;
+    return rows.map((r) => ({ ...r, created_at: isoOrNull(r.created_at) ?? "" }));
   },
 );
 
@@ -176,21 +174,16 @@ export const addEventComment = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { requireSession } = await import("./session.server");
     const session = await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
-    await runBigQuery(
-      `INSERT INTO ${T_COMMENTS}
-         (id, event_ref, user_id, user_email, user_name, user_avatar_url, body, created_at)
-       VALUES (GENERATE_UUID(), @event_ref, @user_id, @user_email, @user_name, @user_avatar_url,
-               @body, CURRENT_TIMESTAMP())`,
-      {
-        event_ref: data.event_ref,
-        user_id: session.id,
-        user_email: session.email,
-        user_name: session.name ?? session.email,
-        user_avatar_url: session.picture ?? "",
-        body: data.body,
-      },
-    );
+    const { db } = await import("./db.server");
+    const sql = await db();
+    await sql`
+      INSERT INTO sla_event_comments
+        (id, event_ref, user_id, user_email, user_name, user_avatar_url, body, created_at)
+      VALUES (
+        ${crypto.randomUUID()}, ${data.event_ref}, ${session.id}, ${session.email},
+        ${session.name ?? session.email}, ${session.picture}, ${data.body}, now()
+      )
+    `;
   });
 
 export const deleteEventComment = createServerFn({ method: "POST" })
@@ -201,31 +194,35 @@ export const deleteEventComment = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { requireSession } = await import("./session.server");
     const session = await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
+    const { db } = await import("./db.server");
+    const sql = await db();
     // Only the comment's author can delete it. Comments imported from the old
-    // Supabase export carry a placeholder user_id, so match on email as well.
-    await runBigQuery(
-      `DELETE FROM ${T_COMMENTS}
-       WHERE id = @id AND (user_id = @user_id OR user_email = @user_email)`,
-      { id: data.id, user_id: session.id, user_email: session.email },
-    );
+    // export carry a placeholder user_id, so match on email as well.
+    await sql`
+      DELETE FROM sla_event_comments
+      WHERE id = ${data.id}
+        AND (user_id = ${session.id} OR user_email = ${session.email})
+    `;
   });
 
 // ---------------------------------------------------------------------------
-// PO emission tracking
+// PO first-emission dates
+//
+// BigQuery exposes the PO number and the row's last sync timestamp, but not when
+// the PO first appeared — and the payout SLA deadline is measured from that date.
+// The tracker therefore records it the first time it sees each PO.
 // ---------------------------------------------------------------------------
 
 export const fetchPoEmissions = createServerFn({ method: "GET" }).handler(
   async (): Promise<PoEmissionRow[]> => {
     const { requireSession } = await import("./session.server");
     await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
-    const rows = await runBigQuery(
-      `SELECT event_ref, purchase_order_number,
-              FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', emitted_at) AS emitted_at
-       FROM ${T_PO_EMISSION}`,
-    );
-    return rows as unknown as PoEmissionRow[];
+    const { db, isoOrNull } = await import("./db.server");
+    const sql = await db();
+    const rows = await sql<
+      { event_ref: string; purchase_order_number: string; emitted_at: Date }[]
+    >`SELECT event_ref, purchase_order_number, emitted_at FROM sla_po_emission`;
+    return rows.map((r) => ({ ...r, emitted_at: isoOrNull(r.emitted_at) ?? "" }));
   },
 );
 
@@ -248,25 +245,25 @@ export const upsertPoEmissions = createServerFn({ method: "POST" })
     if (data.rows.length === 0) return;
     const { requireSession } = await import("./session.server");
     const session = await requireSession();
-    const { runBigQuery } = await import("./bigquery.server");
-    // Single MERGE over a JSON array parameter — one BigQuery job for the whole batch.
-    await runBigQuery(
-      `MERGE ${T_PO_EMISSION} t
-       USING (
-         SELECT
-           JSON_VALUE(x, '$.event_ref') AS event_ref,
-           JSON_VALUE(x, '$.purchase_order_number') AS purchase_order_number
-         FROM UNNEST(JSON_QUERY_ARRAY(@rows_json)) AS x
-       ) s
-       ON t.event_ref = s.event_ref
-       WHEN MATCHED AND t.purchase_order_number != s.purchase_order_number THEN UPDATE SET
-         purchase_order_number = s.purchase_order_number,
-         emitted_at = CURRENT_TIMESTAMP(),
-         updated_by = @updated_by,
-         updated_at = CURRENT_TIMESTAMP()
-       WHEN NOT MATCHED THEN INSERT
-         (event_ref, purchase_order_number, emitted_at, updated_by, updated_at)
-         VALUES (s.event_ref, s.purchase_order_number, CURRENT_TIMESTAMP(), @updated_by, CURRENT_TIMESTAMP())`,
-      { rows_json: JSON.stringify(data.rows), updated_by: session.email },
-    );
+    const { db } = await import("./db.server");
+    const sql = await db();
+    const payload = data.rows.map((r) => ({
+      event_ref: r.event_ref,
+      purchase_order_number: r.purchase_order_number,
+    }));
+    // One statement for the whole batch. An existing row only moves its
+    // emitted_at when the PO number actually changed.
+    await sql`
+      INSERT INTO sla_po_emission
+        (event_ref, purchase_order_number, emitted_at, updated_by, updated_at)
+      SELECT x.event_ref, x.purchase_order_number, now(), ${session.email}, now()
+      FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb)
+        AS x(event_ref text, purchase_order_number text)
+      ON CONFLICT (event_ref) DO UPDATE SET
+        purchase_order_number = EXCLUDED.purchase_order_number,
+        emitted_at = now(),
+        updated_by = EXCLUDED.updated_by,
+        updated_at = now()
+      WHERE sla_po_emission.purchase_order_number <> EXCLUDED.purchase_order_number
+    `;
   });
