@@ -202,11 +202,13 @@ export const deleteEventComment = createServerFn({ method: "POST" })
     const { requireSession } = await import("./session.server");
     const session = await requireSession();
     const { runBigQuery } = await import("./bigquery.server");
-    // Only the comment's author can delete it.
-    await runBigQuery(`DELETE FROM ${T_COMMENTS} WHERE id = @id AND user_id = @user_id`, {
-      id: data.id,
-      user_id: session.id,
-    });
+    // Only the comment's author can delete it. Comments imported from the old
+    // Supabase export carry a placeholder user_id, so match on email as well.
+    await runBigQuery(
+      `DELETE FROM ${T_COMMENTS}
+       WHERE id = @id AND (user_id = @user_id OR user_email = @user_email)`,
+      { id: data.id, user_id: session.id, user_email: session.email },
+    );
   });
 
 // ---------------------------------------------------------------------------
