@@ -64,6 +64,13 @@ const SCHEMA_STATEMENTS = [
      updated_at timestamptz NOT NULL DEFAULT now(),
      PRIMARY KEY (event_ref, partner_key)
    )`,
+  `CREATE TABLE IF NOT EXISTS google_credentials (
+     user_email text PRIMARY KEY,
+     refresh_token text NOT NULL,
+     scopes text NOT NULL,
+     connected_at timestamptz NOT NULL DEFAULT now(),
+     updated_at timestamptz NOT NULL DEFAULT now()
+   )`,
   `CREATE TABLE IF NOT EXISTS sla_po_emission (
      event_ref text PRIMARY KEY,
      purchase_order_number text NOT NULL,

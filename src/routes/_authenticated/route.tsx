@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Outlet, redirect, useRouter } from "@tanstack/react-router";
-import { Download, Droplets, Globe, LogOut, ReceiptText, RefreshCw } from "lucide-react";
+import { Download, Droplets, Globe, LogOut, Mail, MailX, ReceiptText, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TrackerChromeProvider, useTrackerChrome } from "@/components/tracker-chrome";
+import { useDisconnectGmail, useGmailConnection } from "@/lib/use-gmail";
 
 type SessionUser = { id: string; email: string; name: string | null; picture: string | null };
 
@@ -57,6 +58,8 @@ function TopBar() {
   const router = useRouter();
   const { user } = Route.useRouteContext();
   const { actions } = useTrackerChrome();
+  const { data: gmail } = useGmailConnection();
+  const disconnectGmail = useDisconnectGmail();
   const email = user?.email ?? "";
   const displayName = user?.name ?? email;
   const initials =
@@ -165,6 +168,22 @@ function TopBar() {
               <span className="block text-sm font-medium">{displayName}</span>
               <span className="block truncate text-xs text-muted-foreground">{email}</span>
             </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {gmail?.connected ? (
+              <DropdownMenuItem onSelect={() => disconnectGmail.mutate()}>
+                <MailX className="mr-2 h-4 w-4" aria-hidden="true" />
+                Disconnect Gmail
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem
+                onSelect={() => {
+                  window.location.href = "/api/gmail/connect";
+                }}
+              >
+                <Mail className="mr-2 h-4 w-4" aria-hidden="true" />
+                Connect Gmail
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={signOut}>
               <LogOut className="mr-2 h-4 w-4" aria-hidden="true" />

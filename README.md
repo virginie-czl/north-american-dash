@@ -20,6 +20,22 @@ statuses, PO first-emission dates) lives in a small Postgres store attached in V
    (`openssl rand -base64 32`). `DATABASE_URL` comes from step 1.
 4. **Optional** — `sql/restore_annotations_2026-07-25.sql` re-imports the
    annotations exported from the previous version.
+5. **Optional — Gmail** — add `TOKEN_ENCRYPTION_KEY` (`openssl rand -base64 32`),
+   then add these scopes to the OAuth client's consent screen:
+   `gmail.readonly` and `gmail.compose`. Add
+   `https://<domain>/api/gmail/callback` to the authorized redirect URIs.
+   With an *Internal* consent screen no Google security assessment is required.
+   Each user connects their own mailbox from the account menu; sign-in never
+   asks for mailbox access.
+
+## Gmail integration
+
+Connecting Gmail is per user, explicit and revocable — refresh tokens are stored
+encrypted (AES-256-GCM) and a user can only ever reach their own mailbox. In the
+event drawer, *Email history* shows whether each partner was contacted and whether
+they replied, and *Reminder* drafts or sends a message. Reads only happen when the
+user clicks, searches are narrowed to the partner addresses on that event, and
+sending is one recipient at a time behind a confirmation step.
 
 ## Develop / deploy
 

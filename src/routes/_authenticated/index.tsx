@@ -47,6 +47,7 @@ import {
   SummaryStrip,
   useRegisterTrackerActions,
 } from "@/components/tracker-chrome";
+import { PartnerEmails } from "@/components/partner-emails";
 import {
   BarChart,
   Bar,
@@ -1507,6 +1508,17 @@ function EventDetails({
             </div>
           );
         })()}
+      </div>
+
+      <div className="md:col-span-2">
+        <PartnerEmails
+          eventRef={eventRef}
+          partners={partners.map((p) => ({
+            name: p.name,
+            email: p.email,
+            owed: fmtCurrency(p.amount_due, p.currency),
+          }))}
+        />
       </div>
 
       <div className="md:col-span-2">
