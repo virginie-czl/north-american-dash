@@ -131,3 +131,20 @@ Two things sit side by side in the event drawer, and they are not the same:
 If you extend `partner_email_facts`, keep the new column on the verdict side of
 that line. A stored thread id or subject would turn a shared table into a window
 into someone else's mailbox.
+
+So when Shayma emails a partner and gets back an IBAN and a GST number, Virginie
+sees *Bancaire reçu* and the tax sticker change without ever seeing the message or
+its thread — the verdicts are team-wide, the correspondence is not.
+
+**Received is not the same as recorded.** The tax sticker separates the two, because
+they have different owners:
+
+| Sticker | Meaning | Whose move |
+| --- | --- | --- |
+| *Taxes en base* (green) | Readable registration in `owners` / `service_owners` | nobody |
+| *Taxes à saisir* (amber) | Partner sent it by email; not keyed into Naboo | ours |
+| *Taxes demandé* (amber) | Asked, nothing back yet | partner's |
+| *Taxes —* (grey) | Never asked | partner's |
+
+Bank details have no equivalent warehouse field, so there the email scan is the only
+source and *Bancaire reçu* means exactly that.

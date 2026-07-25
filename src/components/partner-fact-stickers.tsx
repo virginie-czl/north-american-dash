@@ -99,7 +99,14 @@ export function ActionSticker({ action }: { action: PartnerAction }) {
 }
 
 /** Builds the four stickers for one partner, or null when never scanned. */
-export function PartnerFactStickers({ facts }: { facts: PartnerFacts | undefined }) {
+export function PartnerFactStickers({
+  facts,
+  taxOnFile,
+}: {
+  facts: PartnerFacts | undefined;
+  /** True when a readable tax registration exists in BigQuery (owners/service_owners). */
+  taxOnFile?: boolean;
+}) {
   if (!facts) return null;
 
   const viaDealCode =
@@ -137,21 +144,27 @@ export function PartnerFactStickers({ facts }: { facts: PartnerFacts | undefined
         ? `Demandé par ${who(facts.bank_asked_by)} le ${shortDate(facts.bank_asked_at)}`
         : "Coordonnées bancaires jamais demandées";
 
-  // Tax info
-  const taxTone: Tone =
-    facts.tax_info === "received" ? "good" : facts.tax_info === "asked" ? "pending" : "none";
-  const taxLabel =
-    facts.tax_info === "received"
-      ? "Taxes reçu"
-      : facts.tax_info === "asked"
-        ? "Taxes demandé"
-        : "Taxes —";
-  const taxTitle =
-    facts.tax_info === "received"
-      ? `Numéros de taxes reçus le ${shortDate(facts.tax_received_at)}`
-      : facts.tax_info === "asked"
-        ? `Demandé par ${who(facts.tax_asked_by)} le ${shortDate(facts.tax_asked_at)}`
-        : "Numéros de taxes jamais demandés";
+  // Tax: two independent facts — did the partner send it, and is it recorded in
+  // Naboo? "Received by email but not keyed in" is a real state, and it is ours
+  // to close, so it must not look the same as "on file".
+  let taxTone: Tone = "none";
+  let taxLabel = "Taxes —";
+  let taxTitle = "Numéros de taxes jamais demandés";
+  if (taxOnFile) {
+    taxTone = "good";
+    taxLabel = "Taxes en base";
+    taxTitle = "Numéros de taxes enregistrés dans Naboo";
+  } else if (facts.tax_info === "received") {
+    taxTone = "pending";
+    taxLabel = "Taxes à saisir";
+    taxTitle = `Reçus par email le ${shortDate(
+      facts.tax_received_at,
+    )} — pas encore enregistrés dans Naboo`;
+  } else if (facts.tax_info === "asked") {
+    taxTone = "pending";
+    taxLabel = "Taxes demandé";
+    taxTitle = `Demandé par ${who(facts.tax_asked_by)} le ${shortDate(facts.tax_asked_at)}`;
+  }
 
   // Card
   const cardTone: Tone =
@@ -204,10 +217,13 @@ export function EventFactStickers({
   eventRef,
   partnerKeys,
   factsMap,
+  taxOnFile,
 }: {
   eventRef: string;
   partnerKeys: string[];
   factsMap: Map<string, PartnerFacts> | undefined;
+  /** True only when every partner on the event has a readable registration. */
+  taxOnFile?: boolean;
 }) {
   if (!factsMap || partnerKeys.length === 0) return null;
   const rows = partnerKeys
@@ -235,5 +251,5 @@ export function EventFactStickers({
         ? "accepted"
         : "unknown",
   };
-  return <PartnerFactStickers facts={summary} />;
+  return <PartnerFactStickers facts={summary} taxOnFile={taxOnFile} />;
 }

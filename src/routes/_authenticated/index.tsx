@@ -54,6 +54,7 @@ import {
   PartnerFactStickers,
 } from "@/components/partner-fact-stickers";
 import { useActionIndex } from "@/lib/use-partner-actions";
+import { parseTaxRegistration, taxComplete } from "@/lib/partner-actions";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
 import {
   BarChart,
@@ -1254,6 +1255,17 @@ function SlaPage() {
                                           eventRef={r.readable_id ?? r.client_request_id ?? ""}
                                           partnerKeys={partners.map((p) => partnerKey(p.name))}
                                           factsMap={factsMap}
+                                          taxOnFile={partners
+                                            .filter((p) => !p.is_cancelled)
+                                            .every((p) =>
+                                              taxComplete(
+                                                parseTaxRegistration(
+                                                  p.vat_raw,
+                                                  p.tax_identifier,
+                                                ),
+                                                p.country,
+                                              ),
+                                            )}
                                         />
                                       </>
                                     );
@@ -1473,16 +1485,24 @@ function EventDetails({
                         {p.is_cancelled && (
                           <span className="ml-1 text-[10px] text-muted-foreground">(cancelled)</span>
                         )}
-                        <span className="mt-1 flex flex-wrap gap-1">
-                          <ActionSticker
-                            action={actionFor(
-                              eventRef,
-                              p,
-                              Boolean(row.purchase_order_number),
-                            )}
-                          />
-                        </span>
-                        <PartnerFactStickers facts={factsMap?.get(key)} />
+                        {(() => {
+                          const action = actionFor(
+                            eventRef,
+                            p,
+                            Boolean(row.purchase_order_number),
+                          );
+                          return (
+                            <>
+                              <span className="mt-1 flex flex-wrap gap-1">
+                                <ActionSticker action={action} />
+                              </span>
+                              <PartnerFactStickers
+                                facts={factsMap?.get(key)}
+                                taxOnFile={taxComplete(action.tax, p.country)}
+                              />
+                            </>
+                          );
+                        })()}
                       </td>
                       <td className="px-2 py-1.5 text-muted-foreground">
                         <div>{p.email || "—"}</div>
