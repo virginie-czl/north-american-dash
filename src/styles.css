@@ -582,3 +582,14 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
+
+/* Column widths --------------------------------------------------------------
+   The identifying columns get fixed budgets so they can neither stretch into
+   dead space (auto layout distributes slack to the widest text) nor squeeze the
+   money columns. The remaining width is shared by the client/partner columns. */
+.sla-table thead tr:nth-child(2) > th:nth-child(1) { width: 26px; }
+.sla-table thead tr:nth-child(2) > th:nth-child(2) { width: 94px; }
+.sla-table thead tr:nth-child(2) > th:nth-child(3) { width: 146px; }
+.sla-table thead tr:nth-child(2) > th:nth-child(4) { width: 100px; }
+.sla-table thead tr:nth-child(2) > th:nth-child(5) { width: 42px; }
+.sla-table thead tr:nth-child(2) > th:nth-child(6) { width: 100px; }

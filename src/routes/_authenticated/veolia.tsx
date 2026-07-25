@@ -898,7 +898,7 @@ function SlaPage() {
       )}
 
       <Tabs defaultValue="table" className="flex min-h-0 flex-1 flex-col gap-0">
-          <TabsList className="mx-5 mt-2.5 flex-none self-start">
+          <TabsList className="mx-5 my-1.5 h-8 flex-none self-start">
             <TabsTrigger value="table">Detailed table</TabsTrigger>
             <TabsTrigger value="charts">Breakdown</TabsTrigger>
             <TabsTrigger value="breached">Breached ({breached.length})</TabsTrigger>
@@ -910,7 +910,7 @@ function SlaPage() {
           >
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2.5">
+                <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2">
                   <Input
                     placeholder="Search ref, event type, partner name/email, invoice…"
                     value={search}
@@ -1137,7 +1137,7 @@ function SlaPage() {
                                     <>
                                       <div className="cell-mono">{r.purchase_order_number}</div>
                                       <div className="cell-sub">
-                                        since {fmtDate(r.purchase_order_updated_at)}
+                                        since {fmtDateShort(r.purchase_order_updated_at)}
                                       </div>
                                     </>
                                   ) : (
