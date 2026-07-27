@@ -107,7 +107,9 @@ fi_base AS (
   SELECT
     fi.clientRequestId AS crid,
     ANY_VALUE(fi.currency) AS currency,
-    ANY_VALUE(ROUND(fi.liveConfirmed.grossgmv.withouttaxes / 10000, 2)) AS gmv,
+    -- grossGmv gained a price/discountPrice level upstream; the other two trackers
+    -- already read .price.withoutTaxes, so this matches them.
+    ANY_VALUE(ROUND(fi.liveConfirmed.grossGmv.price.withoutTaxes / 10000, 2)) AS gmv,
     ANY_VALUE(ROUND(fi.collectedTotal / 10000, 2)) AS paid
   FROM \`naboo-app-365515.raw_naboo_data.client_request_free_invoicing\` fi
   WHERE fi.deleted = false
