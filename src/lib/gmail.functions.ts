@@ -274,3 +274,70 @@ export const scanEventsForFacts = createServerFn({ method: "POST" })
     }
     return outcomes;
   });
+
+// ---------------------------------------------------------------------------
+// Batch requests to providers
+//
+// Sent one at a time, sequentially, with a per-recipient result. A partial failure
+// must be visible: knowing that 11 of 14 went out, and which three did not, is the
+// difference between a usable tool and one you cannot trust with a chase round.
+// ---------------------------------------------------------------------------
+
+export type OutgoingMessage = { to: string; subject: string; body: string };
+
+export type BatchResult = {
+  to: string;
+  ok: boolean;
+  /** Present on success when drafting. */
+  link?: string;
+  error?: string;
+};
+
+function validateBatch(input: { messages: OutgoingMessage[]; mode: "draft" | "send" }) {
+  if (!Array.isArray(input?.messages)) throw new Error("messages is required");
+  if (input.mode !== "draft" && input.mode !== "send") throw new Error("Invalid mode");
+  const seen = new Set<string>();
+  const messages = input.messages
+    .map((m) => ({
+      to: typeof m?.to === "string" ? m.to.trim() : "",
+      subject: typeof m?.subject === "string" ? m.subject.trim() : "",
+      body: typeof m?.body === "string" ? m.body.trim() : "",
+    }))
+    .filter((m) => {
+      if (!m.to.includes("@") || /[,;]/.test(m.to)) return false;
+      if (!m.subject || !m.body || m.body.length > 20_000) return false;
+      // One message per address per run, whatever the caller sent.
+      const key = m.to.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  if (messages.length === 0) throw new Error("Aucun destinataire valide");
+  if (messages.length > 60) throw new Error("Trop de destinataires en une fois (60 maximum)");
+  return { messages, mode: input.mode };
+}
+
+export const sendPartnerRequests = createServerFn({ method: "POST" })
+  .validator(validateBatch)
+  .handler(async ({ data }): Promise<BatchResult[]> => {
+    const { requireSession } = await import("./session.server");
+    const session = await requireSession();
+    const { createDraft, sendMessage } = await import("./gmail.server");
+
+    const results: BatchResult[] = [];
+    for (const message of data.messages) {
+      try {
+        if (data.mode === "draft") {
+          const draft = await createDraft(session.email, message.to, message.subject, message.body);
+          results.push({ to: message.to, ok: true, link: draft.link });
+        } else {
+          await sendMessage(session.email, message.to, message.subject, message.body);
+          results.push({ to: message.to, ok: true });
+        }
+      } catch (error) {
+        // Keep going: one bad address should not abort the rest of the round.
+        results.push({ to: message.to, ok: false, error: String((error as Error).message) });
+      }
+    }
+    return results;
+  });

@@ -49,6 +49,8 @@ import {
 } from "@/components/tracker-chrome";
 import { PartnerEmails } from "@/components/partner-emails";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
+import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
+import { buildTargets, describeNeeds, needsOf } from "@/lib/partner-requests";
 import { UserAvatar } from "@/components/user-avatar";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
@@ -432,6 +434,8 @@ function SlaPage() {
   const { data: commentSummaries } = useCommentSummaries();
   const { factsMap, factsError, actionFor, eventNeedsScan } = useActionIndex();
   const { data: gmailConnection, error: gmailError } = useGmailConnection();
+  const { data: me } = useCurrentUser();
+  const requestDialog = useRequestDialog();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const rows = useMemo(() => {
     if (!poDates) return rawRows;
@@ -796,6 +800,29 @@ function SlaPage() {
   };
   const collapseAll = () => setExpanded({});
 
+  // Providers on the visible rows still missing something. Grouped by address, so a
+  // provider on several bookings is contacted once.
+  const incompleteTargets = useMemo(
+    () =>
+      buildTargets(
+        filtered.flatMap(({ row: r, partners: ps }) => {
+          const ref = r.readable_id ?? r.client_request_id ?? "";
+          const hasPo = Boolean(r.purchase_order_number);
+          return ps.map((p) => ({
+            eventRef: ref,
+            name: p.name,
+            email: p.email,
+            country: p.country,
+            currency: p.currency,
+            amountDue: p.amount_due,
+            action: actionFor(ref, p, hasPo),
+            isCancelled: p.is_cancelled,
+          }));
+        }),
+      ),
+    [filtered, actionFor],
+  );
+
   useRegisterTrackerActions(
     {
       onRefresh: () => refetch(),
@@ -964,6 +991,18 @@ function SlaPage() {
                   <Button variant="ghost" size="sm" onClick={collapseAll}>
                     Collapse
                   </Button>
+                  {gmailConnection?.connected && incompleteTargets.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => requestDialog.open(incompleteTargets)}
+                      title="Un email par prestataire à qui il manque au moins une information"
+                    >
+                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                      Demander les infos manquantes ({incompleteTargets.length})
+                    </Button>
+                  )}
                   {gmailError != null && (
                     <span
                       role="alert"
@@ -1435,6 +1474,14 @@ function SlaPage() {
             </Card>
           </TabsContent>
       </Tabs>
+
+      {requestDialog.targets && (
+        <RequestInfoDialog
+          targets={requestDialog.targets}
+          senderName={me?.name ?? null}
+          onClose={requestDialog.close}
+        />
+      )}
     </div>
   );
 }
@@ -1451,6 +1498,9 @@ function EventDetails({
   const eventRef = row.readable_id ?? row.client_request_id ?? "";
   const { data: statusMap } = usePartnerStatuses();
   const { factsMap, actionFor } = useActionIndex();
+  const { data: me } = useCurrentUser();
+  const { data: gmailConnection } = useGmailConnection();
+  const requestDialog = useRequestDialog();
   const setStatus = useSetPartnerStatus();
   return (
     <div className="grid gap-6 md:grid-cols-2">
@@ -1512,6 +1562,40 @@ function EventDetails({
                           facts={factsMap?.get(key)}
                           partner={p}
                         />
+                        {(() => {
+                          if (!gmailConnection?.connected || !p.email) return null;
+                          const action = actionFor(
+                            eventRef,
+                            p,
+                            Boolean(row.purchase_order_number),
+                          );
+                          const needs = needsOf(action, p.country);
+                          if (!needs) return null;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                requestDialog.open(
+                                  buildTargets([
+                                    {
+                                      eventRef,
+                                      name: p.name,
+                                      email: p.email,
+                                      country: p.country,
+                                      currency: p.currency,
+                                      amountDue: p.amount_due,
+                                      action,
+                                      isCancelled: p.is_cancelled,
+                                    },
+                                  ]),
+                                )
+                              }
+                              className="mt-1 block text-[10.5px] text-sky-800 underline-offset-2 hover:underline"
+                            >
+                              Demander {describeNeeds(needs)}
+                            </button>
+                          );
+                        })()}
                       </td>
                       <td className="px-2 py-1.5 text-muted-foreground">
                         <div>{p.email || "—"}</div>
@@ -1649,6 +1733,14 @@ function EventDetails({
       <div className="md:col-span-2">
         <EventComments eventRef={eventRef} />
       </div>
+
+      {requestDialog.targets && (
+        <RequestInfoDialog
+          targets={requestDialog.targets}
+          senderName={me?.name ?? null}
+          onClose={requestDialog.close}
+        />
+      )}
     </div>
   );
 }

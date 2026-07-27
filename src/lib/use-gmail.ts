@@ -180,3 +180,68 @@ export function useFactScan() {
 
   return { progress, start };
 }
+
+// --- Batch provider requests -------------------------------------------------
+
+import {
+  sendPartnerRequests,
+  type BatchResult,
+  type OutgoingMessage,
+} from "@/lib/gmail.functions";
+
+export type { BatchResult, OutgoingMessage };
+
+/** Sends or drafts in chunks so a long round shows progress and cannot time out. */
+export function usePartnerRequests() {
+  const qc = useQueryClient();
+  const [state, setState] = useState<{
+    running: boolean;
+    done: number;
+    total: number;
+    results: BatchResult[];
+    error: string | null;
+  }>({ running: false, done: 0, total: 0, results: [], error: null });
+
+  const run = useCallback(
+    async (messages: OutgoingMessage[], mode: "draft" | "send") => {
+      if (messages.length === 0) return [];
+      setState({ running: true, done: 0, total: messages.length, results: [], error: null });
+      const all: BatchResult[] = [];
+      const CHUNK_SIZE = 5;
+      try {
+        for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+          const chunk = messages.slice(i, i + CHUNK_SIZE);
+          const res = await sendPartnerRequests({ data: { messages: chunk, mode } });
+          all.push(...(Array.isArray(res) ? res : []));
+          setState({
+            running: true,
+            done: Math.min(i + CHUNK_SIZE, messages.length),
+            total: messages.length,
+            results: [...all],
+            error: null,
+          });
+        }
+        setState((s) => ({ ...s, running: false, done: messages.length, results: all }));
+      } catch (error) {
+        setState((s) => ({
+          ...s,
+          running: false,
+          results: all,
+          error: String((error as Error)?.message ?? error),
+        }));
+      } finally {
+        // A sent request changes what the next scan will find.
+        qc.invalidateQueries({ queryKey: ["partner-emails"] });
+      }
+      return all;
+    },
+    [qc],
+  );
+
+  const reset = useCallback(
+    () => setState({ running: false, done: 0, total: 0, results: [], error: null }),
+    [],
+  );
+
+  return { ...state, run, reset };
+}

@@ -189,3 +189,34 @@ Tighten it per person from the admin page.
 re-checked on every authenticated call, not just at sign-in. The check is cached
 for 45 seconds per instance, which is the upper bound on how long a revoked
 account keeps working.
+
+
+### Asking providers for what is missing
+
+Two entry points, both sending from the signed-in user's own Gmail:
+
+- **Per provider** — in the event drawer, under the stickers: *Demander coordonnées
+  bancaires + numéros de taxes*, worded from what that provider actually lacks.
+- **In bulk** — *Demander les infos manquantes (N)* in the table toolbar, covering
+  every provider on the visible rows missing at least one item.
+
+Both open the same review dialog. Nothing is sent from the click: the dialog lists
+each recipient, what they will be asked for and which bookings it covers, every
+message can be read and edited, recipients can be unticked, and sending needs a
+second confirmation. *Créer N brouillons* is offered alongside so a round can be
+reviewed in Gmail first.
+
+Two design rules, in `src/lib/partner-requests.ts` (pure,
+`npx tsx src/lib/partner-requests.test.mjs`):
+
+1. **One email per address, not per booking.** A provider on three events gets a
+   single message listing all three and the summed outstanding amount. Three
+   near-identical chases to the same inbox is how a reminder becomes spam.
+2. **Ask only for gaps, and never for something we do not need.** A provider who
+   accepted a card before is asked to confirm the card, not for an IBAN. A Canadian
+   partner with a GST but no QST is asked only for the QST. Language follows the
+   provider's country.
+
+Sending is sequential with a per-recipient result, so a partial failure is visible:
+"11 sent, 3 failed" plus the reason for each, rather than an all-or-nothing outcome.
+Duplicate addresses are collapsed server-side too, and a run is capped at 60.
