@@ -809,6 +809,7 @@ function SlaPage() {
           const hasPo = Boolean(r.purchase_order_number);
           return ps.map((p) => ({
             eventRef: ref,
+            eventDate: r.start_date ?? null,
             name: p.name,
             email: p.email,
             country: p.country,
@@ -1472,7 +1473,6 @@ function SlaPage() {
       {requestDialog.targets && (
         <RequestInfoDialog
           targets={requestDialog.targets}
-          senderName={me?.name ?? null}
           onClose={requestDialog.close}
         />
       )}
@@ -1492,7 +1492,6 @@ function EventDetails({
   const eventRef = row.readable_id ?? row.client_request_id ?? "";
   const { data: statusMap } = usePartnerStatuses();
   const { factsMap, actionFor } = useActionIndex();
-  const { data: me } = useCurrentUser();
   const { data: gmailConnection } = useGmailConnection();
   const requestDialog = useRequestDialog();
   const setStatus = useSetPartnerStatus();
@@ -1573,6 +1572,7 @@ function EventDetails({
                                   buildTargets([
                                     {
                                       eventRef,
+                                      eventDate: row.start_date ?? null,
                                       name: p.name,
                                       email: p.email,
                                       country: p.country,
@@ -1731,7 +1731,6 @@ function EventDetails({
       {requestDialog.targets && (
         <RequestInfoDialog
           targets={requestDialog.targets}
-          senderName={me?.name ?? null}
           onClose={requestDialog.close}
         />
       )}

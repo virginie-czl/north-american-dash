@@ -59,6 +59,7 @@ export interface SlaRow {
   partner_net_a_payer_ttc: number | null;
   partner_reste_a_decaisser_ttc: number | null;
   live_service_fees_ht: number | null;
+  start_date: string | null;
   end_date: string | null;
   purchase_order_number: string | null;
   purchase_order_updated_at: string | null;
@@ -349,6 +350,7 @@ SELECT
   t.gmv.partner_net_a_payer_ttc AS partner_net_a_payer_ttc,
   t.gmv.partner_reste_a_decaisser_ttc AS partner_reste_a_decaisser_ttc,
   t.gmv.live_service_fees_ht AS live_service_fees_ht,
+  CAST(ev.start_date AS STRING) AS start_date,
   CAST(ev.end_date AS STRING) AS end_date,
   ev.purchase_order_number AS purchase_order_number,
   CAST(ev.updated_at AS STRING) AS purchase_order_updated_at,

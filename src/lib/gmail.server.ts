@@ -140,7 +140,8 @@ export async function createDraft(
 ): Promise<{ draftId: string; link: string }> {
   const draft = await gmail<{ id: string; message?: { id: string } }>(email, "/drafts", {
     method: "POST",
-    body: { message: { raw: buildMime(to, subject, body) } },
+    // insertSignature=true asks Gmail to append the user's configured signature.
+    body: { message: { raw: buildMime(to, subject, body) }, insertSignature: true },
   });
   return {
     draftId: draft.id,
@@ -156,7 +157,8 @@ export async function sendMessage(
 ): Promise<{ messageId: string; threadId: string }> {
   const sent = await gmail<{ id: string; threadId: string }>(email, "/messages/send", {
     method: "POST",
-    body: { raw: buildMime(to, subject, body) },
+    // insertSignature=true asks Gmail to append the user's configured signature.
+    body: { raw: buildMime(to, subject, body), insertSignature: true },
   });
   return { messageId: sent.id, threadId: sent.threadId };
 }
