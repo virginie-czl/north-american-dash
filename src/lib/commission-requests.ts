@@ -150,3 +150,75 @@ Best,`;
 
   return { subject, body };
 }
+
+// ─── Refund request ────────────────────────────────────────────────────────
+
+export type RefundComposed = { subject: string; body: string };
+
+export function composeRefundRequest(
+  row: CommissionRow,
+  to: { name: string | null },
+): RefundComposed | null {
+  const overpaidPartners = (row.partners ?? []).filter(
+    (p) => (p.outstanding_payable ?? 0) < -0.10,
+  );
+  if (overpaidPartners.length === 0) return null;
+
+  const client = row.company_name ?? "your group";
+  const dateRange = fmtDateRange(row.start_date, row.end_date);
+  const bookingId = row.readable_id ?? "—";
+  const greeting = to.name ?? "there";
+
+  const subject = `Overpayment on Booking ${bookingId} — ${client}, ${dateRange}`;
+
+  const allSameCcy = overpaidPartners.every(
+    (p) => p.partner_currency === overpaidPartners[0].partner_currency,
+  );
+  const ccy = allSameCcy ? (overpaidPartners[0].partner_currency ?? null) : null;
+
+  const totalNetPayable = overpaidPartners.reduce((s, p) => s + (p.net_payable ?? 0), 0);
+  const totalDisbursed = overpaidPartners.reduce((s, p) => s + (p.disbursed_total ?? 0), 0);
+  const totalOverpaid = overpaidPartners.reduce(
+    (s, p) => s + Math.abs(p.outstanding_payable ?? 0),
+    0,
+  );
+  const depositTotal = overpaidPartners.reduce((s, p) => s + (p.deposit_net_payable ?? 0), 0);
+  const balanceTotal = totalDisbursed - depositTotal;
+  const depositDate = overpaidPartners.find((p) => p.deposit_payment_date)?.deposit_payment_date;
+
+  const depositPart = depositDate
+    ? `deposit ${fmtMoney(depositTotal, ccy)} on ${fmtShortDate(depositDate)}`
+    : `deposit ${fmtMoney(depositTotal, ccy)}`;
+  const paymentBreakdown = `${depositPart} + balance ${fmtMoney(balanceTotal, ccy)}`;
+
+  const body = `Hi ${greeting},
+
+Hope you're doing well!
+
+I was closing out the file on the ${client} program and caught something on our side — it looks like we overpaid you, so I wanted to flag it and get it squared away.
+
+Here's what we're seeing:
+• Total event amount (before tax): ${fmtMoney(Number(row.gross_gmv_ht ?? 0), row.currency_client)}
+• Amount due per your final invoice: ${fmtMoney(totalNetPayable, ccy)}
+• Amount we paid: ${fmtMoney(totalDisbursed, ccy)} (${paymentBreakdown})
+• Overpayment: ${fmtMoney(totalOverpaid, ccy)}
+
+Could you take a look and confirm it matches your records? Once you do, we'd ask for a refund of ${fmtMoney(totalOverpaid, ccy)} and I'll send over a credit note for your files.
+
+If anything looks off in my numbers, just say the word and I'll walk through the payment history with you. Happy to hop on a quick call if that's faster.
+
+Thanks so much for your help on this — and thanks again for a great event.
+
+Best,`;
+
+  return { subject, body };
+}
+
+function fmtShortDate(s: string | null | undefined): string {
+  if (!s) return "—";
+  try {
+    return new Date(s).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+  } catch {
+    return s;
+  }
+}

@@ -2,7 +2,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, ChevronRight, Send } from "lucide-react";
-import { pickContact, composeCommissionRequest } from "@/lib/commission-requests";
+import { pickContact, composeCommissionRequest, composeRefundRequest } from "@/lib/commission-requests";
 import { useGmailConnection, usePartnerRequests } from "@/lib/use-gmail";
 import { Button } from "@/components/ui/button";
 import { getCommissionRows, type CommissionRow } from "@/lib/commission.functions";
@@ -125,7 +125,8 @@ function NaCommissionsPage() {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [composing, setComposing] = useState<null | {
-    to: string; contactName: string | null; subject: string; body: string; row: CommissionRow;
+    to: string; contactName: string | null; subject: string; body: string;
+    row: CommissionRow; mode: "commission" | "refund";
   }>(null);
   const { data: gmailConnection } = useGmailConnection();
   const requests = usePartnerRequests();
@@ -403,17 +404,36 @@ function NaCommissionsPage() {
                           );
                           const { subject, body } = composeCommissionRequest(r, contact);
                           return (
+                            <>
                             <button
                               type="button"
                               className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-sky-800 underline-offset-2 hover:underline"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setComposing({ to: contact.address!, contactName: contact.name, subject, body, row: r });
+                                setComposing({ to: contact.address!, contactName: contact.name, subject, body, row: r, mode: "commission" });
                               }}
                             >
                               <Send className="h-3 w-3" aria-hidden="true" />
                               Request commission
                             </button>
+                            {(() => {
+                              const refund = composeRefundRequest(r, contact);
+                              if (!refund) return null;
+                              return (
+                                <button
+                                  type="button"
+                                  className="mt-1 inline-flex items-center gap-1.5 text-[11.5px] text-rose-800 underline-offset-2 hover:underline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setComposing({ to: contact.address!, contactName: contact.name, ...refund, row: r, mode: "refund" });
+                                  }}
+                                >
+                                  <Send className="h-3 w-3" aria-hidden="true" />
+                                  Request refund
+                                </button>
+                              );
+                            })()}
+                          </>
                           );
                         })()}
                       </TableCell>
@@ -444,6 +464,7 @@ type ComposingState = {
   subject: string;
   body: string;
   row: CommissionRow;
+  mode: "commission" | "refund";
 };
 
 function CommissionRequestDialog({
@@ -470,7 +491,9 @@ function CommissionRequestDialog({
       >
         <header className="flex flex-none items-start gap-3 border-b border-border px-5 py-3.5">
           <span className="min-w-0">
-            <h2 className="font-display text-lg font-bold">Request commission</h2>
+            <h2 className="font-display text-lg font-bold">
+              {composing.mode === "refund" ? "Request refund" : "Request commission"}
+            </h2>
             <p className="mt-0.5 text-[12px] text-slate-600">
               To: {composing.to}{composing.contactName ? ` (${composing.contactName})` : ""}
               {" · "}{composing.row.readable_id} · {composing.row.company_name}
