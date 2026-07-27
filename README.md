@@ -220,3 +220,17 @@ Two design rules, in `src/lib/partner-requests.ts` (pure,
 Sending is sequential with a per-recipient result, so a partial failure is visible:
 "11 sent, 3 failed" plus the reason for each, rather than an all-or-nothing outcome.
 Duplicate addresses are collapsed server-side too, and a run is capped at 60.
+
+
+### Partner invoice PDFs
+
+In each event drawer, the *Factures partenaires* panel fetches the PDFs that
+partners submitted via the Naboo RFI flow (e.g. Patrice Blais's invoice for
+L'Oréal / Humankind). These live in MongoDB and are exposed via the Naboo
+GraphQL API (`reInvoicingRequests.userProvidedData.pdfUrl`) — they are not in
+BigQuery. Signed S3 URLs expire after ~15 min so they are fetched on demand,
+never stored.
+
+Set `NABOO_ADMIN_TOKEN` in Vercel environment variables (admin JWT from the
+Naboo BO or from the tech team). Without it the panel shows an error but
+everything else keeps working.

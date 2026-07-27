@@ -6,6 +6,7 @@ import {
 } from "@/components/tracker-chrome";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { PartnerEmails } from "@/components/partner-emails";
+import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
 import { buildTargets, needsOf, describeNeeds } from "@/lib/partner-requests";
 import { useActionIndex } from "@/lib/use-partner-actions";
@@ -825,6 +826,9 @@ function NaPage() {
                               <td colSpan={15} className="p-0">
                                 <div className="na-drawer-wrap">
                                   <PartnerSectionCard id={id} partners={partners} totals={totals} actionFor={actionFor} factsMap={factsMap} />
+                                  <div className="mt-4">
+                                    <PartnerInvoicePdfs clientRequestId={row.client_request_id} />
+                                  </div>
                                   {gmailConnection?.connected && (
                                     <div className="mt-4">
                                       <PartnerEmails

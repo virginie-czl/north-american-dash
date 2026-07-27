@@ -23,6 +23,7 @@ export interface NaPartnerLine {
 
 export interface NaRow {
   readable_id: string | null;
+  client_request_id: string | null;
   company_name: string | null;
   sales_referent: string | null;
   em_referent: string | null;
@@ -160,6 +161,7 @@ partners_fi AS (
 )
 SELECT
   e.client_request_readable_id AS readable_id,
+  e.clientRequestId AS client_request_id,
   e.company_name,
   e.sales_referent,
   e.em_referent,

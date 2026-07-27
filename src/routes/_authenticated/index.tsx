@@ -48,6 +48,7 @@ import {
   useRegisterTrackerActions,
 } from "@/components/tracker-chrome";
 import { PartnerEmails } from "@/components/partner-emails";
+import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
 import { buildTargets, describeNeeds, needsOf } from "@/lib/partner-requests";
@@ -1722,6 +1723,10 @@ function EventDetails({
             owed: fmtCurrency(p.amount_due, p.currency),
           }))}
         />
+      </div>
+
+      <div className="md:col-span-2">
+        <PartnerInvoicePdfs clientRequestId={row.client_request_id} />
       </div>
 
       <div className="md:col-span-2">
