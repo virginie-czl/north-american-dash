@@ -148,3 +148,28 @@ they have different owners:
 
 Bank details have no equivalent warehouse field, so there the email scan is the only
 source and *Bancaire reçu* means exactly that.
+
+
+## Access control
+
+A verified `@naboo.app` Google account establishes *who* someone is; it does not
+grant access. Access lives in `app_users` and is decided once:
+
+1. First sign-in records a `pending` row and shows a "waiting for validation" screen.
+   No session cookie is issued.
+2. An admin approves from **Accès à l'outil** (account menu → visible to admins,
+   with a badge on the avatar when something is waiting).
+3. From then on that person signs straight in. Approval is never asked again.
+
+`shayma.ndiaye@naboo.app` (`OWNER_EMAIL` in `src/lib/access.server.ts`) is approved
+on sight and always owner — otherwise the first sign-in could never be approved by
+anyone. The owner's own access cannot be revoked, by anyone, including themselves.
+
+Admins can approve, refuse and revoke. Only the owner can grant or remove admin
+rights — that keeps a second pair of hands available without letting anyone
+promote themselves.
+
+**Revocation actually revokes.** Session cookies last a week, so approval is
+re-checked on every authenticated call, not just at sign-in. The check is cached
+for 45 seconds per instance, which is the upper bound on how long a revoked
+account keeps working.

@@ -14,6 +14,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedVeoliaRouteImport } from './routes/_authenticated/veolia'
 import { Route as AuthenticatedTrackingNorthAmericaRouteImport } from './routes/_authenticated/tracking-north-america'
+import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -40,15 +41,22 @@ const AuthenticatedTrackingNorthAmericaRoute =
     path: '/tracking-north-america',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/auth': typeof AuthRoute
+  '/admin': typeof AuthenticatedAdminRoute
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
 }
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
+  '/admin': typeof AuthenticatedAdminRoute
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
   '/': typeof AuthenticatedIndexRoute
@@ -57,19 +65,21 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
+  '/_authenticated/admin': typeof AuthenticatedAdminRoute
   '/_authenticated/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/_authenticated/veolia': typeof AuthenticatedVeoliaRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/tracking-north-america' | '/veolia'
+  fullPaths: '/' | '/auth' | '/admin' | '/tracking-north-america' | '/veolia'
   fileRoutesByTo: FileRoutesByTo
-  to: '/auth' | '/tracking-north-america' | '/veolia' | '/'
+  to: '/auth' | '/admin' | '/tracking-north-america' | '/veolia' | '/'
   id:
     | '__root__'
     | '/_authenticated'
     | '/auth'
+    | '/_authenticated/admin'
     | '/_authenticated/tracking-north-america'
     | '/_authenticated/veolia'
     | '/_authenticated/'
@@ -117,16 +127,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedTrackingNorthAmericaRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/admin': {
+      id: '/_authenticated/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AuthenticatedAdminRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
 interface AuthenticatedRouteRouteChildren {
+  AuthenticatedAdminRoute: typeof AuthenticatedAdminRoute
   AuthenticatedTrackingNorthAmericaRoute: typeof AuthenticatedTrackingNorthAmericaRoute
   AuthenticatedVeoliaRoute: typeof AuthenticatedVeoliaRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
+  AuthenticatedAdminRoute: AuthenticatedAdminRoute,
   AuthenticatedTrackingNorthAmericaRoute:
     AuthenticatedTrackingNorthAmericaRoute,
   AuthenticatedVeoliaRoute: AuthenticatedVeoliaRoute,

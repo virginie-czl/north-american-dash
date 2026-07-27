@@ -95,5 +95,29 @@ export async function requireSession(): Promise<SessionUser> {
       headers: { "content-type": "application/json" },
     });
   }
+  // A valid cookie is not enough: access can have been revoked since it was
+  // issued, and cookies live for a week.
+  const { getAccess } = await import("./access.server");
+  const { status } = await getAccess(session.email);
+  if (status !== "approved") {
+    throw new Response(JSON.stringify({ error: "Access not approved", status }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
   return session;
+}
+
+/** Same, but also requires admin rights. */
+export async function requireAdmin(): Promise<{ session: SessionUser; role: string }> {
+  const session = await requireSession();
+  const { getAccess, isAdmin } = await import("./access.server");
+  const { role } = await getAccess(session.email);
+  if (!isAdmin(role)) {
+    throw new Response(JSON.stringify({ error: "Admin only" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return { session, role };
 }

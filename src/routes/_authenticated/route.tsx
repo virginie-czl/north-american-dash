@@ -1,5 +1,15 @@
 import { createFileRoute, Link, Outlet, redirect, useRouter } from "@tanstack/react-router";
-import { Download, Droplets, Globe, LogOut, Mail, MailX, ReceiptText, RefreshCw } from "lucide-react";
+import {
+  Download,
+  Droplets,
+  Globe,
+  LogOut,
+  Mail,
+  MailX,
+  ReceiptText,
+  RefreshCw,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -12,7 +22,15 @@ import {
 import { TrackerChromeProvider, useTrackerChrome } from "@/components/tracker-chrome";
 import { useDisconnectGmail, useGmailConnection } from "@/lib/use-gmail";
 
-type SessionUser = { id: string; email: string; name: string | null; picture: string | null };
+type SessionUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  picture: string | null;
+  role?: "owner" | "admin" | "member";
+  admin?: boolean;
+  pendingCount?: number;
+};
 
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
@@ -157,10 +175,19 @@ function TopBar() {
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-navy text-xs font-bold text-naboo"
-              aria-label={`Account: ${email}`}
+              className="relative flex h-[30px] w-[30px] items-center justify-center rounded-full bg-navy text-xs font-bold text-naboo"
+              aria-label={
+                (user?.pendingCount ?? 0) > 0
+                  ? `${email} — ${user?.pendingCount} demande(s) d'accès en attente`
+                  : `Account: ${email}`
+              }
             >
               {initials}
+              {(user?.pendingCount ?? 0) > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-amber-400 px-[3px] text-[9px] font-bold text-navy">
+                  {user?.pendingCount}
+                </span>
+              )}
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
@@ -169,6 +196,21 @@ function TopBar() {
               <span className="block truncate text-xs text-muted-foreground">{email}</span>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            {user?.admin && (
+              <DropdownMenuItem
+                onSelect={() => {
+                  router.navigate({ to: "/admin" });
+                }}
+              >
+                <Users className="mr-2 h-4 w-4" aria-hidden="true" />
+                Accès à l'outil
+                {(user.pendingCount ?? 0) > 0 && (
+                  <span className="ml-auto rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-800">
+                    {user.pendingCount}
+                  </span>
+                )}
+              </DropdownMenuItem>
+            )}
             {gmail?.connected ? (
               <DropdownMenuItem onSelect={() => disconnectGmail.mutate()}>
                 <MailX className="mr-2 h-4 w-4" aria-hidden="true" />

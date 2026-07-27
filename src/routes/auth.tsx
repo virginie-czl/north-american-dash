@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const searchSchema = z.object({
   error: z.string().optional(),
+  status: z.string().optional(),
 });
 
 export const Route = createFileRoute("/auth")({
@@ -20,7 +21,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 function AuthPage() {
   const navigate = useNavigate();
-  const { error: errorParam } = Route.useSearch();
+  const { error: errorParam, status } = Route.useSearch();
   const error = errorParam ? (ERROR_MESSAGES[errorParam] ?? ERROR_MESSAGES.oauth) : null;
   const [loading, setLoading] = useState(false);
 
@@ -33,6 +34,48 @@ function AuthPage() {
   function handleGoogle() {
     setLoading(true);
     window.location.href = "/api/auth/google";
+  }
+
+  if (status === "pending" || status === "blocked") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-navy px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="font-display text-xl font-bold">
+              {status === "pending" ? "Accès en attente de validation" : "Accès refusé"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            {status === "pending" ? (
+              <>
+                <p>
+                  Votre compte a bien été reconnu. Un administrateur doit valider votre accès une
+                  seule fois : votre demande vient d'être enregistrée.
+                </p>
+                <p>
+                  Une fois validée, vous entrerez directement à chaque connexion — vous n'aurez
+                  plus rien à demander.
+                </p>
+              </>
+            ) : (
+              <p>
+                Votre accès à cet outil a été refusé ou révoqué. Contactez l'équipe Finance si vous
+                pensez qu'il s'agit d'une erreur.
+              </p>
+            )}
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                window.location.href = "/auth";
+              }}
+            >
+              Retour
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (

@@ -64,6 +64,21 @@ const SCHEMA_STATEMENTS = [
      updated_at timestamptz NOT NULL DEFAULT now(),
      PRIMARY KEY (event_ref, partner_key)
    )`,
+  // Access registry. A verified @naboo.app Google account is necessary but not
+  // sufficient: the first sign-in creates a pending row that an admin must approve.
+  // Approval is recorded once and never asked again.
+  `CREATE TABLE IF NOT EXISTS app_users (
+     email text PRIMARY KEY,
+     name text,
+     picture text,
+     status text NOT NULL DEFAULT 'pending',
+     role text NOT NULL DEFAULT 'member',
+     requested_at timestamptz NOT NULL DEFAULT now(),
+     decided_at timestamptz,
+     decided_by text,
+     last_seen_at timestamptz
+   )`,
+  `CREATE INDEX IF NOT EXISTS app_users_status_idx ON app_users (status)`,
   // Derived facts only — never subjects, bodies, thread ids or any message
   // content. Every user of the tracker may read these stickers, so anything added
   // here becomes visible to the whole team: a stored thread id would hand a

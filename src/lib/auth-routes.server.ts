@@ -13,6 +13,14 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { GMAIL_SCOPES, disconnect, getConnection, storeRefreshToken } from "./google-tokens.server";
 import {
+  countPending,
+  decideAccess,
+  getAccess,
+  isAdmin,
+  listUsers,
+  registerAndGetAccess,
+} from "./access.server";
+import {
   SESSION_COOKIE,
   STATE_COOKIE,
   parseCookies,
@@ -128,6 +136,17 @@ async function handleCallback(request: Request): Promise<Response> {
     return redirect("/auth?error=domain", [clearState]);
   }
 
+  // Identity established. Access is a separate question: record the sign-in and
+  // check standing before handing out a session.
+  const standing = await registerAndGetAccess({
+    email,
+    name: claims.name ?? null,
+    picture: claims.picture ?? null,
+  });
+  if (standing.status !== "approved") {
+    return redirect(`/auth?status=${standing.status}`, [clearState]);
+  }
+
   const session = await signSession({
     id: claims.sub,
     email,
@@ -148,10 +167,23 @@ async function handleMe(request: Request): Promise<Response> {
       headers: { "content-type": "application/json" },
     });
   }
-  return new Response(JSON.stringify(session), {
-    status: 200,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
-  });
+  const { status, role } = await getAccess(session.email);
+  if (status !== "approved") {
+    return new Response(JSON.stringify({ error: "Access not approved", status }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  const admin = isAdmin(role);
+  return new Response(
+    JSON.stringify({
+      ...session,
+      role,
+      admin,
+      pendingCount: admin ? await countPending() : 0,
+    }),
+    { status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" } },
+  );
 }
 
 function handleLogout(request: Request): Response {
@@ -281,12 +313,65 @@ async function handleGmailDisconnect(request: Request): Promise<Response> {
   return new Response(null, { status: 204 });
 }
 
+
+// --- Access administration ---------------------------------------------------
+
+async function handleAdminUsers(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  const { role } = await getAccess(session.email);
+  if (!isAdmin(role)) return new Response(null, { status: 403 });
+  return new Response(JSON.stringify({ users: await listUsers(), role }), {
+    status: 200,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+async function handleAdminDecide(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  const { role } = await getAccess(session.email);
+  if (!isAdmin(role)) return new Response(null, { status: 403 });
+
+  const body = (await request.json().catch(() => null)) as {
+    email?: string;
+    action?: "approve" | "block" | "make_admin" | "make_member";
+  } | null;
+  if (!body?.email || !body?.action) {
+    return new Response(JSON.stringify({ error: "email and action are required" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  try {
+    await decideAccess({ email: session.email, role }, body.email, body.action);
+  } catch (error) {
+    return new Response(JSON.stringify({ error: String((error as Error).message) }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return new Response(null, { status: 204 });
+}
+
 /** Returns a Response for /api/auth/* or /api/gmail/* requests, or null to fall through to the app. */
 export async function handleAuthRequest(request: Request): Promise<Response | null> {
   const { pathname } = new URL(request.url);
-  if (!pathname.startsWith("/api/auth/") && !pathname.startsWith("/api/gmail/")) return null;
+  if (
+    !pathname.startsWith("/api/auth/") &&
+    !pathname.startsWith("/api/gmail/") &&
+    !pathname.startsWith("/api/admin/")
+  ) {
+    return null;
+  }
 
   try {
+    if (pathname === "/api/admin/users" && request.method === "GET") {
+      return await handleAdminUsers(request);
+    }
+    if (pathname === "/api/admin/decide" && request.method === "POST") {
+      return await handleAdminDecide(request);
+    }
     if (pathname === "/api/gmail/connect" && request.method === "GET") {
       return await handleGmailConnect(request);
     }
