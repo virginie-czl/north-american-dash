@@ -193,6 +193,10 @@ LIMIT 3000
 
 
 export const getNaRows = createServerFn({ method: "GET" }).handler(async (): Promise<NaRow[]> => {
+  // Financial data: never served without an approved session that is
+  // explicitly allowed to open this tracker.
+  const { requireTracker } = await import("./session.server");
+  await requireTracker("na");
   const { runBigQuery } = await import("./bigquery.server");
   const rows = await runBigQuery(QUERY);
   return rows as unknown as NaRow[];

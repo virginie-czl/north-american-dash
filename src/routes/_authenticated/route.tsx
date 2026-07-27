@@ -29,6 +29,7 @@ type SessionUser = {
   name: string | null;
   picture: string | null;
   role?: "owner" | "admin" | "member";
+  trackers?: string[];
   admin?: boolean;
   pendingCount?: number;
 };
@@ -47,7 +48,7 @@ export const Route = createFileRoute("/_authenticated")({
       throw redirect({ to: "/auth" });
     }
     const user = (await res.json()) as SessionUser;
-    return { user };
+    return { user, allowedTrackers: user.trackers ?? [] };
   },
   component: AuthedLayout,
 });
@@ -83,6 +84,7 @@ function TopBar() {
   const router = useRouter();
   const { user } = Route.useRouteContext();
   const { actions } = useTrackerChrome();
+  const allowed = user?.trackers ?? [];
   const { data: gmail } = useGmailConnection();
   const disconnectGmail = useDisconnectGmail();
   const email = user?.email ?? "";
@@ -107,18 +109,24 @@ function TopBar() {
       </span>
 
       <nav aria-label="Trackers" className="ml-3 flex items-center gap-1">
-        <TrackerTab to="/" icon={<ReceiptText className="h-4 w-4" aria-hidden="true" />}>
-          L'Oréal CA
-        </TrackerTab>
-        <TrackerTab to="/veolia" icon={<Droplets className="h-4 w-4" aria-hidden="true" />}>
-          Veolia US
-        </TrackerTab>
-        <TrackerTab
-          to="/tracking-north-america"
-          icon={<Globe className="h-4 w-4" aria-hidden="true" />}
-        >
-          Marketplace NA
-        </TrackerTab>
+        {allowed.includes("loreal") && (
+          <TrackerTab to="/" icon={<ReceiptText className="h-4 w-4" aria-hidden="true" />}>
+            L'Oréal CA
+          </TrackerTab>
+        )}
+        {allowed.includes("veolia") && (
+          <TrackerTab to="/veolia" icon={<Droplets className="h-4 w-4" aria-hidden="true" />}>
+            Veolia US
+          </TrackerTab>
+        )}
+        {allowed.includes("na") && (
+          <TrackerTab
+            to="/tracking-north-america"
+            icon={<Globe className="h-4 w-4" aria-hidden="true" />}
+          >
+            Marketplace NA
+          </TrackerTab>
+        )}
       </nav>
 
       <div className="ml-auto flex items-center gap-2">

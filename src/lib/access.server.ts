@@ -9,11 +9,16 @@
 /** Always an admin, and approved on sight — otherwise nobody could approve anyone. */
 export const OWNER_EMAIL = "shayma.ndiaye@naboo.app";
 
+import { ALL_TRACKERS, isTrackerKey, type TrackerKey } from "./trackers";
+
 export type AccessStatus = "pending" | "approved" | "blocked";
 export type Role = "owner" | "admin" | "member";
 
+export type Access = { status: AccessStatus; role: Role; trackers: TrackerKey[] };
+
 export type AppUser = {
   email: string;
+  trackers: TrackerKey[];
   name: string | null;
   picture: string | null;
   status: AccessStatus;
@@ -30,7 +35,7 @@ export type AppUser = {
  * for their 7-day session cookie to expire.
  */
 const CACHE_TTL_MS = 45_000;
-const cache = new Map<string, { status: AccessStatus; role: Role; at: number }>();
+const cache = new Map<string, Access & { at: number }>();
 
 export function invalidateAccessCache(email?: string) {
   if (email) cache.delete(email.toLowerCase());
@@ -45,13 +50,13 @@ export async function registerAndGetAccess(user: {
   email: string;
   name: string | null;
   picture: string | null;
-}): Promise<{ status: AccessStatus; role: Role }> {
+}): Promise<Access> {
   const email = user.email.toLowerCase();
   const isOwner = email === OWNER_EMAIL.toLowerCase();
   const { db } = await import("./db.server");
   const sql = await db();
 
-  const rows = await sql<{ status: AccessStatus; role: Role }[]>`
+  const rows = await sql<{ status: AccessStatus; role: Role; trackers: string[] }[]>`
     INSERT INTO app_users (email, name, picture, status, role, requested_at, last_seen_at)
     VALUES (
       ${email}, ${user.name}, ${user.picture},
@@ -65,14 +70,21 @@ export async function registerAndGetAccess(user: {
       -- The owner can never be locked out of their own instance.
       status = CASE WHEN ${isOwner} THEN 'approved' ELSE app_users.status END,
       role = CASE WHEN ${isOwner} THEN 'owner' ELSE app_users.role END
-    RETURNING status, role
+    RETURNING status, role, trackers
   `;
-  const result = rows[0] ?? { status: "pending" as AccessStatus, role: "member" as Role };
+  const row = rows[0];
+  const result: Access = isOwner
+    ? { status: "approved", role: "owner", trackers: ALL_TRACKERS }
+    : {
+        status: row?.status ?? "pending",
+        role: row?.role ?? "member",
+        trackers: (row?.trackers ?? []).filter(isTrackerKey),
+      };
   cache.set(email, { ...result, at: Date.now() });
   return result;
 }
 
-export async function getAccess(email: string): Promise<{ status: AccessStatus; role: Role }> {
+export async function getAccess(email: string): Promise<Access> {
   const key = email.toLowerCase();
 
   // The owner is approved by definition, with no database round trip. Deriving it
@@ -80,30 +92,37 @@ export async function getAccess(email: string): Promise<{ status: AccessStatus; 
   // their own instance — which is exactly what happened when the registry was
   // introduced while a valid session was already in flight.
   if (key === OWNER_EMAIL.toLowerCase()) {
-    return { status: "approved", role: "owner" };
+    return { status: "approved", role: "owner", trackers: ALL_TRACKERS };
   }
 
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return { status: hit.status, role: hit.role };
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+    return { status: hit.status, role: hit.role, trackers: hit.trackers };
+  }
 
   const { db } = await import("./db.server");
   const sql = await db();
-  const rows = await sql<{ status: AccessStatus; role: Role }[]>`
-    SELECT status, role FROM app_users WHERE email = ${key}
+  const rows = await sql<{ status: AccessStatus; role: Role; trackers: string[] }[]>`
+    SELECT status, role, trackers FROM app_users WHERE email = ${key}
   `;
 
-  let result = rows[0];
-  if (!result) {
+  let row = rows[0];
+  if (!row) {
     // A valid session with no row means it was issued before the registry existed.
     // Record the request so it shows up for approval instead of failing silently.
-    const inserted = await sql<{ status: AccessStatus; role: Role }[]>`
+    const inserted = await sql<{ status: AccessStatus; role: Role; trackers: string[] }[]>`
       INSERT INTO app_users (email, status, role, requested_at, last_seen_at)
       VALUES (${key}, 'pending', 'member', now(), now())
       ON CONFLICT (email) DO UPDATE SET last_seen_at = now()
-      RETURNING status, role
+      RETURNING status, role, trackers
     `;
-    result = inserted[0] ?? { status: "pending", role: "member" };
+    row = inserted[0];
   }
+  const result: Access = {
+    status: row?.status ?? "pending",
+    role: row?.role ?? "member",
+    trackers: (row?.trackers ?? []).filter(isTrackerKey),
+  };
   cache.set(key, { ...result, at: Date.now() });
   return result;
 }
@@ -116,7 +135,7 @@ export async function listUsers(): Promise<AppUser[]> {
   const { db, isoOrNull } = await import("./db.server");
   const sql = await db();
   const rows = await sql<Record<string, unknown>[]>`
-    SELECT email, name, picture, status, role,
+    SELECT email, name, picture, status, role, trackers,
            requested_at, decided_at, decided_by, last_seen_at
     FROM app_users
     ORDER BY
@@ -125,6 +144,7 @@ export async function listUsers(): Promise<AppUser[]> {
   `;
   return rows.map((r) => ({
     ...(r as unknown as AppUser),
+    trackers: (Array.isArray(r.trackers) ? (r.trackers as string[]) : []).filter(isTrackerKey),
     requested_at: isoOrNull(r.requested_at),
     decided_at: isoOrNull(r.decided_at),
     last_seen_at: isoOrNull(r.last_seen_at),
@@ -143,7 +163,8 @@ export async function countPending(): Promise<number> {
 export async function decideAccess(
   actor: { email: string; role: Role },
   target: string,
-  action: "approve" | "block" | "make_admin" | "make_member",
+  action: "approve" | "block" | "make_admin" | "make_member" | "set_trackers",
+  trackers?: string[],
 ): Promise<void> {
   if (!isAdmin(actor.role)) throw new Error("Only an admin can change access.");
   const email = target.toLowerCase();
@@ -158,6 +179,16 @@ export async function decideAccess(
 
   const { db } = await import("./db.server");
   const sql = await db();
+  if (action === "set_trackers") {
+    const clean = (trackers ?? []).filter(isTrackerKey);
+    await sql`
+      UPDATE app_users
+      SET trackers = ${clean}::text[], decided_at = now(), decided_by = ${actor.email}
+      WHERE email = ${email}
+    `;
+    invalidateAccessCache(email);
+    return;
+  }
   if (action === "approve" || action === "block") {
     await sql`
       UPDATE app_users

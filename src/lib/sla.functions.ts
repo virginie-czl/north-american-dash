@@ -398,6 +398,10 @@ LIMIT 2000
 `;
 
 export const getSlaRows = createServerFn({ method: "GET" }).handler(async (): Promise<SlaRow[]> => {
+  // Financial data: never served without an approved session that is
+  // explicitly allowed to open this tracker.
+  const { requireTracker } = await import("./session.server");
+  await requireTracker("loreal");
   const { runBigQuery } = await import("./bigquery.server");
   const rows = await runBigQuery(QUERY);
   return rows as unknown as SlaRow[];

@@ -169,6 +169,22 @@ Admins can approve, refuse and revoke. Only the owner can grant or remove admin
 rights — that keeps a second pair of hands available without letting anyone
 promote themselves.
 
+### Per-tracker access
+
+Approval opens the account; it does not open every page. Each user carries a list
+of trackers (`app_users.trackers`) that admins tick in **Accès à l'outil** — so a
+colleague who only handles Veolia never sees the L'Oréal numbers. The owner always
+has all three.
+
+Enforcement is server-side. `getSlaRows`, `getVeoliaSlaRows` and `getNaRows` each
+call `requireTracker(...)`, so an endpoint refuses even if someone bypasses the UI —
+hiding a tab in the nav is presentation, not access control. The route guards and
+the filtered nav exist only so people are not shown doors that will not open, and
+a user is redirected to a tracker they *can* read rather than to a dead end.
+
+New rows default to all three trackers, matching what existing users already had.
+Tighten it per person from the admin page.
+
 **Revocation actually revokes.** Session cookies last a week, so approval is
 re-checked on every authenticated call, not just at sign-in. The check is cached
 for 45 seconds per instance, which is the upper bound on how long a revoked

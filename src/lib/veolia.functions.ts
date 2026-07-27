@@ -432,6 +432,10 @@ const QUERY = VEOLIA_TRACKER_SQL;
 
 
 export const getVeoliaSlaRows = createServerFn({ method: "GET" }).handler(async (): Promise<SlaRow[]> => {
+  // Financial data: never served without an approved session that is
+  // explicitly allowed to open this tracker.
+  const { requireTracker } = await import("./session.server");
+  await requireTracker("veolia");
   const { runBigQuery } = await import("./bigquery.server");
   const rows = await runBigQuery(QUERY);
   return rows as unknown as SlaRow[];

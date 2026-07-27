@@ -76,8 +76,14 @@ const SCHEMA_STATEMENTS = [
      requested_at timestamptz NOT NULL DEFAULT now(),
      decided_at timestamptz,
      decided_by text,
-     last_seen_at timestamptz
+     last_seen_at timestamptz,
+     -- Which trackers this person may open. Approval and visibility are separate
+     -- questions: not everyone who needs Veolia needs to see L'Oréal.
+     trackers text[] NOT NULL DEFAULT ARRAY['loreal', 'veolia', 'na']::text[]
    )`,
+  // Existing deployments predate the column.
+  `ALTER TABLE app_users ADD COLUMN IF NOT EXISTS trackers text[]
+     NOT NULL DEFAULT ARRAY['loreal', 'veolia', 'na']::text[]`,
   `CREATE INDEX IF NOT EXISTS app_users_status_idx ON app_users (status)`,
   // Derived facts only — never subjects, bodies, thread ids or any message
   // content. Every user of the tracker may read these stickers, so anything added

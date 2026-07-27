@@ -36,6 +36,33 @@ function AuthPage() {
     window.location.href = "/api/auth/google";
   }
 
+  if (status === "no-tracker") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-navy px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="font-display text-xl font-bold">Aucun tracker attribué</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>
+              Votre accès est validé, mais aucun tracker ne vous a encore été attribué. Un
+              administrateur doit cocher les pages auxquelles vous avez droit.
+            </p>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                window.location.href = "/";
+              }}
+            >
+              Réessayer
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (status === "pending" || status === "blocked") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-navy px-4">

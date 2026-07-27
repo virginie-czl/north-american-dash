@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, useEffect, Fragment } from "react";
 import {
@@ -83,6 +83,20 @@ import {
 
 
 export const Route = createFileRoute("/_authenticated/")({
+  // Presentation aside, the data query refuses too (requireTracker).
+  beforeLoad: ({ context }) => {
+    const allowed = (context as { allowedTrackers?: string[] }).allowedTrackers ?? [];
+    if (!allowed.includes("loreal")) {
+      const fallback = allowed.includes("loreal")
+        ? "/"
+        : allowed.includes("veolia")
+          ? "/veolia"
+          : allowed.includes("na")
+            ? "/tracking-north-america"
+            : null;
+      throw redirect(fallback ? { to: fallback } : { to: "/auth", search: { status: "no-tracker" } });
+    }
+  },
   head: () => ({
     meta: [
       { title: "L'Oréal Canada — Invoicing SLA Tracker" },

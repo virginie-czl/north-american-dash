@@ -121,6 +121,21 @@ export async function requireSession(): Promise<SessionUser> {
   return session;
 }
 
+/**
+ * Requires an approved session that is allowed to open a given tracker. Every
+ * tracker's data query goes through this: hiding a tab in the nav is presentation,
+ * not access control — the endpoint has to refuse.
+ */
+export async function requireTracker(tracker: string): Promise<SessionUser> {
+  const session = await requireSession();
+  const { getAccess } = await import("./access.server");
+  const { trackers } = await getAccess(session.email);
+  if (!trackers.includes(tracker as never)) {
+    throw new AuthError("Vous n'avez pas accès à ce tracker.", 403);
+  }
+  return session;
+}
+
 /** Same, but also requires admin rights. */
 export async function requireAdmin(): Promise<{ session: SessionUser; role: string }> {
   const session = await requireSession();

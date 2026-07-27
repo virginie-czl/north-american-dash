@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   SummaryStrip,
@@ -44,6 +44,20 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronDown, ChevronRight, RefreshCw, Lock, ArrowUpDown, MessageSquare, Banknote } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/tracking-north-america")({
+  // Presentation aside, the data query refuses too (requireTracker).
+  beforeLoad: ({ context }) => {
+    const allowed = (context as { allowedTrackers?: string[] }).allowedTrackers ?? [];
+    if (!allowed.includes("na")) {
+      const fallback = allowed.includes("loreal")
+        ? "/"
+        : allowed.includes("veolia")
+          ? "/veolia"
+          : allowed.includes("na")
+            ? "/tracking-north-america"
+            : null;
+      throw redirect(fallback ? { to: fallback } : { to: "/auth", search: { status: "no-tracker" } });
+    }
+  },
   head: () => ({
     meta: [
       { title: "Tracking North America" },

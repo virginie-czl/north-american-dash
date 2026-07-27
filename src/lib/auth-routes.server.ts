@@ -167,7 +167,7 @@ async function handleMe(request: Request): Promise<Response> {
       headers: { "content-type": "application/json" },
     });
   }
-  const { status, role } = await getAccess(session.email);
+  const { status, role, trackers } = await getAccess(session.email);
   if (status !== "approved") {
     return new Response(JSON.stringify({ error: "Access not approved", status }), {
       status: 403,
@@ -179,6 +179,7 @@ async function handleMe(request: Request): Promise<Response> {
     JSON.stringify({
       ...session,
       role,
+      trackers,
       admin,
       pendingCount: admin ? await countPending() : 0,
     }),
@@ -335,7 +336,8 @@ async function handleAdminDecide(request: Request): Promise<Response> {
 
   const body = (await request.json().catch(() => null)) as {
     email?: string;
-    action?: "approve" | "block" | "make_admin" | "make_member";
+    action?: "approve" | "block" | "make_admin" | "make_member" | "set_trackers";
+    trackers?: string[];
   } | null;
   if (!body?.email || !body?.action) {
     return new Response(JSON.stringify({ error: "email and action are required" }), {
@@ -344,7 +346,7 @@ async function handleAdminDecide(request: Request): Promise<Response> {
     });
   }
   try {
-    await decideAccess({ email: session.email, role }, body.email, body.action);
+    await decideAccess({ email: session.email, role }, body.email, body.action, body.trackers);
   } catch (error) {
     return new Response(JSON.stringify({ error: String((error as Error).message) }), {
       status: 400,
