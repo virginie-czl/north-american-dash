@@ -22,9 +22,34 @@ export type TaxRegistration = {
   usable: boolean;
 };
 
-const GST_RE = /\b(\d{9})\s*RT\s*(\d{4})\b/i;
-const QST_RE = /\b(\d{10})\s*TQ\s*(\d{4})\b/i;
-const EU_VAT_RE = /\b((?:FR|BE|DE|ES|IT|NL|LU|IE|PT|AT|PL|GB)\s?\d{8,12})\b/i;
+const GST_RE = /(\d{9})\W{0,3}RT\W{0,3}(\d{4})/i;
+const QST_RE = /(\d{10})\W{0,3}TQ\W{0,3}(\d{4})/i;
+/**
+ * EU VAT, matched after separators are stripped. Some countries insert letters
+ * (Spanish `ESB97894372`, Dutch `NL123456789B01`), so the body is alphanumeric.
+ */
+const EU_VAT_RE = /\b(FR|BE|DE|ES|IT|NL|LU|IE|PT|AT|PL|GB|DK|SE|FI|CZ|RO|HU|GR|EL)([0-9A-Z]{8,13})\b/;
+
+/**
+ * Values people type to get past a required field. These mean "not filled in",
+ * not "invalid": flagging 300 partners as unreadable because someone typed "//"
+ * would bury the handful of records that genuinely need correcting.
+ */
+const PLACEHOLDERS = new Set([
+  "0", "00", "000", "x", "xx", "xxx", "n", "na", "nan", "none", "no", "nil",
+  "neant", "aucun", "tbc", "tbd", "sansobjet", "notapplicable",
+]);
+
+function isPlaceholder(text: string): boolean {
+  // Strip accents first, so "néant" reduces to "neant".
+  const squashed = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+  if (squashed === "" || PLACEHOLDERS.has(squashed)) return true;
+  return /^[^a-z0-9]*$/i.test(text);
+}
 
 /**
  * `owners.vat_number` is free text — it holds anything from a clean
@@ -33,15 +58,21 @@ const EU_VAT_RE = /\b((?:FR|BE|DE|ES|IT|NL|LU|IE|PT|AT|PL|GB)\s?\d{8,12})\b/i;
  */
 export function parseTaxRegistration(...sources: Array<string | null | undefined>): TaxRegistration {
   const text = sources.filter(Boolean).join(" ").trim();
-  if (!text) return { gst: null, qst: null, vat: null, unparsed: null, usable: false };
+  if (!text || isPlaceholder(text)) {
+    return { gst: null, qst: null, vat: null, unparsed: null, usable: false };
+  }
 
-  const gstMatch = text.match(GST_RE);
-  const qstMatch = text.match(QST_RE);
-  const vatMatch = text.match(EU_VAT_RE);
+  // Match against a separator-free copy so "FR32 904 443 462" and "FR32904443462"
+  // are the same number, while keeping the original text for display.
+  const squashed = text.toUpperCase().replace(/[\s.\-_/]/g, "");
+
+  const gstMatch = squashed.match(GST_RE) ?? text.match(GST_RE);
+  const qstMatch = squashed.match(QST_RE) ?? text.match(QST_RE);
+  const vatMatch = squashed.match(EU_VAT_RE);
 
   const gst = gstMatch ? `${gstMatch[1]}RT${gstMatch[2]}` : null;
   const qst = qstMatch ? `${qstMatch[1]}TQ${qstMatch[2]}` : null;
-  const vat = vatMatch ? vatMatch[1].replace(/\s/g, "").toUpperCase() : null;
+  const vat = vatMatch ? `${vatMatch[1]}${vatMatch[2]}` : null;
   const usable = Boolean(gst || qst || vat);
 
   return { gst, qst, vat, unparsed: usable ? null : text, usable };

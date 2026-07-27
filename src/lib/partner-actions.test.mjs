@@ -88,4 +88,39 @@ check("no PO → blocked, no scan",
   noPo.code === "blocked_no_po" && !noPo.scanUseful);
 
 console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+if (fail) process.exitCode = 1;
+
+// --- Regression: values actually present in owners.vat_number ---
+{
+  let p2 = 0, f2 = 0;
+  const t = (name, cond, got) => { if (cond) { p2++; console.log("  ✓", name); } else { f2++; console.log("  ✗", name, got); } };
+
+  // Legitimate EU numbers written with spaces — previously flagged unreadable
+  for (const v of ["FR32 904 443 462", "FR 93 602 036 444", "FR 28 331310748", "FR79 931224919"]) {
+    const r = parseTaxRegistration(v);
+    t(`EU VAT with spaces: ${v}`, r.usable && r.vat?.startsWith("FR"), JSON.stringify(r));
+  }
+  const es = parseTaxRegistration("ESB97894372");
+  t("Spanish VAT with letter", es.usable && es.vat === "ESB97894372", JSON.stringify(es));
+
+  // Placeholders mean "not filled in", not "invalid"
+  for (const v of ["//", "-", "0", "/", "x", "X", "--", "  ", "N/A", "néant"]) {
+    const r = parseTaxRegistration(v);
+    t(`placeholder treated as empty: ${JSON.stringify(v)}`, !r.usable && r.unparsed === null, JSON.stringify(r));
+  }
+
+  // Genuinely wrong values must still be flagged
+  for (const v of ["7886 41132", "13%"]) {
+    const r = parseTaxRegistration(v);
+    t(`still flagged unreadable: ${v}`, !r.usable && r.unparsed === v, JSON.stringify(r));
+  }
+
+  // Canadian formats keep working, with or without separators
+  const ca = parseTaxRegistration("TPS/GST : 819512187RT0001 - TVQ/PST : 1222113845TQ0001");
+  t("CA both halves", ca.gst === "819512187RT0001" && ca.qst === "1222113845TQ0001", JSON.stringify(ca));
+  const caSp = parseTaxRegistration("1211 07726 RT 0001");
+  t("CA GST with spaces", caSp.gst === "121107726RT0001", JSON.stringify(caSp));
+
+  console.log(`\n[regression] ${p2} passed, ${f2} failed`);
+  if (f2) process.exitCode = 1;
+}
