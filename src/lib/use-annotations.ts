@@ -14,8 +14,10 @@ import {
   partnerKey,
   savePartnerStatus,
   upsertPoEmissions,
+  type CommentSummaryRow,
   type EventComment,
   type PartnerStatusRow,
+  type PoEmissionRow,
   type PartnerStatusValue,
 } from "@/lib/annotations.functions";
 
@@ -41,6 +43,17 @@ export type EventCommentSummary = {
   commenters: CommenterSummary[];
 };
 
+
+/** Same guard as the Gmail hooks: an unexpected payload must not crash on forEach. */
+function expectArray<T>(value: unknown, what: string): T[] {
+  if (Array.isArray(value)) return value as T[];
+  const detail =
+    value && typeof value === "object" && "error" in (value as Record<string, unknown>)
+      ? String((value as Record<string, unknown>).error)
+      : `réponse inattendue (${typeof value})`;
+  throw new Error(`${what} : ${detail}`);
+}
+
 export function useCurrentUser() {
   return useQuery({
     queryKey: ["current-user"],
@@ -57,7 +70,10 @@ export function usePartnerStatuses() {
   return useQuery({
     queryKey: ["partner-status"],
     queryFn: async () => {
-      const rows = await fetchPartnerStatuses();
+      const rows = expectArray<PartnerStatusRow>(
+        await fetchPartnerStatuses(),
+        "Statuts partenaires",
+      );
       const map = new Map<string, PartnerStatusRow>();
       rows.forEach((r) => {
         map.set(`${r.event_ref}::${r.partner_key}`, r);
@@ -120,7 +136,10 @@ export function useCommentSummaries() {
   return useQuery({
     queryKey: ["event-comments-summary"],
     queryFn: async () => {
-      const rows = await fetchCommentSummaries();
+      const rows = expectArray<CommentSummaryRow>(
+        await fetchCommentSummaries(),
+        "Résumé des commentaires",
+      );
       const map = new Map<string, EventCommentSummary>();
       for (const r of rows) {
         const entry = map.get(r.event_ref) ?? { count: 0, commenters: [] };
@@ -150,7 +169,7 @@ export function usePoEmissionDates(rows: Array<{ readable_id: string | null; pur
   const { data: map } = useQuery({
     queryKey: ["po-emission"],
     queryFn: async () => {
-      const data = await fetchPoEmissions();
+      const data = expectArray<PoEmissionRow>(await fetchPoEmissions(), "Dates de PO");
       const m = new Map<string, { po: string; emitted_at: string }>();
       data.forEach((r) => {
         m.set(r.event_ref, { po: r.purchase_order_number, emitted_at: r.emitted_at });

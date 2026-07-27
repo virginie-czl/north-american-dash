@@ -38,6 +38,12 @@ export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async () => {
     const res = await fetch("/api/auth/me", { credentials: "include" });
     if (!res.ok) {
+      // 403 means the account is known but not approved (or was revoked) — say so,
+      // rather than bouncing to a sign-in screen that will succeed and bounce again.
+      if (res.status === 403) {
+        const body = (await res.json().catch(() => null)) as { status?: string } | null;
+        throw redirect({ to: "/auth", search: { status: body?.status ?? "pending" } });
+      }
       throw redirect({ to: "/auth" });
     }
     const user = (await res.json()) as SessionUser;

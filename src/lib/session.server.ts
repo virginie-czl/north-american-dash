@@ -82,28 +82,41 @@ export async function getSessionFromRequest(request: Request): Promise<SessionUs
 }
 
 /**
- * For use inside TanStack server functions: reads the current request's
- * session cookie and throws a 401 Response when unauthenticated.
+ * Thrown by server functions. A thrown `Response` gets serialised into the
+ * function's return value, so the client ends up with `{ error: ... }` where it
+ * expected data — an Error propagates as an error, which is what callers handle.
+ */
+export class AuthError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "AuthError";
+    this.status = status;
+  }
+}
+
+/**
+ * For use inside TanStack server functions: reads the current request's session
+ * cookie and throws when the caller is not an approved user.
  */
 export async function requireSession(): Promise<SessionUser> {
   const { getRequest } = await import("@tanstack/react-start/server");
   const request = getRequest();
   const session = request ? await getSessionFromRequest(request) : null;
   if (!session) {
-    throw new Response(JSON.stringify({ error: "Unauthenticated" }), {
-      status: 401,
-      headers: { "content-type": "application/json" },
-    });
+    throw new AuthError("Session expirée — reconnectez-vous.", 401);
   }
   // A valid cookie is not enough: access can have been revoked since it was
   // issued, and cookies live for a week.
   const { getAccess } = await import("./access.server");
   const { status } = await getAccess(session.email);
   if (status !== "approved") {
-    throw new Response(JSON.stringify({ error: "Access not approved", status }), {
-      status: 403,
-      headers: { "content-type": "application/json" },
-    });
+    throw new AuthError(
+      status === "blocked"
+        ? "Votre accès à cet outil a été révoqué."
+        : "Votre accès attend la validation d'un administrateur.",
+      403,
+    );
   }
   return session;
 }
@@ -114,10 +127,7 @@ export async function requireAdmin(): Promise<{ session: SessionUser; role: stri
   const { getAccess, isAdmin } = await import("./access.server");
   const { role } = await getAccess(session.email);
   if (!isAdmin(role)) {
-    throw new Response(JSON.stringify({ error: "Admin only" }), {
-      status: 403,
-      headers: { "content-type": "application/json" },
-    });
+    throw new AuthError("Réservé aux administrateurs.", 403);
   }
   return { session, role };
 }

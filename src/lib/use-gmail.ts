@@ -15,6 +15,22 @@ export type GmailConnection = {
   connected_at?: string;
 };
 
+
+/**
+ * Server functions should return arrays, but a transport-level surprise (an auth
+ * error serialised into the return value, say) would otherwise crash on
+ * `.forEach` with something unreadable like "e.forEach is not a function".
+ * Fail loudly and legibly instead.
+ */
+function expectArray<T>(value: unknown, what: string): T[] {
+  if (Array.isArray(value)) return value as T[];
+  const detail =
+    value && typeof value === "object" && "error" in (value as Record<string, unknown>)
+      ? String((value as Record<string, unknown>).error)
+      : `réponse inattendue (${typeof value})`;
+  throw new Error(`${what} : ${detail}`);
+}
+
 export function useGmailConnection() {
   return useQuery({
     queryKey: ["gmail-connection"],
@@ -94,7 +110,7 @@ export function usePartnerFacts() {
   return useQuery({
     queryKey: ["partner-facts"],
     queryFn: async () => {
-      const rows = await fetchPartnerFacts();
+      const rows = expectArray<PartnerFacts>(await fetchPartnerFacts(), "Pastilles email");
       const map = new Map<string, PartnerFacts>();
       rows.forEach((r) => map.set(`${r.event_ref}::${r.partner_key}`, r));
       return map;

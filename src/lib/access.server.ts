@@ -74,6 +74,15 @@ export async function registerAndGetAccess(user: {
 
 export async function getAccess(email: string): Promise<{ status: AccessStatus; role: Role }> {
   const key = email.toLowerCase();
+
+  // The owner is approved by definition, with no database round trip. Deriving it
+  // from a row would mean a missing or corrupted row can lock the owner out of
+  // their own instance — which is exactly what happened when the registry was
+  // introduced while a valid session was already in flight.
+  if (key === OWNER_EMAIL.toLowerCase()) {
+    return { status: "approved", role: "owner" };
+  }
+
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return { status: hit.status, role: hit.role };
 
@@ -82,8 +91,19 @@ export async function getAccess(email: string): Promise<{ status: AccessStatus; 
   const rows = await sql<{ status: AccessStatus; role: Role }[]>`
     SELECT status, role FROM app_users WHERE email = ${key}
   `;
-  // No row means the session predates the registry — treat as pending, not allowed.
-  const result = rows[0] ?? { status: "pending" as AccessStatus, role: "member" as Role };
+
+  let result = rows[0];
+  if (!result) {
+    // A valid session with no row means it was issued before the registry existed.
+    // Record the request so it shows up for approval instead of failing silently.
+    const inserted = await sql<{ status: AccessStatus; role: Role }[]>`
+      INSERT INTO app_users (email, status, role, requested_at, last_seen_at)
+      VALUES (${key}, 'pending', 'member', now(), now())
+      ON CONFLICT (email) DO UPDATE SET last_seen_at = now()
+      RETURNING status, role
+    `;
+    result = inserted[0] ?? { status: "pending", role: "member" };
+  }
   cache.set(key, { ...result, at: Date.now() });
   return result;
 }
