@@ -123,6 +123,7 @@ export function composeCommissionRequest(row: CommissionRow, to: { name: string 
         .map((p) => fmtMoney(p.gmv_ht, p.partner_currency))
         .join(" + ");
 
+  const ach_eft = row.billing_entity === "NABOO_US" ? "ACH" : "EFT";
   const body = `Hi ${firstName},
 
 Hope you're doing well!
@@ -141,7 +142,7 @@ Would you be able to confirm those figures? Once you give me the green light, I'
 
 If your records show something different — a different base, a rate we've got wrong, or line items that shouldn't be commissionable — just let me know and I'll be happy to walk through it with you line by line.
 
-Our standard terms are net 15 from the invoice date, and we can receive payment by wire or ACH/EFT, whichever is easiest on your side.
+Our standard terms are net 15 from the invoice date, and we can receive payment by wire or ${ach_eft}, whichever is easiest on your side.
 
 Thanks so much, and looking forward to working together on the next one.
 

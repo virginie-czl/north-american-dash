@@ -56,7 +56,12 @@ t("body has commission line item", body.includes("Huttopia Wine Country"));
 t("body has rate", body.includes("12.0 %") || body.includes("12.0%"), body);
 t("body has total commission", body.includes("2,628.28 USD"));
 t("net 15 terms in body", body.includes("net 15"));
-t("ACH/EFT in body", body.includes("ACH/EFT"));
+// billing_entity is NABOO_CA in the test row → should say EFT
+t("EFT for CA partner", body.includes("EFT") && !body.includes("ACH/EFT"));
+// If we flip to US billing it should say ACH
+const usRow = { ...row, billing_entity: "NABOO_US" };
+const { body: usBody } = composeCommissionRequest(usRow, c);
+t("ACH for US partner", usBody.includes("ACH") && !usBody.includes("EFT,"));
 
 // no address
 const noContact = pickContact([{ ...partner(), owner_email: null, service_owner_email: null }]);
