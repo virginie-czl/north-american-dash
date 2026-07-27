@@ -4,6 +4,12 @@ import {
   SummaryStrip,
   useRegisterTrackerActions,
 } from "@/components/tracker-chrome";
+import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
+import { PartnerEmails } from "@/components/partner-emails";
+import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
+import { buildTargets, needsOf, describeNeeds } from "@/lib/partner-requests";
+import { useActionIndex } from "@/lib/use-partner-actions";
+import { useGmailConnection, useFactScan } from "@/lib/use-gmail";
 import {
   useAddComment,
   useCommentSummaries,
@@ -13,6 +19,7 @@ import {
   type EventCommentSummary,
 } from "@/lib/use-annotations";
 import { Fragment, useMemo, useState } from "react";
+import { Mail } from "lucide-react";
 import {
   getNaRows,
   parseNaPartners,
@@ -525,6 +532,27 @@ function NaPage() {
     [sorted],
   );
 
+  const { factsMap, actionFor, eventNeedsScan } = useActionIndex();
+  const { data: gmailConnection } = useGmailConnection();
+  const { progress: scanProgress, start: startScan } = useFactScan();
+  const requestDialog = useRequestDialog();
+
+  const incompleteTargets = useMemo(
+    () =>
+      buildTargets(
+        sorted.flatMap(({ row: r, partners: ps }) => {
+          const ref = r.readable_id ?? "";
+          return ps
+            .filter((p) => !p.is_provision)
+            .map((p) => {
+              const a = actionFor(ref, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, false);
+              return { eventRef: ref, eventDate: r.start_date ?? null, name: p.name, email: p.email, country: null, currency: p.currency, amountDue: p.outstanding, action: a, isCancelled: p.is_provision };
+            });
+        }),
+      ),
+    [sorted, actionFor],
+  );
+
   useRegisterTrackerActions(
     {
       onRefresh: () => refetch(),
@@ -612,6 +640,50 @@ function NaPage() {
               </label>
             </div>
           </div>
+          {(gmailConnection?.connected || gmailConnection?.connected === false) && (
+            <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2">
+              {gmailConnection.connected ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    disabled={scanProgress.running || sorted.length === 0}
+                    onClick={() =>
+                      startScan(
+                        sorted
+                          .filter(({ row: r, partners: ps }) =>
+                            eventNeedsScan(r.readable_id ?? "", ps.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision })), false)
+                          )
+                          .map(({ row: r, partners: ps }) => ({
+                            event_ref: r.readable_id ?? "",
+                            partners: ps.filter((p) => !p.is_provision).map((p) => ({ name: p.name ?? "", email: p.email })),
+                          })),
+                      )
+                    }
+                  >
+                    <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                    {scanProgress.running ? `Searching… ${scanProgress.done}/${scanProgress.total}` : "Search my emails"}
+                  </Button>
+                  {incompleteTargets.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => requestDialog.open(incompleteTargets)}
+                    >
+                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                      Request missing info ({incompleteTargets.length})
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <button type="button" onClick={() => { window.location.href = "/api/gmail/connect"; }} className="text-[11.5px] text-slate-600 underline-offset-2 hover:underline">
+                  Connect Gmail
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex min-h-0 flex-1 flex-col">
             {isLoading && <div className="p-6 text-sm text-muted-foreground">Loading…</div>}
             {error && (
@@ -689,7 +761,13 @@ function NaPage() {
                                 </div>
                               )}
                               <CommentersChip summary={commentSummaries?.get(id)} />
-
+                              <EventStickers
+                                eventRef={id}
+                                partners={partners.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision }))}
+                                hasPo={false}
+                                factsMap={factsMap}
+                                actionFor={(ref, partner, hasPo) => actionFor(ref, partner, hasPo)}
+                              />
                             </td>
                             <td className="na-cell">
                               <div className="flex items-center gap-2 flex-wrap">
@@ -746,7 +824,23 @@ function NaPage() {
                             <tr className="na-drawer-row">
                               <td colSpan={15} className="p-0">
                                 <div className="na-drawer-wrap">
-                                  <PartnerSectionCard id={id} partners={partners} totals={totals} />
+                                  <PartnerSectionCard id={id} partners={partners} totals={totals} actionFor={actionFor} factsMap={factsMap} />
+                                  {gmailConnection?.connected && (
+                                    <div className="mt-4">
+                                      <PartnerEmails
+                                        eventRef={id}
+                                        partners={partners
+                                          .filter((p) => !p.is_provision && p.email)
+                                          .map((p) => ({
+                                            name: p.name,
+                                            email: p.email,
+                                            owed: p.outstanding != null
+                                              ? `${p.outstanding.toLocaleString("en-CA", { minimumFractionDigits: 2 })} ${p.currency ?? ""}`
+                                              : null,
+                                          }))}
+                                      />
+                                    </div>
+                                  )}
                                   <div className="mt-4">
                                     <CommentsSectionCard eventRef={id} />
                                   </div>
@@ -771,6 +865,9 @@ function NaPage() {
             )}
           </div>
         </div>
+      {requestDialog.targets && (
+        <RequestInfoDialog targets={requestDialog.targets} onClose={requestDialog.close} />
+      )}
     </div>
   );
 }
@@ -897,6 +994,7 @@ function SortHead({
       </button>
     </TableHead>
   );
+
 }
 
 function SortTh({
@@ -1046,10 +1144,14 @@ function PartnerSectionCard({
   id,
   partners,
   totals,
+  actionFor,
+  factsMap,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
   totals: ReturnType<typeof sumPartners>;
+  actionFor: ReturnType<typeof useActionIndex>["actionFor"];
+  factsMap: ReturnType<typeof useActionIndex>["factsMap"];
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
@@ -1097,6 +1199,13 @@ function PartnerSectionCard({
                     >
                       {p.email}
                     </a>
+                  )}
+                  {!prov && (
+                    <PartnerStickers
+                      action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, false)}
+                      facts={factsMap?.get(`${id}::${(p.name ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`)}
+                      partner={{ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }}
+                    />
                   )}
                 </td>
                 <td className="text-right">
@@ -1295,5 +1404,3 @@ function CommentsSectionCard({ eventRef }: { eventRef: string }) {
     </section>
   );
 }
-
-
