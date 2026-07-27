@@ -91,7 +91,10 @@ partners_ap AS (
       q.quote_lock_locked_by_client_id IS NOT NULL AS locked_by_client,
       q.quote_lock_locked_by_owner_id IS NOT NULL AS locked_by_owner,
       q.provision_name IS NOT NULL AS is_provision,
-      rp.partner_payment_method AS payment_method
+      rp.partner_payment_method AS payment_method,
+      CAST(NULL AS STRING) AS vat_raw,
+      CAST(NULL AS STRING) AS tax_identifier,
+      CAST(NULL AS STRING) AS country
 
     )) AS items
   FROM \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ap\` ap
@@ -128,18 +131,21 @@ partners_fi AS (
       ) AS name,
       NULLIF(o2.email, '') AS email,
       part.currency AS currency,
-      ROUND(part.liveconfirmed.netpayable.withtaxes / 10000, 2) AS gmv_ttc,
-      ROUND(part.disbursedtotal / 10000, 2) AS paid,
+      CAST(ROUND(part.liveconfirmed.netpayable.withtaxes / 10000, 2) AS FLOAT64) AS gmv_ttc,
+      CAST(ROUND(part.disbursedtotal / 10000, 2) AS FLOAT64) AS paid,
       ROUND((part.liveconfirmed.netpayable.withtaxes - part.disbursedtotal) / 10000, 2) AS outstanding,
-      ROUND(part.outstandingpayable / 10000, 2) AS raw_outstanding,
-      ROUND(part.liveconfirmed.netpayable.withtaxes / 10000, 2) AS payable,
+      CAST(ROUND(part.outstandingpayable / 10000, 2) AS FLOAT64) AS raw_outstanding,
+      CAST(ROUND(part.liveconfirmed.netpayable.withtaxes / 10000, 2) AS FLOAT64) AS payable,
       CAST(NULL AS FLOAT64) AS commission,
       CAST(NULL AS BOOL) AS locked,
       CAST(NULL AS BOOL) AS locked_by_admin,
       CAST(NULL AS BOOL) AS locked_by_client,
       CAST(NULL AS BOOL) AS locked_by_owner,
       q2.provision_name IS NOT NULL AS is_provision,
-      CAST(NULL AS STRING) AS payment_method
+      CAST(NULL AS STRING) AS payment_method,
+      CAST(NULL AS STRING) AS vat_raw,
+      CAST(NULL AS STRING) AS tax_identifier,
+      CAST(NULL AS STRING) AS country
 
     )) AS items
   FROM \`naboo-app-365515.raw_naboo_data.client_request_free_invoicing\` fi,
@@ -175,11 +181,12 @@ SELECT
     CASE WHEN fi.gmv IS NOT NULL THEN ROUND(COALESCE(fi.gmv, 0) - COALESCE(fi.paid, 0), 2) END
   ) AS balance_ccy,
   TO_JSON_STRING(
-    COALESCE(
-      p.items,
-      pfi.items,
-      []
-    )
+    IFNULL(p.items, IFNULL(pfi.items, CAST([] AS ARRAY<STRUCT<
+      name STRING, email STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
+      outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, commission FLOAT64,
+      locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
+      is_provision BOOL, payment_method STRING, vat_raw STRING, tax_identifier STRING, country STRING
+    >>)))
   ) AS partners_json
 FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
 LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
