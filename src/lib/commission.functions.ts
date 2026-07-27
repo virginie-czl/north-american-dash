@@ -25,6 +25,11 @@ export interface CommissionPartnerLine {
   rate_activity: number | null;
   /** Whether the amounts match the expected rate (flag from RM) */
   mismatch: boolean;
+  /** Primary contact for this partner line */
+  owner_email: string | null;
+  owner_full_name: string | null;
+  /** Fallback contact used when owner_email is missing */
+  service_owner_email: string | null;
 }
 
 export interface CommissionRow {
@@ -76,7 +81,10 @@ WITH base AS (
       SAFE_CAST(rm.p_rate_house       AS FLOAT64) AS rate_house,
       SAFE_CAST(rm.p_rate_restauration AS FLOAT64) AS rate_food,
       SAFE_CAST(rm.p_rate_activity    AS FLOAT64) AS rate_activity,
-      rm.p_commission_mismatch          AS mismatch
+      rm.p_commission_mismatch          AS mismatch,
+      rm.owner_email                    AS owner_email,
+      rm.owner_full_name                AS owner_full_name,
+      rm.service_owner_email            AS service_owner_email
     ) ORDER BY rm.p_live_commission_ht_pcurrency DESC) AS partners
   FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
   WHERE rm.bk_market = 'North America'

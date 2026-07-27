@@ -1,7 +1,10 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, ChevronRight } from "lucide-react";
+import { ExternalLink, ChevronRight, Send } from "lucide-react";
+import { pickContact, composeCommissionRequest } from "@/lib/commission-requests";
+import { useGmailConnection, usePartnerRequests } from "@/lib/use-gmail";
+import { Button } from "@/components/ui/button";
 import { getCommissionRows, type CommissionRow } from "@/lib/commission.functions";
 import { SummaryStrip, useRegisterTrackerActions } from "@/components/tracker-chrome";
 import { Input } from "@/components/ui/input";
@@ -121,6 +124,11 @@ function exportCsv(rows: CommissionRow[]) {
 function NaCommissionsPage() {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [composing, setComposing] = useState<null | {
+    to: string; contactName: string | null; subject: string; body: string; row: CommissionRow;
+  }>(null);
+  const { data: gmailConnection } = useGmailConnection();
+  const requests = usePartnerRequests();
 
   const {
     data = [],
@@ -386,6 +394,28 @@ function NaCommissionsPage() {
                             ))}
                           </tbody>
                         </table>
+                        {gmailConnection?.connected && (() => {
+                          const contact = pickContact(r.partners ?? []);
+                          if (!contact.address) return (
+                            <p className="mt-2 text-[10.5px] text-slate-400">
+                              No contact email on file for this booking.
+                            </p>
+                          );
+                          const { subject, body } = composeCommissionRequest(r, contact);
+                          return (
+                            <button
+                              type="button"
+                              className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-sky-800 underline-offset-2 hover:underline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setComposing({ to: contact.address!, contactName: contact.name, subject, body, row: r });
+                              }}
+                            >
+                              <Send className="h-3 w-3" aria-hidden="true" />
+                              Request commission
+                            </button>
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                   ),
@@ -394,6 +424,134 @@ function NaCommissionsPage() {
             )}
           </TableBody>
         </Table>
+      </div>
+
+      {/* Commission request dialog */}
+      {composing && (
+        <CommissionRequestDialog
+          composing={composing}
+          requests={requests}
+          onClose={() => { setComposing(null); requests.reset(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+type ComposingState = {
+  to: string;
+  contactName: string | null;
+  subject: string;
+  body: string;
+  row: CommissionRow;
+};
+
+function CommissionRequestDialog({
+  composing,
+  requests,
+  onClose,
+}: {
+  composing: ComposingState;
+  requests: ReturnType<typeof usePartnerRequests>;
+  onClose: () => void;
+}) {
+  const [subject, setSubject] = useState(composing.subject);
+  const [body, setBody] = useState(composing.body);
+  const [confirmSend, setConfirmSend] = useState(false);
+  const finished = !requests.running && requests.results.length > 0;
+  const result = requests.results[0];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+      >
+        <header className="flex flex-none items-start gap-3 border-b border-border px-5 py-3.5">
+          <span className="min-w-0">
+            <h2 className="font-display text-lg font-bold">Request commission</h2>
+            <p className="mt-0.5 text-[12px] text-slate-600">
+              To: {composing.to}{composing.contactName ? ` (${composing.contactName})` : ""}
+              {" · "}{composing.row.readable_id} · {composing.row.company_name}
+            </p>
+          </span>
+          <button type="button" onClick={onClose} aria-label="Close"
+            className="ml-auto rounded-md p-1 text-slate-500 hover:bg-slate-100">
+            <ExternalLink className="h-4 w-4 rotate-45" aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-5 py-3">
+          <input
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            disabled={requests.running || finished}
+            aria-label="Subject"
+            placeholder="Subject"
+            className="w-full rounded-md border border-input px-2.5 py-1.5 text-[12px]"
+          />
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            disabled={requests.running || finished}
+            rows={20}
+            aria-label="Message body"
+            className="min-h-0 flex-1 resize-y rounded-md border border-input px-2.5 py-1.5 text-[12px] leading-relaxed"
+          />
+          <p className="text-[10.5px] text-slate-400">
+            Your Gmail signature will be appended automatically.
+          </p>
+        </div>
+
+        <footer className="flex flex-none flex-wrap items-center gap-2 border-t border-border bg-slate-50 px-5 py-3">
+          {requests.running && <span className="text-[12.5px] text-slate-600">Sending…</span>}
+          {finished && result && (
+            <span className={`text-[12.5px] ${result.ok ? "text-emerald-800" : "text-rose-800"}`}>
+              {result.ok
+                ? result.link
+                  ? <a href={result.link} target="_blank" rel="noreferrer" className="underline underline-offset-2">Draft saved — open in Gmail</a>
+                  : "Sent!"
+                : `Failed: ${result.error}`}
+            </span>
+          )}
+          <span className="ml-auto flex flex-wrap items-center gap-2">
+            {finished ? (
+              <Button size="sm" className="h-8" onClick={onClose}>Close</Button>
+            ) : (
+              <>
+                <Button variant="outline" size="sm" className="h-8 gap-1.5"
+                  disabled={requests.running}
+                  onClick={() => requests.run([{ to: composing.to, subject, body }], "draft")}>
+                  Save as draft
+                </Button>
+                {confirmSend ? (
+                  <>
+                    <Button size="sm"
+                      className="h-8 gap-1.5 border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
+                      disabled={requests.running}
+                      onClick={() => requests.run([{ to: composing.to, subject, body }], "send")}>
+                      <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                      Confirm send
+                    </Button>
+                    <button type="button" onClick={() => setConfirmSend(false)}
+                      className="text-[11.5px] text-slate-500 underline-offset-2 hover:underline">
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <Button size="sm"
+                    className="h-8 gap-1.5 border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
+                    disabled={requests.running}
+                    onClick={() => setConfirmSend(true)}>
+                    <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                    Send now
+                  </Button>
+                )}
+              </>
+            )}
+          </span>
+        </footer>
       </div>
     </div>
   );
