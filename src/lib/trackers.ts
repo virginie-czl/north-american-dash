@@ -3,6 +3,7 @@ export const TRACKERS = [
   { key: "loreal", label: "L'Oréal CA", path: "/" },
   { key: "veolia", label: "Veolia US", path: "/veolia" },
   { key: "na", label: "Marketplace NA", path: "/tracking-north-america" },
+  { key: "na-commissions", label: "Commissions NA", path: "/na-commissions" },
 ] as const;
 
 export type TrackerKey = (typeof TRACKERS)[number]["key"];

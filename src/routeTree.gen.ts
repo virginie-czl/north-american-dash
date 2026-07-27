@@ -14,6 +14,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedVeoliaRouteImport } from './routes/_authenticated/veolia'
 import { Route as AuthenticatedTrackingNorthAmericaRouteImport } from './routes/_authenticated/tracking-north-america'
+import { Route as AuthenticatedNaCommissionsRouteImport } from './routes/_authenticated/na-commissions'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
 
 const AuthRoute = AuthRouteImport.update({
@@ -41,6 +42,12 @@ const AuthenticatedTrackingNorthAmericaRoute =
     path: '/tracking-north-america',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedNaCommissionsRoute =
+  AuthenticatedNaCommissionsRouteImport.update({
+    id: '/na-commissions',
+    path: '/na-commissions',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -51,12 +58,14 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/auth': typeof AuthRoute
   '/admin': typeof AuthenticatedAdminRoute
+  '/na-commissions': typeof AuthenticatedNaCommissionsRoute
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
 }
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/admin': typeof AuthenticatedAdminRoute
+  '/na-commissions': typeof AuthenticatedNaCommissionsRoute
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
   '/': typeof AuthenticatedIndexRoute
@@ -66,20 +75,34 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
   '/_authenticated/admin': typeof AuthenticatedAdminRoute
+  '/_authenticated/na-commissions': typeof AuthenticatedNaCommissionsRoute
   '/_authenticated/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/_authenticated/veolia': typeof AuthenticatedVeoliaRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/admin' | '/tracking-north-america' | '/veolia'
+  fullPaths:
+    | '/'
+    | '/auth'
+    | '/admin'
+    | '/na-commissions'
+    | '/tracking-north-america'
+    | '/veolia'
   fileRoutesByTo: FileRoutesByTo
-  to: '/auth' | '/admin' | '/tracking-north-america' | '/veolia' | '/'
+  to:
+    | '/auth'
+    | '/admin'
+    | '/na-commissions'
+    | '/tracking-north-america'
+    | '/veolia'
+    | '/'
   id:
     | '__root__'
     | '/_authenticated'
     | '/auth'
     | '/_authenticated/admin'
+    | '/_authenticated/na-commissions'
     | '/_authenticated/tracking-north-america'
     | '/_authenticated/veolia'
     | '/_authenticated/'
@@ -127,6 +150,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedTrackingNorthAmericaRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/na-commissions': {
+      id: '/_authenticated/na-commissions'
+      path: '/na-commissions'
+      fullPath: '/na-commissions'
+      preLoaderRoute: typeof AuthenticatedNaCommissionsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/admin': {
       id: '/_authenticated/admin'
       path: '/admin'
@@ -139,6 +169,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAdminRoute: typeof AuthenticatedAdminRoute
+  AuthenticatedNaCommissionsRoute: typeof AuthenticatedNaCommissionsRoute
   AuthenticatedTrackingNorthAmericaRoute: typeof AuthenticatedTrackingNorthAmericaRoute
   AuthenticatedVeoliaRoute: typeof AuthenticatedVeoliaRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
@@ -146,6 +177,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAdminRoute: AuthenticatedAdminRoute,
+  AuthenticatedNaCommissionsRoute: AuthenticatedNaCommissionsRoute,
   AuthenticatedTrackingNorthAmericaRoute:
     AuthenticatedTrackingNorthAmericaRoute,
   AuthenticatedVeoliaRoute: AuthenticatedVeoliaRoute,

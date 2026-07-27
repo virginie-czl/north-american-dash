@@ -2,6 +2,7 @@ import { createFileRoute, Link, Outlet, redirect, useRouter } from "@tanstack/re
 import {
   Download,
   Droplets,
+  DollarSign,
   Globe,
   LogOut,
   Mail,
@@ -125,6 +126,14 @@ function TopBar() {
             icon={<Globe className="h-4 w-4" aria-hidden="true" />}
           >
             Marketplace NA
+          </TrackerTab>
+        )}
+        {allowed.includes("na-commissions") && (
+          <TrackerTab
+            to="/na-commissions"
+            icon={<DollarSign className="h-4 w-4" aria-hidden="true" />}
+          >
+            Commissions NA
           </TrackerTab>
         )}
       </nav>
