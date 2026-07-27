@@ -176,7 +176,11 @@ export function composeRefundRequest(
   );
   const ccy = allSameCcy ? (overpaidPartners[0].partner_currency ?? null) : null;
 
-  const totalInvoiced = overpaidPartners.reduce((s, p) => s + (p.gmv_ttc ?? 0), 0);
+  // Gross TTC = net_gmv_ttc + commission_ttc (price before Naboo deducts its commission)
+  const totalInvoiced = overpaidPartners.reduce(
+    (s, p) => s + (p.gmv_ttc ?? 0) + (p.commission_ttc ?? 0),
+    0,
+  );
   const totalDisbursed = overpaidPartners.reduce((s, p) => s + (p.disbursed_total ?? 0), 0);
   const totalOverpaid = overpaidPartners.reduce(
     (s, p) => s + Math.abs(p.outstanding_payable ?? 0),
@@ -281,7 +285,11 @@ export function composeCombinedRequest(
     (p) => p.partner_currency === overpaidPartners[0].partner_currency,
   );
   const ovCcy = allSameOvCcy ? (overpaidPartners[0].partner_currency ?? ccy) : ccy;
-  const totalInvoiced = overpaidPartners.reduce((s, p) => s + (p.gmv_ttc ?? 0), 0);
+  // Gross TTC = net_gmv_ttc + commission_ttc (price before Naboo deducts its commission)
+  const totalInvoiced = overpaidPartners.reduce(
+    (s, p) => s + (p.gmv_ttc ?? 0) + (p.commission_ttc ?? 0),
+    0,
+  );
   const totalDisbursed = overpaidPartners.reduce((s, p) => s + (p.disbursed_total ?? 0), 0);
   const totalOverpaid = overpaidPartners.reduce(
     (s, p) => s + Math.abs(p.outstanding_payable ?? 0),

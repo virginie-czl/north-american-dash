@@ -29,7 +29,9 @@ export interface CommissionPartnerLine {
   disbursements: Array<{ amount: number; date: string }>;
   /** Amounts for refund detection */
   /** Gross GMV TTC in partner currency — used as "amount due per invoice" */
+  /** Gross TTC = net_gmv_ttc + commission_ttc — the invoice amount before commission deduction */
   gmv_ttc: number | null;
+  commission_ttc: number | null;
   disbursed_total: number | null;
   /** Negative = overpaid */
   outstanding_payable: number | null;
@@ -92,7 +94,8 @@ WITH base AS (
       SAFE_CAST(rm.p_rate_restauration AS FLOAT64) AS rate_food,
       SAFE_CAST(rm.p_rate_activity    AS FLOAT64) AS rate_activity,
       rm.p_commission_mismatch          AS mismatch,
-      CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)      AS gmv_ttc,
+      CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)       AS gmv_ttc,
+      CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64)    AS commission_ttc,
       CAST(rm.p_disbursed_total_pcurrency AS FLOAT64)       AS disbursed_total,
       CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64)   AS outstanding_payable,
       CAST(rm.partner_deposit_net_payable_pcurrency AS FLOAT64) AS deposit_net_payable,
