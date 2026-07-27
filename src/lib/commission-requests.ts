@@ -155,6 +155,7 @@ Best,`;
 
 export type RefundComposed = { subject: string; body: string };
 
+/** Builds the standalone overpayment refund email (no commission owed). */
 export function composeRefundRequest(
   row: CommissionRow,
   to: { name: string | null },
@@ -168,7 +169,6 @@ export function composeRefundRequest(
   const dateRange = fmtDateRange(row.start_date, row.end_date);
   const bookingId = row.readable_id ?? "—";
   const greeting = to.name ?? "there";
-
   const subject = `Overpayment on Booking ${bookingId} — ${client}, ${dateRange}`;
 
   const allSameCcy = overpaidPartners.every(
@@ -176,7 +176,7 @@ export function composeRefundRequest(
   );
   const ccy = allSameCcy ? (overpaidPartners[0].partner_currency ?? null) : null;
 
-  const totalNetPayable = overpaidPartners.reduce((s, p) => s + (p.net_payable ?? 0), 0);
+  const totalInvoiced = overpaidPartners.reduce((s, p) => s + (p.gmv_ttc ?? 0), 0);
   const totalDisbursed = overpaidPartners.reduce((s, p) => s + (p.disbursed_total ?? 0), 0);
   const totalOverpaid = overpaidPartners.reduce(
     (s, p) => s + Math.abs(p.outstanding_payable ?? 0),
@@ -185,7 +185,6 @@ export function composeRefundRequest(
   const depositTotal = overpaidPartners.reduce((s, p) => s + (p.deposit_net_payable ?? 0), 0);
   const balanceTotal = totalDisbursed - depositTotal;
   const depositDate = overpaidPartners.find((p) => p.deposit_payment_date)?.deposit_payment_date;
-
   const depositPart = depositDate
     ? `deposit ${fmtMoney(depositTotal, ccy)} on ${fmtShortDate(depositDate)}`
     : `deposit ${fmtMoney(depositTotal, ccy)}`;
@@ -199,7 +198,7 @@ I was closing out the file on the ${client} program and caught something on our 
 
 Here's what we're seeing:
 • Total event amount (before tax): ${fmtMoney(Number(row.gross_gmv_ht ?? 0), row.currency_client)}
-• Amount due per your final invoice: ${fmtMoney(totalNetPayable, ccy)}
+• Amount due per your final invoice: ${fmtMoney(totalInvoiced, ccy)}
 • Amount we paid: ${fmtMoney(totalDisbursed, ccy)} (${paymentBreakdown})
 • Overpayment: ${fmtMoney(totalOverpaid, ccy)}
 
@@ -208,6 +207,126 @@ Could you take a look and confirm it matches your records? Once you do, we'd ask
 If anything looks off in my numbers, just say the word and I'll walk through the payment history with you. Happy to hop on a quick call if that's faster.
 
 Thanks so much for your help on this — and thanks again for a great event.
+
+Best,`;
+
+  return { subject, body };
+}
+
+// ─── Combined commission + refund ─────────────────────────────────────────
+
+export type CombinedComposed = { subject: string; body: string };
+
+/**
+ * Returns a combined email when a booking has both commission due AND an
+ * overpayment. Returns null when the conditions are not met.
+ */
+export function composeCombinedRequest(
+  row: CommissionRow,
+  to: { name: string | null },
+): CombinedComposed | null {
+  const commissionPartners = (row.partners ?? []).filter(
+    (p) => (p.commission_ht ?? 0) > 0.01,
+  );
+  const overpaidPartners = (row.partners ?? []).filter(
+    (p) => (p.outstanding_payable ?? 0) < -0.10,
+  );
+  if (commissionPartners.length === 0 || overpaidPartners.length === 0) return null;
+
+  const client = row.company_name ?? "your group";
+  const dateRange = fmtDateRange(row.start_date, row.end_date);
+  const bookingId = row.readable_id ?? "—";
+  const greeting = to.name ?? "there";
+  const subject = `${client} — commission + overpayment to settle (Booking ${bookingId})`;
+
+  const ccy = row.currency_client;
+
+  // Commission section
+  const partners = commissionPartners;
+  const commissionableBase = partners.every((p) => p.partner_currency === ccy)
+    ? fmtMoney(partners.reduce((s, p) => s + (p.gmv_ht ?? 0), 0), ccy)
+    : partners.map((p) => fmtMoney(p.gmv_ht, p.partner_currency)).join(" + ");
+
+  const ratesSummary = (() => {
+    const first = partners[0];
+    const cats = [
+      first.rate_house != null ? `venue ${fmtPct(first.rate_house)}` : null,
+      first.rate_food != null ? `F&B ${fmtPct(first.rate_food)}` : null,
+      first.rate_activity != null ? `activity ${fmtPct(first.rate_activity)}` : null,
+    ].filter(Boolean);
+    const allSame = partners.every(
+      (p) =>
+        p.rate_house === first.rate_house &&
+        p.rate_food === first.rate_food &&
+        p.rate_activity === first.rate_activity,
+    );
+    return allSame && cats.length > 0
+      ? cats.join(", ")
+      : partners
+          .map((p) => {
+            const c = [
+              p.rate_house != null ? `venue ${fmtPct(p.rate_house)}` : null,
+              p.rate_food != null ? `F&B ${fmtPct(p.rate_food)}` : null,
+              p.rate_activity != null ? `activity ${fmtPct(p.rate_activity)}` : null,
+            ].filter(Boolean).join(", ");
+            return `${p.partner_name ?? "Partner"}: ${c}`;
+          })
+          .join("; ");
+  })();
+
+  const commissionDue = fmtMoney(row.total_commission_ht, ccy);
+
+  // Overpayment section
+  const allSameOvCcy = overpaidPartners.every(
+    (p) => p.partner_currency === overpaidPartners[0].partner_currency,
+  );
+  const ovCcy = allSameOvCcy ? (overpaidPartners[0].partner_currency ?? ccy) : ccy;
+  const totalInvoiced = overpaidPartners.reduce((s, p) => s + (p.gmv_ttc ?? 0), 0);
+  const totalDisbursed = overpaidPartners.reduce((s, p) => s + (p.disbursed_total ?? 0), 0);
+  const totalOverpaid = overpaidPartners.reduce(
+    (s, p) => s + Math.abs(p.outstanding_payable ?? 0),
+    0,
+  );
+  const depositTotal = overpaidPartners.reduce((s, p) => s + (p.deposit_net_payable ?? 0), 0);
+  const depositDate = overpaidPartners.find((p) => p.deposit_payment_date)?.deposit_payment_date;
+  const depositPart = depositDate
+    ? `deposit ${fmtMoney(depositTotal, ovCcy)} on ${fmtShortDate(depositDate)}`
+    : `deposit ${fmtMoney(depositTotal, ovCcy)}`;
+  const balanceTotal = totalDisbursed - depositTotal;
+  const paymentBreakdown = `${depositPart} + balance ${fmtMoney(balanceTotal, ovCcy)}`;
+
+  // Combined net: overpayment offsets commission
+  const commissionRaw = Number(row.total_commission_ht ?? 0);
+  const sameNetCcy = ccy === ovCcy;
+  const combined = sameNetCcy
+    ? fmtMoney(commissionRaw + totalOverpaid, ccy)
+    : `${fmtMoney(commissionRaw, ccy)} + ${fmtMoney(totalOverpaid, ovCcy)}`;
+
+  const body = `Hi ${greeting},
+
+Hope you're doing well!
+
+I've just finished reconciling the ${client} program and wanted to send you everything in one place rather than in pieces. There are two items open on our side — the commission we're owed, and a small overpayment on the invoice.
+
+Total event amount (before tax): ${fmtMoney(Number(row.gross_gmv_ht ?? 0), ccy)}
+
+1) Commission
+• Commissionable base: ${commissionableBase}
+• Commission rate: ${ratesSummary}
+• Commission due: ${commissionDue}
+
+2) Overpayment
+• Amount due per your final invoice: ${fmtMoney(totalInvoiced, ovCcy)}
+• Amount we paid: ${fmtMoney(totalDisbursed, ovCcy)} (${paymentBreakdown})
+• Overpaid: ${fmtMoney(totalOverpaid, ovCcy)}
+
+Total due back to Naboo: ${combined}
+
+Simplest path, if it works for you: one payment for the combined ${combined}. I'll send our commission invoice and a credit note for the overpayment so both sides tie out cleanly in your books.
+
+Could you confirm the figures match your records? If anything looks off — the commissionable base, the rate, or the payment history — send me your version and I'll go through it with you line by line. Happy to jump on a quick call if that's easier.
+
+Thanks so much, and thanks again for hosting the group.
 
 Best,`;
 

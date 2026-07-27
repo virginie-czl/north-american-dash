@@ -2,7 +2,12 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, ChevronRight, Send } from "lucide-react";
-import { pickContact, composeCommissionRequest, composeRefundRequest } from "@/lib/commission-requests";
+import {
+  pickContact,
+  composeCommissionRequest,
+  composeRefundRequest,
+  composeCombinedRequest,
+} from "@/lib/commission-requests";
 import { useGmailConnection, usePartnerRequests } from "@/lib/use-gmail";
 import { Button } from "@/components/ui/button";
 import { getCommissionRows, type CommissionRow } from "@/lib/commission.functions";
@@ -126,7 +131,7 @@ function NaCommissionsPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [composing, setComposing] = useState<null | {
     to: string; contactName: string | null; subject: string; body: string;
-    row: CommissionRow; mode: "commission" | "refund";
+    row: CommissionRow; mode: "commission" | "refund" | "combined";
   }>(null);
   const { data: gmailConnection } = useGmailConnection();
   const requests = usePartnerRequests();
@@ -433,6 +438,23 @@ function NaCommissionsPage() {
                                 </button>
                               );
                             })()}
+                            {(() => {
+                              const combined = composeCombinedRequest(r, contact);
+                              if (!combined) return null;
+                              return (
+                                <button
+                                  type="button"
+                                  className="mt-1 inline-flex items-center gap-1.5 text-[11.5px] text-amber-800 underline-offset-2 hover:underline"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setComposing({ to: contact.address!, contactName: contact.name, ...combined, row: r, mode: "combined" });
+                                  }}
+                                >
+                                  <Send className="h-3 w-3" aria-hidden="true" />
+                                  Commission + refund combined
+                                </button>
+                              );
+                            })()}
                           </>
                           );
                         })()}
@@ -464,7 +486,7 @@ type ComposingState = {
   subject: string;
   body: string;
   row: CommissionRow;
-  mode: "commission" | "refund";
+  mode: "commission" | "refund" | "combined";
 };
 
 function CommissionRequestDialog({
