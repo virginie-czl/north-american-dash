@@ -2,6 +2,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ShieldCheck, ShieldOff, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/user-avatar";
 
 type AccessStatus = "pending" | "approved" | "blocked";
 type Role = "owner" | "admin" | "member";
@@ -44,18 +45,6 @@ function fmt(iso: string | null): string {
   }
 }
 
-function initials(user: AppUser): string {
-  const base = user.name ?? user.email;
-  return (
-    base
-      .split(/[\s._@-]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((p) => p.charAt(0).toUpperCase())
-      .join("") || "?"
-  );
-}
-
 function useUsers() {
   return useQuery({
     queryKey: ["admin-users"],
@@ -94,18 +83,7 @@ function useDecide() {
 }
 
 function Avatar({ user }: { user: AppUser }) {
-  return user.picture ? (
-    <img
-      src={user.picture}
-      alt=""
-      className="h-8 w-8 flex-none rounded-full object-cover"
-      referrerPolicy="no-referrer"
-    />
-  ) : (
-    <span className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-navy text-[11px] font-bold text-naboo">
-      {initials(user)}
-    </span>
-  );
+  return <UserAvatar name={user.name} email={user.email} picture={user.picture} />;
 }
 
 function AdminPage() {

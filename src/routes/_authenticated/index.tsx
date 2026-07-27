@@ -49,6 +49,7 @@ import {
 } from "@/components/tracker-chrome";
 import { PartnerEmails } from "@/components/partner-emails";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
+import { UserAvatar } from "@/components/user-avatar";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
 import {
@@ -359,13 +360,7 @@ function exportContactToBeDone(
 function CommentersChip({ summary }: { summary: EventCommentSummary | undefined }) {
   if (!summary || summary.count === 0) return null;
   const shown = summary.commenters.slice(0, 3);
-  const extra = summary.commenters.length - shown.length;
-  const initials = (name?: string | null, email?: string | null) => {
-    const src = (name || email || "?").trim();
-    const parts = src.split(/\s+/);
-    return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || src[0]?.toUpperCase() || "?";
-  };
-  return (
+  const extra = summary.commenters.length - shown.length;  return (
     <span
       className="ml-2 inline-flex items-center gap-1.5 align-middle"
       title={`${summary.count} comment${summary.count > 1 ? "s" : ""} from ${summary.commenters
@@ -373,24 +368,16 @@ function CommentersChip({ summary }: { summary: EventCommentSummary | undefined 
         .join(", ")}`}
     >
       <span className="flex -space-x-2">
-        {shown.map((c) =>
-          c.user_avatar_url ? (
-            <img
-              key={c.user_id}
-              src={c.user_avatar_url}
-              alt={c.user_name ?? c.user_email}
-              referrerPolicy="no-referrer"
-              className="h-7 w-7 rounded-full border-2 border-white object-cover shadow-sm"
-            />
-          ) : (
-            <span
-              key={c.user_id}
-              className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-slate-300 text-[11px] font-semibold text-slate-700 shadow-sm"
-            >
-              {initials(c.user_name, c.user_email)}
-            </span>
-          ),
-        )}
+        {shown.map((c) => (
+          <UserAvatar
+            key={c.user_id}
+            name={c.user_name}
+            email={c.user_email}
+            picture={c.user_avatar_url}
+            className="h-7 w-7 border-2 border-white shadow-sm"
+            fallbackClassName="bg-slate-300 text-slate-700"
+          />
+        ))}
         {extra > 0 && (
           <span className="flex h-7 min-w-7 items-center justify-center rounded-full border-2 border-white bg-slate-200 px-1.5 text-[11px] font-semibold text-slate-700 shadow-sm">
             +{extra}
@@ -1666,12 +1653,6 @@ function EventComments({ eventRef }: { eventRef: string }) {
     }
   };
 
-  const initials = (name?: string | null, email?: string | null) => {
-    const src = (name || email || "?").trim();
-    const parts = src.split(/\s+/);
-    return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || src[0]?.toUpperCase() || "?";
-  };
-
   const submit = () => {
     const text = body.trim();
     if (!text || addComment.isPending) return;
@@ -1694,18 +1675,14 @@ function EventComments({ eventRef }: { eventRef: string }) {
           )}
           {comments?.map((c) => (
             <div key={c.id} className="flex gap-3 px-3 py-2.5">
-              {c.user_avatar_url ? (
-                <img
-                  src={c.user_avatar_url}
-                  alt={c.user_name ?? c.user_email}
-                  className="h-7 w-7 shrink-0 rounded-full object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-semibold text-slate-700">
-                  {initials(c.user_name, c.user_email)}
-                </div>
-              )}
+              <UserAvatar
+  name={c.user_name}
+  email={c.user_email}
+  picture={c.user_avatar_url}
+  className="h-6 w-6"
+  fallbackClassName="bg-slate-200 text-slate-700"
+  textClassName="text-[10px]"
+/>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <span className="font-medium text-slate-800">

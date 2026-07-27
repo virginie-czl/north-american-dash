@@ -23,6 +23,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/user-avatar";
 import {
   Select,
   SelectContent,
@@ -1211,18 +1212,14 @@ function CommentsSectionCard({ eventRef }: { eventRef: string }) {
         )}
         {comments?.map((c) => (
           <div key={c.id} className="flex gap-3 px-4 py-3">
-            {c.user_avatar_url ? (
-              <img
-                src={c.user_avatar_url}
-                alt={c.user_name ?? c.user_email}
-                className="h-7 w-7 shrink-0 rounded-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-text-secondary">
-                {initialsOf(c.user_name, c.user_email)}
-              </div>
-            )}
+            <UserAvatar
+  name={c.user_name}
+  email={c.user_email}
+  picture={c.user_avatar_url}
+  className="h-6 w-6"
+  fallbackClassName="bg-slate-200 text-slate-700"
+  textClassName="text-[10px]"
+/>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-[11px] text-text-muted">
                 <span className="font-medium text-text-primary">

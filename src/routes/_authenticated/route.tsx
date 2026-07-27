@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TrackerChromeProvider, useTrackerChrome } from "@/components/tracker-chrome";
+import { UserAvatar } from "@/components/user-avatar";
 import { useDisconnectGmail, useGmailConnection } from "@/lib/use-gmail";
 
 type SessionUser = {
@@ -80,14 +81,6 @@ function TopBar() {
   const disconnectGmail = useDisconnectGmail();
   const email = user?.email ?? "";
   const displayName = user?.name ?? email;
-  const initials =
-    (displayName || email)
-      .split(/[\s._-]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((p) => p.charAt(0).toUpperCase())
-      .join("") || "?";
-
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     router.navigate({ to: "/auth" });
@@ -175,16 +168,22 @@ function TopBar() {
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="relative flex h-[30px] w-[30px] items-center justify-center rounded-full bg-navy text-xs font-bold text-naboo"
+              className="relative flex h-[30px] w-[30px] items-center justify-center rounded-full"
               aria-label={
                 (user?.pendingCount ?? 0) > 0
                   ? `${email} — ${user?.pendingCount} demande(s) d'accès en attente`
-                  : `Account: ${email}`
+                  : `Compte : ${email}`
               }
             >
-              {initials}
+              <UserAvatar
+                name={user?.name}
+                email={email}
+                picture={user?.picture}
+                className="h-[30px] w-[30px]"
+                textClassName="text-xs"
+              />
               {(user?.pendingCount ?? 0) > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-amber-400 px-[3px] text-[9px] font-bold text-navy">
+                <span className="absolute -right-0.5 -top-0.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-amber-400 px-[3px] text-[9px] font-bold text-navy ring-2 ring-white">
                   {user?.pendingCount}
                 </span>
               )}
@@ -192,8 +191,13 @@ function TopBar() {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel className="font-normal">
-              <span className="block text-sm font-medium">{displayName}</span>
-              <span className="block truncate text-xs text-muted-foreground">{email}</span>
+              <span className="flex items-center gap-2.5">
+                <UserAvatar name={user?.name} email={email} picture={user?.picture} />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{displayName}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{email}</span>
+                </span>
+              </span>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             {user?.admin && (
