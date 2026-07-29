@@ -22,7 +22,7 @@ export type TaxRegistration = {
   usable: boolean;
 };
 
-const GST_RE = /(\d{9})\W{0,3}RT\W{0,3}(\d{4})/i;
+const GST_RE = /(\d{8,9})\W{0,3}RT\W{0,3}(\d{4,5})/i;
 const QST_RE = /(\d{10})\W{0,3}TQ\W{0,3}(\d{4})/i;
 /**
  * EU VAT, matched after separators are stripped. Some countries insert letters

@@ -91,6 +91,12 @@ console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
 
 // --- Regression: values actually present in owners.vat_number ---
+// Eventure (F-B694): 8-digit BN + 5-digit suffix
+const eventure = parseTaxRegistration("84861700RT00017 / 1217376285TQ00017");
+t("8-digit GST with 5-digit suffix", eventure.gst === "84861700RT00017" && eventure.usable, JSON.stringify(eventure));
+t("QST with 5-digit suffix", eventure.qst === "1217376285TQ00017", JSON.stringify(eventure));
+t("CA complete with both", taxComplete(eventure, "CA"), JSON.stringify(eventure));
+
 {
   let p2 = 0, f2 = 0;
   const t = (name, cond, got) => { if (cond) { p2++; console.log("  ✓", name); } else { f2++; console.log("  ✗", name, got); } };
@@ -120,6 +126,12 @@ if (fail) process.exitCode = 1;
   t("CA both halves", ca.gst === "819512187RT0001" && ca.qst === "1222113845TQ0001", JSON.stringify(ca));
   const caSp = parseTaxRegistration("1211 07726 RT 0001");
   t("CA GST with spaces", caSp.gst === "121107726RT0001", JSON.stringify(caSp));
+
+  // Eventure (F-B694): 8-digit BN + 5-digit suffix — real format found in owners.vat_number
+  const eventure = parseTaxRegistration("84861700RT00017 / 1217376285TQ00017");
+  t("8-digit GST with 5-digit suffix", eventure.gst === "84861700RT00017" && eventure.usable, JSON.stringify(eventure));
+  t("QST with 5-digit suffix", eventure.qst === "1217376285TQ00017", JSON.stringify(eventure));
+  t("CA complete with both (Eventure)", taxComplete(eventure, "CA"), JSON.stringify(eventure));
 
   console.log(`\n[regression] ${p2} passed, ${f2} failed`);
   if (f2) process.exitCode = 1;
