@@ -86,6 +86,7 @@ function Sticker({
 const ACTION_TONE: Record<string, Tone> = {
   settled: "none",
   ours_pay: "info",
+  card_to_debit: "pending",
   ours_record_tax: "info",
   ask_card: "pending",
   ask_bank: "pending",
@@ -102,6 +103,7 @@ const ACTION_PRIORITY = [
   "ask_tax",
   "ask_card",
   "await_reply",
+  "card_to_debit",
   "ours_record_tax",
   "ours_pay",
   "blocked_no_po",
@@ -189,152 +191,109 @@ export function TaxSticker({
   );
 }
 
-// --- Email-derived stickers (only when a scan has actually run) --------------
+// --- Contact sticker (only when a scan has actually run) ---------------------
 
-export function EmailStickers({
-  facts,
-  cardReady,
-  cardSource,
-}: {
-  facts: PartnerFacts | undefined;
-  /** True when the partner is payable by card — bank details then do not apply. */
-  cardReady?: boolean;
-  /** Where the card verdict came from, for the hover text. */
-  cardSource?: "slack" | "email";
-}) {
-  if (!facts) {
-    return (
-      <Sticker
-        label="Emails non scannés"
-        tone="none"
-        title="Personne n'a encore lancé de recherche email pour ce partenaire"
-      />
-    );
-  }
+function ContactSticker({ facts }: { facts: PartnerFacts }) {
   const viaDealCode =
     facts.matched_by === "deal_code" ? " (rapproché via le code deal, pas l'adresse)" : "";
-
-  let contactTone: Tone = "none";
-  let contactLabel = "Jamais contacté";
-  let contactTitle = "Aucun échange trouvé lors du dernier scan";
   if (facts.replied_at) {
-    contactTone = "good";
-    contactLabel = "A répondu";
-    contactTitle = `A répondu le ${shortDate(facts.replied_at)}${viaDealCode}`;
-  } else if (facts.contacted_at) {
-    contactTone = "pending";
-    contactLabel = "Sans réponse";
-    contactTitle = `Contacté par ${who(facts.contacted_by)} le ${shortDate(
-      facts.contacted_at,
-    )} — pas de réponse${viaDealCode}`;
-  }
-
-  // When a partner is payable by card, bank details are not a gap — showing
-  // "Bancaire absent" next to "Carte OK" reads as a missing item when there is
-  // nothing to chase. The card sticker carries the whole story instead.
-  const bankTone: Tone =
-    facts.bank_details === "received" ? "good" : facts.bank_details === "asked" ? "pending" : "none";
-  const bankLabel =
-    facts.bank_details === "received"
-      ? "Bancaire reçu"
-      : facts.bank_details === "asked"
-        ? "Bancaire demandé"
-        : "Bancaire absent";
-  const bankTitle =
-    facts.bank_details === "received"
-      ? `Coordonnées bancaires reçues le ${shortDate(facts.bank_received_at)}`
-      : facts.bank_details === "asked"
-        ? `Demandé par ${who(facts.bank_asked_by)} le ${shortDate(facts.bank_asked_at)}`
-        : "Jamais demandé";
-  // Still show it if we actually hold the details — that is useful either way.
-  const showBank = !cardReady || facts.bank_details === "received";
-
-  const cardOn = cardReady === true || facts.card_payment === "accepted";
-  const cardTone: Tone = cardOn ? "good" : facts.card_payment === "refused" ? "bad" : "none";
-  const cardLabel = cardOn
-    ? "Carte OK"
-    : facts.card_payment === "refused"
-      ? "Carte refusée"
-      : "Carte inconnue";
-  const cardTitle = cardOn
-    ? cardSource === "slack"
-      ? "Carte approuvée dans #finance-paiement-by-card — payable par carte, coordonnées bancaires inutiles"
-      : `Accepte explicitement la carte (indiqué le ${shortDate(facts.card_decided_at)}) — coordonnées bancaires inutiles`
-    : facts.card_payment === "refused"
-      ? `Refuse la carte (indiqué le ${shortDate(facts.card_decided_at)})`
-      : "Aucune acceptation explicite trouvée, ni approbation dans Slack";
-
-  return (
-    <>
-      <Sticker
-        icon={<Mail className={ICON} aria-hidden="true" />}
-        label={contactLabel}
-        tone={contactTone}
-        title={contactTitle}
-      />
-      {showBank && (
-        <Sticker
-          icon={<Landmark className={ICON} aria-hidden="true" />}
-          label={bankLabel}
-          tone={bankTone}
-          title={bankTitle}
-        />
-      )}
-      <Sticker
-        icon={<CreditCard className={ICON} aria-hidden="true" />}
-        label={cardLabel}
-        tone={cardTone}
-        title={cardTitle}
-      />
-    </>
-  );
-}
-
-
-/** The card verdict on its own — used on settled rows where nothing else applies. */
-export function CardSticker({
-  cardReady,
-  refused,
-  decidedAt,
-  source,
-}: {
-  cardReady: boolean;
-  refused?: boolean;
-  decidedAt?: string | null;
-  source?: "slack" | "email";
-}) {
-  if (cardReady) {
     return (
       <Sticker
-        icon={<CreditCard className={ICON} aria-hidden="true" />}
-        label="Carte OK"
+        icon={<Mail className={ICON} aria-hidden="true" />}
+        label="A répondu"
         tone="good"
-        title={
-          source === "slack"
-            ? "Carte approuvée dans #finance-paiement-by-card"
-            : `Accepte explicitement la carte${decidedAt ? ` (indiqué le ${shortDate(decidedAt)})` : ""}`
-        }
+        title={`A répondu le ${shortDate(facts.replied_at)}${viaDealCode}`}
       />
     );
   }
-  if (refused) {
+  if (facts.contacted_at) {
     return (
       <Sticker
-        icon={<CreditCard className={ICON} aria-hidden="true" />}
-        label="Carte refusée"
-        tone="bad"
-        title={`Refuse la carte${decidedAt ? ` (indiqué le ${shortDate(decidedAt)})` : ""}`}
+        icon={<Mail className={ICON} aria-hidden="true" />}
+        label="Sans réponse"
+        tone="pending"
+        title={`Contacté par ${who(facts.contacted_by)} le ${shortDate(
+          facts.contacted_at,
+        )} — pas de réponse${viaDealCode}`}
       />
     );
   }
   return (
     <Sticker
-      icon={<CreditCard className={ICON} aria-hidden="true" />}
-      label="Carte inconnue"
+      icon={<Mail className={ICON} aria-hidden="true" />}
+      label="Jamais contacté"
       tone="none"
-      title="Aucune acceptation explicite trouvée, ni approbation dans Slack"
+      title={`Aucun échange trouvé lors du dernier scan${viaDealCode}`}
     />
   );
+}
+
+// --- Payment method (single verdict — never card AND bank at once) ----------
+// A partner is paid one way or the other, never both, so there is never a
+// reason to show a bank sticker next to a card sticker: whichever one answers
+// "how do we pay them" wins, and everything else collapses into one pending
+// placeholder rather than two separate "we don't know" tags.
+
+function paymentMethodVerdict(
+  facts: PartnerFacts | undefined,
+  cardReady: boolean,
+  cardSource?: "slack" | "email",
+): { label: string; tone: Tone; icon: React.ReactNode; title: string } {
+  if (cardReady) {
+    return {
+      label: "Card OK",
+      tone: "good",
+      icon: <CreditCard className={ICON} aria-hidden="true" />,
+      title:
+        cardSource === "slack"
+          ? "Carte approuvée dans #finance-paiement-by-card — coordonnées bancaires inutiles"
+          : `Accepte explicitement la carte${
+              facts?.card_decided_at ? ` (indiqué le ${shortDate(facts.card_decided_at)})` : ""
+            } — coordonnées bancaires inutiles`,
+    };
+  }
+  if (facts?.bank_details === "received") {
+    return {
+      label: "Bank OK",
+      tone: "good",
+      icon: <Landmark className={ICON} aria-hidden="true" />,
+      title: `Coordonnées bancaires reçues le ${shortDate(facts.bank_received_at)}`,
+    };
+  }
+  if (facts?.bank_details === "asked") {
+    return {
+      label: "Bank asked",
+      tone: "pending",
+      icon: <Landmark className={ICON} aria-hidden="true" />,
+      title: `Demandé par ${who(facts.bank_asked_by)} le ${shortDate(facts.bank_asked_at)}`,
+    };
+  }
+  return {
+    label: "Card 🚦 pending",
+    tone: "pending",
+    icon: <CreditCard className={ICON} aria-hidden="true" />,
+    title:
+      facts?.card_payment === "refused"
+        ? `Refuse la carte${
+            facts.card_decided_at ? ` (indiqué le ${shortDate(facts.card_decided_at)})` : ""
+          } — coordonnées bancaires pas encore demandées`
+        : "Aucune acceptation de carte connue, ni coordonnées bancaires en main",
+  };
+}
+
+function PaymentMethodSticker({
+  facts,
+  cardReady,
+  cardSource,
+}: {
+  facts: PartnerFacts | undefined;
+  /** True when the partner is payable by card, from Slack approval or an explicit email reply. */
+  cardReady: boolean;
+  /** Where the card verdict came from, for the hover text. */
+  cardSource?: "slack" | "email";
+}) {
+  const v = paymentMethodVerdict(facts, cardReady, cardSource);
+  return <Sticker icon={v.icon} label={v.label} tone={v.tone} title={v.title} />;
 }
 
 // --- Composites -------------------------------------------------------------
@@ -382,20 +341,21 @@ export function PartnerStickers({
         emailAskedAt={facts?.tax_asked_at}
         emailAskedBy={facts?.tax_asked_by}
       />
-      {settled ? (
-        <CardSticker
-          cardReady={cardReady}
-          refused={facts?.card_payment === "refused"}
-          decidedAt={facts?.card_decided_at ?? null}
-          source={cardApprovedInSlack ? "slack" : "email"}
-        />
-      ) : (
-        <EmailStickers
-          facts={facts}
-          cardReady={cardReady}
-          cardSource={cardApprovedInSlack ? "slack" : "email"}
-        />
-      )}
+      {!settled &&
+        (facts ? (
+          <ContactSticker facts={facts} />
+        ) : (
+          <Sticker
+            label="Emails non scannés"
+            tone="none"
+            title="Personne n'a encore lancé de recherche email pour ce partenaire"
+          />
+        ))}
+      <PaymentMethodSticker
+        facts={facts}
+        cardReady={cardReady}
+        cardSource={cardApprovedInSlack ? "slack" : "email"}
+      />
     </span>
   );
 }
@@ -445,7 +405,14 @@ export function EventStickers({
     return score(e) < score(worst) ? e : worst;
   });
 
-  const anyScanned = entries.some((e) => e.facts != null);
+  const leadCardReady =
+    (lead.partner.owner_code != null &&
+      cardApprovedCodes?.has(lead.partner.owner_code) === true) ||
+    lead.facts?.card_payment === "accepted";
+  const leadCardSource =
+    lead.partner.owner_code != null && cardApprovedCodes?.has(lead.partner.owner_code)
+      ? "slack"
+      : "email";
 
   return (
     <span className="mt-1 flex flex-wrap gap-1">
@@ -457,42 +424,17 @@ export function EventStickers({
         emailAskedAt={taxLead.facts?.tax_asked_at}
         emailAskedBy={taxLead.facts?.tax_asked_by}
       />
-      {lead.action.code === "settled" ? (
-        <CardSticker
-          cardReady={
-            (lead.partner.owner_code != null &&
-              cardApprovedCodes?.has(lead.partner.owner_code) === true) ||
-            lead.facts?.card_payment === "accepted"
-          }
-          refused={lead.facts?.card_payment === "refused"}
-          decidedAt={lead.facts?.card_decided_at ?? null}
-          source={
-            lead.partner.owner_code != null && cardApprovedCodes?.has(lead.partner.owner_code)
-              ? "slack"
-              : "email"
-          }
-        />
-      ) : anyScanned ? (
-        <EmailStickers
-          facts={lead.facts}
-          cardReady={
-            (lead.partner.owner_code != null &&
-              cardApprovedCodes?.has(lead.partner.owner_code) === true) ||
-            lead.facts?.card_payment === "accepted"
-          }
-          cardSource={
-            lead.partner.owner_code != null && cardApprovedCodes?.has(lead.partner.owner_code)
-              ? "slack"
-              : "email"
-          }
-        />
-      ) : (
-        <Sticker
-          label="Emails non scannés"
-          tone="none"
-          title="Lancez « Rechercher dans mes emails » pour compléter le contact, le bancaire et la carte"
-        />
-      )}
+      {lead.action.code !== "settled" &&
+        (lead.facts ? (
+          <ContactSticker facts={lead.facts} />
+        ) : (
+          <Sticker
+            label="Emails non scannés"
+            tone="none"
+            title="Lancez « Rechercher dans mes emails » pour compléter le contact, le bancaire et la carte"
+          />
+        ))}
+      <PaymentMethodSticker facts={lead.facts} cardReady={leadCardReady} cardSource={leadCardSource} />
     </span>
   );
 }

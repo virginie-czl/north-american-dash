@@ -176,6 +176,7 @@ export const TAG_FILTER_GROUPS: Array<{ label: string; options: Array<{ value: T
       { value: "action:ask_tax", label: "Demander les taxes" },
       { value: "action:ask_card", label: "Proposer la carte" },
       { value: "action:await_reply", label: "En attente de réponse" },
+      { value: "action:card_to_debit", label: "Card created, service provider to debit" },
       { value: "action:ours_record_tax", label: "Enregistrer les taxes" },
       { value: "action:ours_pay", label: "Payout TBD" },
       { value: "action:blocked_no_po", label: "Bloqué — pas de PO" },

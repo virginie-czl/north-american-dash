@@ -143,8 +143,10 @@ if (fail) process.exitCode = 1;
     outstanding: 5000, taxRaw: reg, cardApprovedInSlack: true,
   }));
   t("Slack approval → payable by card, never ask IBAN",
-    slackApproved.code === "ours_pay" && slackApproved.payableBy === "card", JSON.stringify([slackApproved.label, slackApproved.payableBy]));
-  t("label is Payout TBD", slackApproved.label === "Payout TBD", slackApproved.label);
+    slackApproved.code === "card_to_debit" && slackApproved.payableBy === "card", JSON.stringify([slackApproved.label, slackApproved.payableBy]));
+  t("label is Card created, service provider to debit",
+    slackApproved.label === "Card created, service provider to debit", slackApproved.label);
+  t("owner is the provider, not us", slackApproved.owner === "partner", slackApproved.owner);
   t("detail cites the Slack channel",
     slackApproved.detail.includes("finance-paiement-by-card"), slackApproved.detail);
 
@@ -181,9 +183,15 @@ if (fail) process.exitCode = 1;
   const partial = decidePartnerAction({ ...base, outstanding: 1200, bankDetails: "received" });
   t("partially paid + bank → Payout TBD", partial.label === "Payout TBD", partial.label);
 
-  // Card approved instead of bank
+  // Card approved (issued) in Slack instead of bank — provider debits it themselves
   const byCard = decidePartnerAction({ ...base, outstanding: 5000, cardApprovedInSlack: true });
-  t("card approved → Payout TBD", byCard.label === "Payout TBD" && byCard.payableBy === "card", byCard.label);
+  t("card approved in Slack → Card created, service provider to debit",
+    byCard.label === "Card created, service provider to debit" && byCard.payableBy === "card", byCard.label);
+
+  // Card merely accepted before (no Pliant card actually issued) — still ours to action
+  const cardKnownNotIssued = decidePartnerAction({ ...base, outstanding: 5000, cardEverAccepted: true });
+  t("card known but not issued in Slack → still Payout TBD",
+    cardKnownNotIssued.label === "Payout TBD" && cardKnownNotIssued.payableBy === "card", cardKnownNotIssued.label);
 
   // Fully paid → nothing to do, not a payout
   const settled = decidePartnerAction({ ...base, outstanding: 0, bankDetails: "received" });

@@ -109,6 +109,7 @@ export type PaymentReadiness = "card" | "bank" | "none";
 export type ActionCode =
   | "settled" // paid and registered — nothing to do
   | "ours_pay" // we have what we need; paying is our move
+  | "card_to_debit" // a card was actually issued in #finance-paiement-by-card; the provider debits it themselves
   | "ours_record_tax" // partner sent everything; recording the tax number is our move
   | "ask_card" // known to accept card previously — offer it before asking for bank details
   | "ask_bank" // need bank details
@@ -223,6 +224,20 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
             : "Coordonnées bancaires reçues ; il manque les numéros de taxes.",
       };
     }
+    // A card actually issued in #finance-paiement-by-card is stronger than just
+    // knowing the partner accepts card: the provider already holds the means to
+    // pay themselves, so the next move is theirs, not a disbursement on our side.
+    if (readiness === "card" && s.cardApprovedInSlack === true) {
+      return {
+        ...base,
+        code: "card_to_debit",
+        owner: "partner",
+        scanUseful: false,
+        payableBy: "card",
+        label: "Card created, service provider to debit",
+        detail: "Carte approuvée dans #finance-paiement-by-card — au prestataire de la débiter.",
+      };
+    }
     return {
       ...base,
       code: "ours_pay",
@@ -235,9 +250,7 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
       label: "Payout TBD",
       detail:
         readiness === "card"
-          ? s.cardApprovedInSlack === true
-            ? "Payable par carte (approuvée dans #finance-paiement-by-card) — reste à décaisser."
-            : "Payable par carte (acceptation explicite du partenaire) — reste à décaisser."
+          ? "Accepte explicitement la carte (acceptation du partenaire) — reste à décaisser."
           : "Coordonnées bancaires en main — reste à décaisser.",
     };
   }
