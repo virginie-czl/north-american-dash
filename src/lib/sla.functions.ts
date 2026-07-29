@@ -84,6 +84,9 @@ WITH loreal_free_invoicing AS (
   WHERE 'FREE_INVOICING' IN UNNEST(cr.feature_flags)
     AND cr.deleted = false
     AND cr.company_name = 'L’Oréal Canada Inc'
+    -- Turnkey bookings are excluded: Naboo runs them end to end, so there is no
+    -- partner payment or PO cycle for this tracker to chase.
+    AND IFNULL(cr.transaction_kind, '') != 'TURNKEY'
 ),
 partner_detail AS (
   SELECT
