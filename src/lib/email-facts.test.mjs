@@ -61,4 +61,47 @@ for (const [name, msgs, expect] of cases) {
   else { fail++; console.log("  ✗", name, "→", bad.map(([k, v]) => `${k}: expected ${v}, got ${got[k]}`).join("; ")); }
 }
 console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+if (fail) process.exitCode = 1;
+
+// --- Card acceptance must be explicit (regression) ---
+{
+  let p = 0, f = 0;
+  const t = (n, c, g = "") => { if (c) { p++; console.log("  ✓", n); } else { f++; console.log("  ✗", n, g); } };
+  const inbound = (body) => extractFacts([{ outbound: false, at: "2026-04-05T09:00:00Z", from: "a@b.ca", subject: "Re", body }], ME);
+
+  // Should be ACCEPTED
+  for (const b of [
+    "Oui, le paiement par carte de crédit nous convient très bien.",
+    "La carte accepté sans problème.",
+    "Nous acceptons la carte de crédit.",
+    "Vous pouvez régler par carte.",
+    "Yes, credit card works for us.",
+    "We accept credit cards.",
+    "Card is fine.",
+  ]) {
+    t(`accepted: ${b.slice(0, 40)}`, inbound(b).cardPayment === "accepted", inbound(b).cardPayment);
+  }
+
+  // Should NOT be accepted — these were false positives before
+  for (const b of [
+    "Le paiement par carte serait possible mais je dois vérifier.",
+    "Merci pour votre message concernant le paiement par carte.",
+    "Pouvez-vous confirmer si vous payez par carte ?",
+    "Je reviens vers vous au sujet de la carte.",
+    "Regarding your question about credit card payment, I'll check.",
+  ]) {
+    t(`not accepted: ${b.slice(0, 45)}`, inbound(b).cardPayment !== "accepted", inbound(b).cardPayment);
+  }
+
+  // Refusals still win
+  for (const b of [
+    "Malheureusement nous n'acceptons pas la carte, virement uniquement.",
+    "Le paiement par carte serait possible mais malheureusement nous n'acceptons pas la carte.",
+    "We cannot accept credit card, bank transfer only.",
+  ]) {
+    t(`refused: ${b.slice(0, 40)}`, inbound(b).cardPayment === "refused", inbound(b).cardPayment);
+  }
+
+  console.log(`\n[card explicit] ${p} passed, ${f} failed`);
+  if (f) process.exitCode = 1;
+}

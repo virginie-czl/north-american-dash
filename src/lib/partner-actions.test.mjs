@@ -127,3 +127,36 @@ t("no PO → blocked, no scan", a12.code === "blocked_no_po" && !a12.scanUseful,
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
+
+// --- Slack approval as a card source ---
+{
+  let p = 0, f = 0;
+  const t = (n, c, g = "") => { if (c) { p++; console.log("  ✓", n); } else { f++; console.log("  ✗", n, g); } };
+  const S2 = (o = {}) => ({
+    outstanding: 0, hasPo: true, country: "CA", taxRaw: null, taxIdentifier: null,
+    bankDetails: "not_asked", taxAsked: false, contacted: false, replied: false,
+    cardOnThisEvent: "unknown", cardEverAccepted: false, ...o,
+  });
+  const reg = "TPS 819512187RT0001 TVQ 1222113845TQ0001";
+
+  const slackApproved = decidePartnerAction(S2({
+    outstanding: 5000, taxRaw: reg, cardApprovedInSlack: true,
+  }));
+  t("Slack approval → payable by card, never ask IBAN",
+    slackApproved.code === "ours_pay" && slackApproved.label.includes("carte"), slackApproved.label);
+  t("detail cites the Slack channel",
+    slackApproved.detail.includes("finance-paiement-by-card"), slackApproved.detail);
+
+  const noSlackNoEmail = decidePartnerAction(S2({ outstanding: 5000, taxRaw: reg }));
+  t("without either source → ask for bank",
+    noSlackNoEmail.code === "ask_bank", noSlackNoEmail.code);
+
+  const slackNoTax = decidePartnerAction(S2({ outstanding: 5000, cardApprovedInSlack: true }));
+  t("Slack approval but no tax → ask tax only",
+    slackNoTax.code === "ask_tax", slackNoTax.code);
+  t("and it does not ask for bank details",
+    !slackNoTax.detail.toLowerCase().includes("bancaire"), slackNoTax.detail);
+
+  console.log(`\n[slack card] ${p} passed, ${f} failed`);
+  if (f) process.exitCode = 1;
+}

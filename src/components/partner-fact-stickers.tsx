@@ -191,7 +191,17 @@ export function TaxSticker({
 
 // --- Email-derived stickers (only when a scan has actually run) --------------
 
-export function EmailStickers({ facts }: { facts: PartnerFacts | undefined }) {
+export function EmailStickers({
+  facts,
+  cardReady,
+  cardSource,
+}: {
+  facts: PartnerFacts | undefined;
+  /** True when the partner is payable by card — bank details then do not apply. */
+  cardReady?: boolean;
+  /** Where the card verdict came from, for the hover text. */
+  cardSource?: "slack" | "email";
+}) {
   if (!facts) {
     return (
       <Sticker
@@ -219,6 +229,9 @@ export function EmailStickers({ facts }: { facts: PartnerFacts | undefined }) {
     )} — pas de réponse${viaDealCode}`;
   }
 
+  // When a partner is payable by card, bank details are not a gap — showing
+  // "Bancaire absent" next to "Carte OK" reads as a missing item when there is
+  // nothing to chase. The card sticker carries the whole story instead.
   const bankTone: Tone =
     facts.bank_details === "received" ? "good" : facts.bank_details === "asked" ? "pending" : "none";
   const bankLabel =
@@ -233,21 +246,23 @@ export function EmailStickers({ facts }: { facts: PartnerFacts | undefined }) {
       : facts.bank_details === "asked"
         ? `Demandé par ${who(facts.bank_asked_by)} le ${shortDate(facts.bank_asked_at)}`
         : "Jamais demandé";
+  // Still show it if we actually hold the details — that is useful either way.
+  const showBank = !cardReady || facts.bank_details === "received";
 
-  const cardTone: Tone =
-    facts.card_payment === "accepted" ? "good" : facts.card_payment === "refused" ? "bad" : "none";
-  const cardLabel =
-    facts.card_payment === "accepted"
-      ? "Carte OK"
-      : facts.card_payment === "refused"
-        ? "Carte refusée"
-        : "Carte inconnue";
-  const cardTitle =
-    facts.card_payment === "accepted"
-      ? `Accepte la carte (indiqué le ${shortDate(facts.card_decided_at)})`
-      : facts.card_payment === "refused"
-        ? `Refuse la carte (indiqué le ${shortDate(facts.card_decided_at)})`
-        : "Position sur le paiement par carte inconnue";
+  const cardOn = cardReady === true || facts.card_payment === "accepted";
+  const cardTone: Tone = cardOn ? "good" : facts.card_payment === "refused" ? "bad" : "none";
+  const cardLabel = cardOn
+    ? "Carte OK"
+    : facts.card_payment === "refused"
+      ? "Carte refusée"
+      : "Carte inconnue";
+  const cardTitle = cardOn
+    ? cardSource === "slack"
+      ? "Carte approuvée dans #finance-paiement-by-card — payable par carte, coordonnées bancaires inutiles"
+      : `Accepte explicitement la carte (indiqué le ${shortDate(facts.card_decided_at)}) — coordonnées bancaires inutiles`
+    : facts.card_payment === "refused"
+      ? `Refuse la carte (indiqué le ${shortDate(facts.card_decided_at)})`
+      : "Aucune acceptation explicite trouvée, ni approbation dans Slack";
 
   return (
     <>
@@ -257,12 +272,14 @@ export function EmailStickers({ facts }: { facts: PartnerFacts | undefined }) {
         tone={contactTone}
         title={contactTitle}
       />
-      <Sticker
-        icon={<Landmark className={ICON} aria-hidden="true" />}
-        label={bankLabel}
-        tone={bankTone}
-        title={bankTitle}
-      />
+      {showBank && (
+        <Sticker
+          icon={<Landmark className={ICON} aria-hidden="true" />}
+          label={bankLabel}
+          tone={bankTone}
+          title={bankTitle}
+        />
+      )}
       <Sticker
         icon={<CreditCard className={ICON} aria-hidden="true" />}
         label={cardLabel}
@@ -277,6 +294,7 @@ export function EmailStickers({ facts }: { facts: PartnerFacts | undefined }) {
 
 export type StickerPartner = {
   name: string | null;
+  owner_code?: string | null;
   email: string | null;
   amount_due: number | null;
   vat_raw: string | null;
@@ -290,11 +308,17 @@ export function PartnerStickers({
   action,
   facts,
   partner,
+  cardApprovedInSlack,
 }: {
   action: PartnerAction;
   facts: PartnerFacts | undefined;
   partner: StickerPartner;
+  cardApprovedInSlack?: boolean;
 }) {
+  const cardReady =
+    cardApprovedInSlack === true ||
+    facts?.card_payment === "accepted" ||
+    action.label.includes("carte");
   return (
     <span className="mt-1 flex flex-wrap gap-1">
       <ActionSticker action={action} />
@@ -305,7 +329,11 @@ export function PartnerStickers({
         emailAskedAt={facts?.tax_asked_at}
         emailAskedBy={facts?.tax_asked_by}
       />
-      <EmailStickers facts={facts} />
+      <EmailStickers
+        facts={facts}
+        cardReady={cardReady}
+        cardSource={cardApprovedInSlack ? "slack" : "email"}
+      />
     </span>
   );
 }
@@ -320,12 +348,15 @@ export function EventStickers({
   hasPo,
   factsMap,
   actionFor,
+  cardApprovedCodes,
 }: {
   eventRef: string;
   partners: StickerPartner[];
   hasPo: boolean;
   factsMap: Map<string, PartnerFacts> | undefined;
   actionFor: (eventRef: string, partner: StickerPartner, hasPo: boolean) => PartnerAction;
+  /** Owner codes with an approved card in #finance-paiement-by-card. */
+  cardApprovedCodes?: Set<string>;
   }) {
   const live = partners.filter((p) => !p.is_cancelled);
   if (live.length === 0) return null;
@@ -365,7 +396,19 @@ export function EventStickers({
         emailAskedBy={taxLead.facts?.tax_asked_by}
       />
       {anyScanned ? (
-        <EmailStickers facts={lead.facts} />
+        <EmailStickers
+          facts={lead.facts}
+          cardReady={
+            (lead.partner.owner_code != null &&
+              cardApprovedCodes?.has(lead.partner.owner_code) === true) ||
+            lead.facts?.card_payment === "accepted"
+          }
+          cardSource={
+            lead.partner.owner_code != null && cardApprovedCodes?.has(lead.partner.owner_code)
+              ? "slack"
+              : "email"
+          }
+        />
       ) : (
         <Sticker
           label="Emails non scannés"

@@ -433,7 +433,8 @@ function SlaPage() {
   const poDates = usePoEmissionDates(rawRows);
   const { data: statusMap } = usePartnerStatuses();
   const { data: commentSummaries } = useCommentSummaries();
-  const { factsMap, factsError, actionFor, eventNeedsScan } = useActionIndex();
+  const { factsMap, factsError, actionFor, eventNeedsScan, cardApprovedCodes } =
+    useActionIndex();
   const { data: gmailConnection, error: gmailError } = useGmailConnection();
   const { data: me } = useCurrentUser();
   const requestDialog = useRequestDialog();
@@ -1329,6 +1330,7 @@ function SlaPage() {
                                           hasPo={Boolean(r.purchase_order_number)}
                                           factsMap={factsMap}
                                           actionFor={actionFor}
+                                          cardApprovedCodes={cardApprovedCodes}
                                         />
                                       </>
                                     );
@@ -1499,7 +1501,7 @@ function EventDetails({
   const eventRef = row.readable_id ?? row.client_request_id ?? "";
   const bookingUrl = row.booking_url ?? null;
   const { data: statusMap } = usePartnerStatuses();
-  const { factsMap, actionFor } = useActionIndex();
+  const { factsMap, actionFor, cardApprovedCodes } = useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
   const requestDialog = useRequestDialog();
   const setStatus = useSetPartnerStatus();
@@ -1562,6 +1564,10 @@ function EventDetails({
                           action={actionFor(eventRef, p, Boolean(row.purchase_order_number))}
                           facts={factsMap?.get(key)}
                           partner={p}
+                          cardApprovedInSlack={
+                            p.owner_code != null &&
+                            cardApprovedCodes?.has(p.owner_code.toUpperCase()) === true
+                          }
                         />
                         {(() => {
                           if (!gmailConnection?.connected || !p.email) return null;

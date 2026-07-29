@@ -6,12 +6,15 @@
 import { useCallback, useMemo } from "react";
 import { decidePartnerAction, type PartnerAction } from "@/lib/partner-actions";
 import { partnerKey } from "@/lib/annotations.functions";
+import { useQuery } from "@tanstack/react-query";
 import { usePartnerFacts, type PartnerFacts } from "@/lib/use-gmail";
+import { fetchCardApprovals } from "@/lib/slack-cards.functions";
 
 export type ActionablePartner = {
   name: string | null;
   email: string | null;
   amount_due: number | null;
+  owner_code?: string | null;
   vat_raw: string | null;
   tax_identifier: string | null;
   country: string | null;
@@ -20,6 +23,20 @@ export type ActionablePartner = {
 
 export function useActionIndex() {
   const { data: factsMap, error: factsError } = usePartnerFacts();
+
+  // Approved cards from #finance-paiement-by-card. Matched on the O- owner code, so
+  // exact. A failure here must not break the page — the email signal still works.
+  const { data: cardApprovedCodes } = useQuery({
+    queryKey: ["slack-card-approvals"],
+    queryFn: async () => {
+      const rows = await fetchCardApprovals();
+      const set = new Set<string>();
+      (Array.isArray(rows) ? rows : []).forEach((r) => set.add(r.owner_code.toUpperCase()));
+      return set;
+    },
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
 
   // A partner who accepted a card once will accept it again — that memory has to
   // span events, otherwise we keep asking for an IBAN we do not need.
@@ -47,9 +64,12 @@ export function useActionIndex() {
         replied: facts?.replied_at != null,
         cardOnThisEvent: facts?.card_payment ?? "unknown",
         cardEverAccepted: cardEverAccepted.has(key),
+        cardApprovedInSlack:
+          partner.owner_code != null &&
+          cardApprovedCodes?.has(partner.owner_code.toUpperCase()) === true,
       });
     },
-    [factsMap, cardEverAccepted],
+    [factsMap, cardEverAccepted, cardApprovedCodes],
   );
 
   /** True when at least one partner on the event still has an open question. */
@@ -59,5 +79,5 @@ export function useActionIndex() {
     [actionFor],
   );
 
-  return { factsMap, factsError, actionFor, eventNeedsScan, cardEverAccepted };
+  return { factsMap, factsError, actionFor, eventNeedsScan, cardEverAccepted, cardApprovedCodes };
 }

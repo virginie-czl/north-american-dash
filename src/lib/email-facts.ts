@@ -72,20 +72,41 @@ const ATTACH_TAX = /w-?9|w-?8|tax|tva|tps|tvq|gst|qst|attestation/i;
 // --- Card polarity ----------------------------------------------------------
 
 const CARD_WORD = /(carte|credit\s+card|\bcb\b|\bcard\b)/i;
-const CARD_YES =
-  /(accept|possible|ok|d'accord|d’accord|oui|sans\s+probl[èe]me|pas\s+de\s+probl[èe]me|convient|fine|works|we\s+can)/i;
-const CARD_NO =
-  /(n'accept|n’accept|pas\s+accept|refus|impossible|malheureusement|ne\s+prenons\s+pas|do\s+not\s+accept|don'?t\s+accept|cannot\s+accept|virement\s+(uniquement|seulement|obligatoire)|only\s+(by\s+)?(bank\s+)?transfer|transfer\s+only|ch[èe]que\s+uniquement)/i;
 
-/** Looks for the card verdict in the sentence(s) that mention a card at all. */
+/**
+ * Explicit acceptance only. Loose matching produced false positives — "le paiement
+ * par carte serait possible" or our own question echoed in a reply both read as a
+ * yes under keyword matching. A card verdict changes whether we ever ask for an
+ * IBAN, so it has to be earned: an affirmative directed at the card, from them.
+ */
+const CARD_YES_EXPLICIT = [
+  // French
+  /\b(oui|d'accord|d’accord|parfait|tr[èe]s bien|c'est bon|c’est bon)\b[^.!?\n]{0,60}(carte|cb\b)/i,
+  /(carte|cb\b)[^.!?\n]{0,60}\b(nous convient|me convient|convient|c'est parfait|c’est parfait|pas de probl[èe]me|sans probl[èe]me|aucun probl[èe]me)\b/i,
+  /\bnous (acceptons|prenons|pouvons accepter)\b[^.!?\n]{0,40}(carte|cb\b)/i,
+  /\b(vous pouvez|tu peux|possible de)\s+(donc\s+)?(nous\s+)?(r[ée]gler|payer)\b[^.!?\n]{0,40}(par\s+)?(carte|cb\b)/i,
+  /(carte|cb\b)[^.!?\n]{0,40}\baccept[ée]e?\b/i,
+  // English
+  /\b(yes|sure|absolutely|that works|works for us|happy to)\b[^.!?\n]{0,60}(credit\s+card|\bcard\b)/i,
+  /\bwe (accept|can accept|do accept|take)\b[^.!?\n]{0,40}(credit\s+cards?|\bcards?\b)/i,
+  /(credit\s+card|\bcard\b)[^.!?\n]{0,40}\b(is fine|works|is accepted|no problem)\b/i,
+];
+
+const CARD_NO =
+  /(n'accept|n’accept|pas\s+accept|refus|impossible|malheureusement|ne\s+prenons\s+pas|do\s+not\s+accept|don'?t\s+accept|cannot\s+accept|unable\s+to\s+accept|virement\s+(uniquement|seulement|obligatoire)|only\s+(by\s+)?(bank\s+)?transfer|transfer\s+only|ch[èe]que\s+uniquement)/i;
+
+/**
+ * Looks for the card verdict in sentences that mention a card. A refusal wins over
+ * an acceptance in the same sentence, and acceptance requires one of the explicit
+ * patterns above rather than any nearby positive word.
+ */
 function cardVerdict(text: string): CardState {
   const sentences = text.split(/(?<=[.!?\n])/);
   let verdict: CardState = "unknown";
   for (const sentence of sentences) {
     if (!CARD_WORD.test(sentence)) continue;
-    // A refusal is the more consequential reading, so it wins within a sentence.
     if (CARD_NO.test(sentence)) return "refused";
-    if (CARD_YES.test(sentence)) verdict = "accepted";
+    if (CARD_YES_EXPLICIT.some((re) => re.test(sentence))) verdict = "accepted";
   }
   return verdict;
 }

@@ -243,3 +243,29 @@ never stored.
 Set `NABOO_ADMIN_TOKEN` in Vercel environment variables (admin JWT from the
 Naboo BO or from the tech team). Without it the panel shows an error but
 everything else keeps working.
+
+
+### Card acceptance: two sources, both explicit
+
+A card verdict decides whether a partner is ever asked for an IBAN, so it has to be
+earned. Two independent sources, in order of strength:
+
+1. **An approved credit card request in #finance-paiement-by-card** (`C09GQEKBEAX`).
+   The Finance Bot posts a structured message per request; only
+   *Credit Card Request Approved* counts — pending, refused and amount-update
+   refusals are ignored. Matching is on the **`O-` owner code**, so it is exact with
+   no name fuzzing (`src/lib/slack-cards.server.ts`, 11 tests). This means a Pliant
+   card was actually issued, which is stronger evidence than any email.
+2. **An explicit yes in the partner's own reply.** Loose keyword matching produced
+   false positives — "le paiement par carte serait possible mais je dois vérifier"
+   and our own question echoed back both read as acceptance. Acceptance now needs a
+   directed affirmative ("oui … carte", "nous acceptons la carte", "card works for
+   us"); 15 tests cover the phrases that must and must not count.
+
+Requires `SLACK_BOT_TOKEN` with `channels:history`. Without it the Slack source is
+skipped and the email signal still works — the page does not break.
+
+**Bank details are not a gap when the partner takes card.** Showing *Bancaire absent*
+next to *Carte OK* reads as an outstanding item when there is nothing to chase, so
+the bank sticker is hidden once a partner is payable by card — unless we actually
+hold their details, which is worth seeing either way.

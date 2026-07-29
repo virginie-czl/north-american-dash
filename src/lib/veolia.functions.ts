@@ -4,6 +4,8 @@ export interface PartnerLine {
   name: string | null;
   email: string | null;
   phone: string | null;
+  /** Owner code (O-XXXX) — used to match Slack credit-card approvals exactly. */
+  owner_code: string | null;
   /** Free-text tax registration as held on the owner record — needs parsing. */
   vat_raw: string | null;
   /** Structured tax identifier, used for non-venue service owners. */
@@ -109,6 +111,7 @@ partner_detail AS (
     COALESCE(o.company_name, so.company_name) AS service_provider_name,
     COALESCE(o.email, so.email)                AS service_provider_email,
     COALESCE(o.phone, so.phone)                AS service_provider_phone,
+    COALESCE(o.readable_id, so.readable_id) AS provider_owner_code,
     NULLIF(TRIM(COALESCE(o.vat_number, so.vat_number, '')), '') AS provider_vat_raw,
     NULLIF(TRIM(COALESCE(so.tax_identifier, '')), '')           AS provider_tax_identifier,
     COALESCE(o.country_iso_code, so.country_iso_code)           AS provider_country,
@@ -140,7 +143,7 @@ partners_agg AS (
     ARRAY_AGG(STRUCT(
       quote_id, house_owner_id, service_provider_name,
       service_provider_email, service_provider_phone, provider_currency,
-      provider_vat_raw, provider_tax_identifier, provider_country,
+      provider_owner_code, provider_vat_raw, provider_tax_identifier, provider_country,
       amount_due_provider, amount_paid_provider, amount_disbursed_total,
       net_payable_ttc, payout_fx_date, quote_cancelled_at,
       is_cancelled_quote, is_provision_quote, provision_name, is_outstanding
@@ -392,6 +395,7 @@ SELECT
           IFNULL(sp.amount_paid_provider, 0)
         )
       END AS amount_paid,
+      sp.provider_owner_code AS owner_code,
       sp.provider_vat_raw AS vat_raw,
       sp.provider_tax_identifier AS tax_identifier,
       sp.provider_country AS country,
@@ -545,6 +549,7 @@ function mergeInto(existing: PartnerLine, p: PartnerLine) {
   existing.is_cancelled = Boolean(existing.is_cancelled) && Boolean(p.is_cancelled);
   if (!existing.email && p.email) existing.email = p.email;
   if (!existing.phone && p.phone) existing.phone = p.phone;
+  if (!existing.owner_code && p.owner_code) existing.owner_code = p.owner_code;
   if (!existing.vat_raw && p.vat_raw) existing.vat_raw = p.vat_raw;
   if (!existing.tax_identifier && p.tax_identifier) existing.tax_identifier = p.tax_identifier;
   if (!existing.country && p.country) existing.country = p.country;

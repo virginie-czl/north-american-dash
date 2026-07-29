@@ -131,6 +131,12 @@ export type PartnerSituation = {
   cardOnThisEvent: "unknown" | "accepted" | "refused";
   /** From the email scan on ANY event — a partner who took card once will again. */
   cardEverAccepted: boolean;
+  /**
+   * A credit card was actually approved for this partner in
+   * #finance-paiement-by-card. Strongest evidence there is: a Pliant card was
+   * issued, not merely discussed.
+   */
+  cardApprovedInSlack?: boolean;
 };
 
 export type PartnerAction = {
@@ -193,12 +199,13 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
   }
 
   // Something is owed. Can we pay at all?
-  const readiness: PaymentReadiness =
-    s.cardOnThisEvent === "accepted" || s.cardEverAccepted
-      ? "card"
-      : s.bankDetails === "received"
-        ? "bank"
-        : "none";
+  const cardReady =
+    s.cardApprovedInSlack === true || s.cardOnThisEvent === "accepted" || s.cardEverAccepted;
+  const readiness: PaymentReadiness = cardReady
+    ? "card"
+    : s.bankDetails === "received"
+      ? "bank"
+      : "none";
 
   if (readiness !== "none") {
     if (!taxOk && !s.taxAsked) {
@@ -222,7 +229,9 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
       label: readiness === "card" ? "À payer (carte)" : "À payer (virement)",
       detail:
         readiness === "card"
-          ? "Le partenaire accepte la carte — pas besoin de coordonnées bancaires."
+          ? s.cardApprovedInSlack === true
+            ? "Carte approuvée dans #finance-paiement-by-card — pas besoin de coordonnées bancaires."
+            : "Le partenaire a explicitement accepté la carte — pas besoin de coordonnées bancaires."
           : "Coordonnées bancaires en main ; le paiement est de notre côté.",
     };
   }
@@ -263,14 +272,17 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
   }
 
   // Nothing asked yet. If they have taken card before, offer that first.
-  if (s.cardEverAccepted) {
+  if (s.cardApprovedInSlack === true || s.cardEverAccepted) {
     return {
       ...base,
       code: "ask_card",
       owner: "partner",
       scanUseful: true,
       label: "Proposer la carte",
-      detail: "A déjà accepté la carte par le passé — inutile de demander un IBAN.",
+      detail:
+        s.cardApprovedInSlack === true
+          ? "Une carte a déjà été approuvée pour ce prestataire — inutile de demander un IBAN."
+          : "A déjà accepté la carte par le passé — inutile de demander un IBAN.",
     };
   }
 
