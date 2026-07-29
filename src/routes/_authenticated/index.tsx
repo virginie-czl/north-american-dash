@@ -31,11 +31,10 @@ import {
   Select,
   SelectContent,
   SelectItem,
-  SelectGroup,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { TagFilterSelect } from "@/components/tag-filter-select";
 import {
   Table,
   TableBody,
@@ -425,7 +424,7 @@ function SlaPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   // Turnkey is out by default (Naboo runs those end to end) but can be brought back.
   const [kindFilter, setKindFilter] = useState<string>("no_turnkey");
-  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [sortKey, setSortKey] = useState<string>("booking_created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -545,18 +544,19 @@ function SlaPage() {
       });
     }
     // Tag filter — matches the badges shown on the row, so the filter and the
-    // stickers can never disagree.
-    if (tagFilter !== "all") {
-      r = r.filter(({ row: x, partners: ps }) =>
-        tagsForEvent(
+    // stickers can never disagree. Multiple tags selected = OR (any match).
+    if (tagFilter.length > 0) {
+      r = r.filter(({ row: x, partners: ps }) => {
+        const tags = tagsForEvent(
           x.readable_id ?? x.client_request_id ?? "",
           ps,
           Boolean(x.purchase_order_number),
           actionFor,
           factsMap,
           cardApprovedCodes,
-        ).has(tagFilter as never),
-      );
+        );
+        return tagFilter.some((t) => tags.has(t as never));
+      });
     }
     // Column-level filters
     if (Object.keys(colFilters).length > 0) {
@@ -1019,24 +1019,7 @@ function SlaPage() {
                       <SelectItem value="TURNKEY">Turnkey seulement</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Select value={tagFilter} onValueChange={setTagFilter}>
-                    <SelectTrigger className="w-[200px]">
-                      <SelectValue placeholder="Filtrer par tag" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Tous les tags</SelectItem>
-                      {TAG_FILTER_GROUPS.map((g) => (
-                        <SelectGroup key={g.label}>
-                          <SelectLabel>{g.label}</SelectLabel>
-                          {g.options.map((o) => (
-                            <SelectItem key={o.value} value={o.value}>
-                              {o.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <TagFilterSelect groups={TAG_FILTER_GROUPS} selected={tagFilter} onChange={setTagFilter} />
                   <Select
                     value={`${sortKey}:${sortDir}`}
                     onValueChange={(v) => {
