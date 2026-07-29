@@ -750,14 +750,18 @@ function SlaPage() {
     });
     if (anyPartial)
       return { label: "Payout to do", cls: "bg-sky-100 text-sky-800" };
-    const statuses = active.map((p) => {
+    // Contact is established either by the manual dropdown or by the email scan —
+    // a row must not read "Contact TBD" when an email has demonstrably gone out.
+    const contactMade = active.map((p) => {
       const k = `${eventRef}::${partnerKey(p.name)}`;
-      return statusMap?.get(k)?.status ?? "not_contacted";
+      const manual = statusMap?.get(k)?.status ?? "not_contacted";
+      const emailed = factsMap?.get(k)?.contacted_at != null;
+      return manual !== "not_contacted" || emailed;
     });
-    if (statuses.every((s) => s === "not_contacted"))
-      return { label: "Contact asap", cls: "bg-rose-100 text-rose-800" };
-    if (statuses.every((s) => s !== "not_contacted"))
-      return { label: "Contacted — Bank details pending", cls: "bg-amber-100 text-amber-800 border-amber-200" };
+    if (contactMade.every((c) => !c))
+      return { label: "‼️ Contact TBD", cls: "bg-rose-100 text-rose-800" };
+    if (contactMade.every((c) => c))
+      return { label: "⏳ Contact", cls: "bg-amber-100 text-amber-800 border-amber-200" };
     return null;
   }
 

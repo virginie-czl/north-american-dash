@@ -39,6 +39,7 @@ export interface InvoiceLine {
 export interface SlaRow {
   readable_id: string | null;
   booking_url: string | null;
+  transaction_kind: string | null;
   client_request_id: string | null;
   company_name: string | null;
   event_type: string | null;
@@ -73,6 +74,7 @@ WITH loreal_free_invoicing AS (
   SELECT
     cr.request_id            AS client_request_id,
     cr.readable_id           AS readable_id,
+    cr.transaction_kind      AS transaction_kind,
     cr.company_name,
     cr.type                  AS event_type,
     cr.status                AS booking_status,
@@ -84,9 +86,7 @@ WITH loreal_free_invoicing AS (
   WHERE 'FREE_INVOICING' IN UNNEST(cr.feature_flags)
     AND cr.deleted = false
     AND cr.company_name = 'L’Oréal Canada Inc'
-    -- Turnkey bookings are excluded: Naboo runs them end to end, so there is no
-    -- partner payment or PO cycle for this tracker to chase.
-    AND IFNULL(cr.transaction_kind, '') != 'TURNKEY'
+    -- Turnkey is filtered client-side so it can be brought back when needed.
 ),
 partner_detail AS (
   SELECT
@@ -210,6 +210,7 @@ loreal_tracker AS (
     l.company_name,
     STRUCT(
       l.event_type,
+      l.transaction_kind,
       l.booking_date,
       l.booking_status,
       l.country_iso_code,
@@ -309,6 +310,7 @@ SELECT
   t.client_request_id,
   t.company_name,
   t.event.event_type AS event_type,
+  t.event.transaction_kind AS transaction_kind,
   CAST(t.event.booking_date AS STRING) AS booking_date,
   CAST(t.event.booking_created_at AS STRING) AS booking_created_at,
   t.event.booking_status AS booking_status,

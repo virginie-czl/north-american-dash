@@ -290,6 +290,53 @@ export function EmailStickers({
   );
 }
 
+
+/** The card verdict on its own — used on settled rows where nothing else applies. */
+export function CardSticker({
+  cardReady,
+  refused,
+  decidedAt,
+  source,
+}: {
+  cardReady: boolean;
+  refused?: boolean;
+  decidedAt?: string | null;
+  source?: "slack" | "email";
+}) {
+  if (cardReady) {
+    return (
+      <Sticker
+        icon={<CreditCard className={ICON} aria-hidden="true" />}
+        label="Carte OK"
+        tone="good"
+        title={
+          source === "slack"
+            ? "Carte approuvée dans #finance-paiement-by-card"
+            : `Accepte explicitement la carte${decidedAt ? ` (indiqué le ${shortDate(decidedAt)})` : ""}`
+        }
+      />
+    );
+  }
+  if (refused) {
+    return (
+      <Sticker
+        icon={<CreditCard className={ICON} aria-hidden="true" />}
+        label="Carte refusée"
+        tone="bad"
+        title={`Refuse la carte${decidedAt ? ` (indiqué le ${shortDate(decidedAt)})` : ""}`}
+      />
+    );
+  }
+  return (
+    <Sticker
+      icon={<CreditCard className={ICON} aria-hidden="true" />}
+      label="Carte inconnue"
+      tone="none"
+      title="Aucune acceptation explicite trouvée, ni approbation dans Slack"
+    />
+  );
+}
+
 // --- Composites -------------------------------------------------------------
 
 export type StickerPartner = {
@@ -319,6 +366,12 @@ export function PartnerStickers({
     cardApprovedInSlack === true ||
     facts?.card_payment === "accepted" ||
     action.label.includes("carte");
+
+  // Nothing left to do: the contact and bank stickers are noise at that point.
+  // Only the two facts worth keeping visible remain — the tax registration and
+  // whether this partner is paid by card.
+  const settled = action.code === "settled";
+
   return (
     <span className="mt-1 flex flex-wrap gap-1">
       <ActionSticker action={action} />
@@ -329,11 +382,20 @@ export function PartnerStickers({
         emailAskedAt={facts?.tax_asked_at}
         emailAskedBy={facts?.tax_asked_by}
       />
-      <EmailStickers
-        facts={facts}
-        cardReady={cardReady}
-        cardSource={cardApprovedInSlack ? "slack" : "email"}
-      />
+      {settled ? (
+        <CardSticker
+          cardReady={cardReady}
+          refused={facts?.card_payment === "refused"}
+          decidedAt={facts?.card_decided_at ?? null}
+          source={cardApprovedInSlack ? "slack" : "email"}
+        />
+      ) : (
+        <EmailStickers
+          facts={facts}
+          cardReady={cardReady}
+          cardSource={cardApprovedInSlack ? "slack" : "email"}
+        />
+      )}
     </span>
   );
 }
@@ -395,7 +457,22 @@ export function EventStickers({
         emailAskedAt={taxLead.facts?.tax_asked_at}
         emailAskedBy={taxLead.facts?.tax_asked_by}
       />
-      {anyScanned ? (
+      {lead.action.code === "settled" ? (
+        <CardSticker
+          cardReady={
+            (lead.partner.owner_code != null &&
+              cardApprovedCodes?.has(lead.partner.owner_code) === true) ||
+            lead.facts?.card_payment === "accepted"
+          }
+          refused={lead.facts?.card_payment === "refused"}
+          decidedAt={lead.facts?.card_decided_at ?? null}
+          source={
+            lead.partner.owner_code != null && cardApprovedCodes?.has(lead.partner.owner_code)
+              ? "slack"
+              : "email"
+          }
+        />
+      ) : anyScanned ? (
         <EmailStickers
           facts={lead.facts}
           cardReady={

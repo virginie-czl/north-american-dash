@@ -417,6 +417,8 @@ function SlaPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  // Turnkey is out by default (Naboo runs those end to end) but can be brought back.
+  const [kindFilter, setKindFilter] = useState<string>("no_turnkey");
   const [sortKey, setSortKey] = useState<string>("booking_created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -526,6 +528,15 @@ function SlaPage() {
         return true;
       });
     }
+    // Transaction kind. Turnkey is excluded by default: Naboo runs those end to end,
+    // so there is no partner payment or PO cycle for this tracker to chase.
+    if (kindFilter !== "all") {
+      r = r.filter(({ row: x }) => {
+        const kind = (x.transaction_kind ?? "").toUpperCase();
+        if (kindFilter === "no_turnkey") return kind !== "TURNKEY";
+        return kind === kindFilter;
+      });
+    }
     // Column-level filters
     if (Object.keys(colFilters).length > 0) {
       r = r.filter(({ row: x, partners: ps, invoices: iv }) => {
@@ -565,7 +576,7 @@ function SlaPage() {
         : String(bv).localeCompare(String(av));
     });
     return sorted;
-  }, [decorated, search, statusFilter, sortKey, sortDir, colFilters]);
+  }, [decorated, search, statusFilter, kindFilter, sortKey, sortDir, colFilters]);
 
 
   // KPIs
@@ -749,14 +760,18 @@ function SlaPage() {
     });
     if (anyPartial)
       return { label: "Payout to do", cls: "bg-sky-100 text-sky-800" };
-    const statuses = active.map((p) => {
+    // Contact is established either by the manual dropdown or by the email scan —
+    // a row must not read "Contact TBD" when an email has demonstrably gone out.
+    const contactMade = active.map((p) => {
       const k = `${eventRef}::${partnerKey(p.name)}`;
-      return statusMap?.get(k)?.status ?? "not_contacted";
+      const manual = statusMap?.get(k)?.status ?? "not_contacted";
+      const emailed = factsMap?.get(k)?.contacted_at != null;
+      return manual !== "not_contacted" || emailed;
     });
-    if (statuses.every((s) => s === "not_contacted"))
-      return { label: "Contact asap", cls: "bg-rose-100 text-rose-800" };
-    if (statuses.every((s) => s !== "not_contacted"))
-      return { label: "Contacted — Bank details pending", cls: "bg-amber-100 text-amber-800 border-amber-200" };
+    if (contactMade.every((c) => !c))
+      return { label: "‼️ Contact TBD", cls: "bg-rose-100 text-rose-800" };
+    if (contactMade.every((c) => c))
+      return { label: "⏳ Contact", cls: "bg-amber-100 text-amber-800 border-amber-200" };
     return null;
   }
 
@@ -966,6 +981,18 @@ function SlaPage() {
                       <SelectItem value="payout_breached">Partner payout breached</SelectItem>
                       <SelectItem value="receivable_overdue">Client receivable overdue</SelectItem>
                       <SelectItem value="partner_outstanding">Partner still to pay</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={kindFilter} onValueChange={setKindFilter}>
+                    <SelectTrigger className="w-[190px]">
+                      <SelectValue placeholder="Transaction kind" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="no_turnkey">Hors turnkey</SelectItem>
+                      <SelectItem value="all">Tous les types</SelectItem>
+                      <SelectItem value="PORTAGE">Portage</SelectItem>
+                      <SelectItem value="VENUE_FINDING">Venue finding</SelectItem>
+                      <SelectItem value="TURNKEY">Turnkey seulement</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select
