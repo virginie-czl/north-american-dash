@@ -134,7 +134,7 @@ partners_fi AS (
       part.currency AS currency,
       CAST(ROUND(part.liveconfirmed.netpayable.withtaxes / 10000, 2) AS FLOAT64) AS gmv_ttc,
       CAST(ROUND(part.disbursedtotal / 10000, 2) AS FLOAT64) AS paid,
-      ROUND((part.liveconfirmed.netpayable.withtaxes - part.disbursedtotal) / 10000, 2) AS outstanding,
+      CAST(ROUND((part.liveconfirmed.netpayable.withtaxes - part.disbursedtotal) / 10000, 2) AS FLOAT64) AS outstanding,
       CAST(ROUND(part.outstandingpayable / 10000, 2) AS FLOAT64) AS raw_outstanding,
       CAST(ROUND(part.liveconfirmed.netpayable.withtaxes / 10000, 2) AS FLOAT64) AS payable,
       CAST(NULL AS FLOAT64) AS commission,
