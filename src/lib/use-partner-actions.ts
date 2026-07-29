@@ -49,7 +49,12 @@ export function useActionIndex() {
   }, [factsMap]);
 
   const actionFor = useCallback(
-    (eventRef: string, partner: ActionablePartner, hasPo: boolean): PartnerAction => {
+    (
+      eventRef: string,
+      partner: ActionablePartner,
+      hasPo: boolean,
+      options?: { taxTracked?: boolean },
+    ): PartnerAction => {
       const key = partnerKey(partner.name ?? partner.email ?? "");
       const facts: PartnerFacts | undefined = factsMap?.get(`${eventRef}::${key}`);
       return decidePartnerAction({
@@ -67,6 +72,7 @@ export function useActionIndex() {
         cardApprovedInSlack:
           partner.owner_code != null &&
           cardApprovedCodes?.has(partner.owner_code.toUpperCase()) === true,
+        taxTracked: options?.taxTracked,
       });
     },
     [factsMap, cardEverAccepted, cardApprovedCodes],
@@ -74,8 +80,13 @@ export function useActionIndex() {
 
   /** True when at least one partner on the event still has an open question. */
   const eventNeedsScan = useCallback(
-    (eventRef: string, partners: ActionablePartner[], hasPo: boolean): boolean =>
-      partners.some((p) => !p.is_cancelled && actionFor(eventRef, p, hasPo).scanUseful),
+    (
+      eventRef: string,
+      partners: ActionablePartner[],
+      hasPo: boolean,
+      options?: { taxTracked?: boolean },
+    ): boolean =>
+      partners.some((p) => !p.is_cancelled && actionFor(eventRef, p, hasPo, options).scanUseful),
     [actionFor],
   );
 

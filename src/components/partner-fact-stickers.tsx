@@ -238,7 +238,7 @@ function paymentMethodVerdict(
   facts: PartnerFacts | undefined,
   cardReady: boolean,
   cardSource?: "slack" | "email",
-): { label: string; tone: Tone; icon: React.ReactNode; title: string } {
+): { label: string; tone: Tone; icon: React.ReactNode; title: string; isUnknown: boolean } {
   if (cardReady) {
     return {
       label: "Card OK",
@@ -250,6 +250,7 @@ function paymentMethodVerdict(
           : `Accepte explicitement la carte${
               facts?.card_decided_at ? ` (indiqué le ${shortDate(facts.card_decided_at)})` : ""
             } — coordonnées bancaires inutiles`,
+      isUnknown: false,
     };
   }
   if (facts?.bank_details === "received") {
@@ -258,6 +259,7 @@ function paymentMethodVerdict(
       tone: "good",
       icon: <Landmark className={ICON} aria-hidden="true" />,
       title: `Coordonnées bancaires reçues le ${shortDate(facts.bank_received_at)}`,
+      isUnknown: false,
     };
   }
   if (facts?.bank_details === "asked") {
@@ -266,6 +268,7 @@ function paymentMethodVerdict(
       tone: "pending",
       icon: <Landmark className={ICON} aria-hidden="true" />,
       title: `Demandé par ${who(facts.bank_asked_by)} le ${shortDate(facts.bank_asked_at)}`,
+      isUnknown: false,
     };
   }
   return {
@@ -278,6 +281,7 @@ function paymentMethodVerdict(
             facts.card_decided_at ? ` (indiqué le ${shortDate(facts.card_decided_at)})` : ""
           } — coordonnées bancaires pas encore demandées`
         : "Aucune acceptation de carte connue, ni coordonnées bancaires en main",
+    isUnknown: true,
   };
 }
 
@@ -285,14 +289,18 @@ function PaymentMethodSticker({
   facts,
   cardReady,
   cardSource,
+  hideWhenUnknown,
 }: {
   facts: PartnerFacts | undefined;
   /** True when the partner is payable by card, from Slack approval or an explicit email reply. */
   cardReady: boolean;
   /** Where the card verdict came from, for the hover text. */
   cardSource?: "slack" | "email";
+  /** Skip rendering entirely for the "nothing known yet" fallback state. */
+  hideWhenUnknown?: boolean;
 }) {
   const v = paymentMethodVerdict(facts, cardReady, cardSource);
+  if (v.isUnknown && hideWhenUnknown) return null;
   return <Sticker icon={v.icon} label={v.label} tone={v.tone} title={v.title} />;
 }
 
@@ -315,11 +323,17 @@ export function PartnerStickers({
   facts,
   partner,
   cardApprovedInSlack,
+  hideTax,
+  hideCardPending,
 }: {
   action: PartnerAction;
   facts: PartnerFacts | undefined;
   partner: StickerPartner;
   cardApprovedInSlack?: boolean;
+  /** Skip the tax-registration sticker — for trackers that don't record tax numbers at all. */
+  hideTax?: boolean;
+  /** Skip the payment sticker when no payment method is known yet, rather than showing a "pending" placeholder. */
+  hideCardPending?: boolean;
 }) {
   const cardReady =
     cardApprovedInSlack === true ||
@@ -334,13 +348,15 @@ export function PartnerStickers({
   return (
     <span className="mt-1 flex flex-wrap gap-1">
       <ActionSticker action={action} />
-      <TaxSticker
-        registration={action.tax}
-        country={partner.country}
-        emailReceivedAt={facts?.tax_received_at}
-        emailAskedAt={facts?.tax_asked_at}
-        emailAskedBy={facts?.tax_asked_by}
-      />
+      {!hideTax && (
+        <TaxSticker
+          registration={action.tax}
+          country={partner.country}
+          emailReceivedAt={facts?.tax_received_at}
+          emailAskedAt={facts?.tax_asked_at}
+          emailAskedBy={facts?.tax_asked_by}
+        />
+      )}
       {!settled &&
         (facts ? (
           <ContactSticker facts={facts} />
@@ -355,6 +371,7 @@ export function PartnerStickers({
         facts={facts}
         cardReady={cardReady}
         cardSource={cardApprovedInSlack ? "slack" : "email"}
+        hideWhenUnknown={hideCardPending}
       />
     </span>
   );
@@ -371,6 +388,8 @@ export function EventStickers({
   factsMap,
   actionFor,
   cardApprovedCodes,
+  hideTax,
+  hideCardPending,
 }: {
   eventRef: string;
   partners: StickerPartner[];
@@ -379,6 +398,10 @@ export function EventStickers({
   actionFor: (eventRef: string, partner: StickerPartner, hasPo: boolean) => PartnerAction;
   /** Owner codes with an approved card in #finance-paiement-by-card. */
   cardApprovedCodes?: Set<string>;
+  /** Skip the tax-registration sticker — for trackers that don't record tax numbers at all. */
+  hideTax?: boolean;
+  /** Skip the payment sticker when no payment method is known yet, rather than showing a "pending" placeholder. */
+  hideCardPending?: boolean;
   }) {
   const live = partners.filter((p) => !p.is_cancelled);
   if (live.length === 0) return null;
@@ -417,13 +440,15 @@ export function EventStickers({
   return (
     <span className="mt-1 flex flex-wrap gap-1">
       <ActionSticker action={lead.action} />
-      <TaxSticker
-        registration={taxLead.registration}
-        country={taxLead.partner.country}
-        emailReceivedAt={taxLead.facts?.tax_received_at}
-        emailAskedAt={taxLead.facts?.tax_asked_at}
-        emailAskedBy={taxLead.facts?.tax_asked_by}
-      />
+      {!hideTax && (
+        <TaxSticker
+          registration={taxLead.registration}
+          country={taxLead.partner.country}
+          emailReceivedAt={taxLead.facts?.tax_received_at}
+          emailAskedAt={taxLead.facts?.tax_asked_at}
+          emailAskedBy={taxLead.facts?.tax_asked_by}
+        />
+      )}
       {lead.action.code !== "settled" &&
         (lead.facts ? (
           <ContactSticker facts={lead.facts} />
@@ -434,7 +459,12 @@ export function EventStickers({
             title="Lancez « Rechercher dans mes emails » pour compléter le contact, le bancaire et la carte"
           />
         ))}
-      <PaymentMethodSticker facts={lead.facts} cardReady={leadCardReady} cardSource={leadCardSource} />
+      <PaymentMethodSticker
+        facts={lead.facts}
+        cardReady={leadCardReady}
+        cardSource={leadCardSource}
+        hideWhenUnknown={hideCardPending}
+      />
     </span>
   );
 }

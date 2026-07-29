@@ -138,6 +138,13 @@ export type PartnerSituation = {
    * issued, not merely discussed.
    */
   cardApprovedInSlack?: boolean;
+  /**
+   * Whether tax registration is even a thing this tracker records. Some data
+   * sources (e.g. Marketplace NA) never populate taxRaw/taxIdentifier at all —
+   * treating that as "missing" would permanently flag every partner as needing
+   * a tax number. Defaults to true (existing behaviour for every other caller).
+   */
+  taxTracked?: boolean;
 };
 
 export type PartnerAction = {
@@ -160,7 +167,10 @@ export type PartnerAction = {
  */
 export function decidePartnerAction(s: PartnerSituation): PartnerAction {
   const tax = parseTaxRegistration(s.taxRaw, s.taxIdentifier);
-  const taxOk = taxComplete(tax, s.country);
+  // When tax isn't tracked for this data source, never let it gate anything —
+  // `tax` itself stays honest (still reports nothing on file) but the decision
+  // tree treats registration as a non-issue throughout.
+  const taxOk = s.taxTracked === false ? true : taxComplete(tax, s.country);
   const owes = s.outstanding > 0.01;
   const base = { tax };
 

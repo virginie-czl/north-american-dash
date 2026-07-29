@@ -204,3 +204,42 @@ if (fail) process.exitCode = 1;
   console.log(`\n[payout] ${p} passed, ${f} failed`);
   if (f) process.exitCode = 1;
 }
+
+// --- taxTracked: false (Marketplace NA has no tax fields at all) -------------
+{
+  let p = 0, f = 0;
+  const t = (n, c, g = "") => { if (c) { p++; console.log("  ✓", n); } else { f++; console.log("  ✗", n, g); } };
+  const base = {
+    hasPo: true, country: null, taxRaw: null, taxIdentifier: null,
+    bankDetails: "not_asked", taxAsked: false, contacted: false, replied: false,
+    cardOnThisEvent: "unknown", cardEverAccepted: false,
+  };
+
+  // No tax on file anywhere, but taxTracked: false must never gate on it.
+  const paidUntracked = decidePartnerAction({ ...base, outstanding: 0, taxTracked: false });
+  t("paid, tax untracked → settled despite nothing on file",
+    paidUntracked.code === "settled", paidUntracked.code);
+
+  const owedNoMeansUntracked = decidePartnerAction({ ...base, outstanding: 5000, taxTracked: false });
+  t("owed, no means, tax untracked → asks for bank, never mentions tax",
+    owedNoMeansUntracked.code === "ask_bank", owedNoMeansUntracked.code);
+
+  const owedWithBankUntracked = decidePartnerAction({
+    ...base, outstanding: 5000, bankDetails: "received", taxTracked: false,
+  });
+  t("owed, bank in hand, tax untracked → Payout TBD (not ask_tax)",
+    owedWithBankUntracked.label === "Payout TBD", owedWithBankUntracked.label);
+
+  // Same inputs but taxTracked omitted (default true) — old behaviour must survive.
+  const owedNoMeansTracked = decidePartnerAction({ ...base, outstanding: 5000 });
+  t("same inputs without taxTracked → still asks for tax too (unchanged default)",
+    owedNoMeansTracked.code === "ask_bank_and_tax", owedNoMeansTracked.code);
+
+  // hasPo: true (Marketplace NA never tracks PO) must never produce blocked_no_po.
+  const noPoButTrackedAsTrue = decidePartnerAction({ ...base, outstanding: 5000, hasPo: true, taxTracked: false });
+  t("hasPo forced true → never blocked_no_po",
+    noPoButTrackedAsTrue.code !== "blocked_no_po", noPoButTrackedAsTrue.code);
+
+  console.log(`\n[tax untracked] ${p} passed, ${f} failed`);
+  if (f) process.exitCode = 1;
+}
