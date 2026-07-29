@@ -44,6 +44,10 @@ export default {
       const authResponse = await handleAuthRequest(request);
       if (authResponse) return authResponse;
 
+      const { handleCronRequest } = await import("./lib/cron-routes.server");
+      const cronResponse = await handleCronRequest(request);
+      if (cronResponse) return cronResponse;
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);

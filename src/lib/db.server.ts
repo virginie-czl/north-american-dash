@@ -1,5 +1,6 @@
 /**
- * Postgres connection for the annotation layer (server-only).
+ * Postgres connection for the annotation layer and other small server-side
+ * state (server-only).
  *
  * The store is provisioned from the Vercel dashboard (Storage tab); Vercel injects
  * the connection string as an environment variable. Nothing has to be created by
@@ -126,6 +127,15 @@ const SCHEMA_STATEMENTS = [
      emitted_at timestamptz NOT NULL DEFAULT now(),
      updated_by text,
      updated_at timestamptz NOT NULL DEFAULT now()
+   )`,
+  // Single-row cache of #finance-paiement-by-card approvals, kept warm by a
+  // 15-minute cron. Serverless instances do not share memory, so this is what
+  // lets every instance see fresh data without each one re-hitting Slack.
+  `CREATE TABLE IF NOT EXISTS slack_card_approvals_cache (
+     id smallint PRIMARY KEY DEFAULT 1,
+     approvals jsonb NOT NULL,
+     refreshed_at timestamptz NOT NULL DEFAULT now(),
+     CHECK (id = 1)
    )`,
 ];
 
