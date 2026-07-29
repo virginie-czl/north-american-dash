@@ -36,6 +36,7 @@ export interface InvoiceLine {
 
 export interface SlaRow {
   readable_id: string | null;
+  booking_url: string | null;
   client_request_id: string | null;
   company_name: string | null;
   event_type: string | null;
@@ -323,6 +324,7 @@ SELECT
   CAST(ev.start_date AS STRING) AS start_date,
   CAST(ev.end_date AS STRING) AS end_date,
   ev.purchase_order_number AS purchase_order_number,
+  ev.booking_url AS booking_url,
   CAST(ev.updated_at AS STRING) AS purchase_order_updated_at,
   TO_JSON_STRING(ARRAY(
     SELECT AS STRUCT

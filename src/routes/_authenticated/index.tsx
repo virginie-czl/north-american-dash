@@ -1241,7 +1241,13 @@ function SlaPage() {
                                   ) : null}
                                 </TableCell>
                                 <TableCell className="whitespace-nowrap font-mono font-medium">
-                                  {r.readable_id || "—"}
+                                  {r.booking_url ? (
+                                    <a href={r.booking_url} target="_blank" rel="noreferrer"
+                                      className="hover:underline underline-offset-2"
+                                      onClick={(e) => e.stopPropagation()}>
+                                      {r.readable_id || "—"}
+                                    </a>
+                                  ) : (r.readable_id || "—")}
                                   {childCount > 0 && (
                                     <span className="ml-1 text-[9.5px] text-muted-foreground">
                                       ({partners.length}p·{invoices.length}i)
@@ -1491,6 +1497,7 @@ function EventDetails({
   row: SlaRow;
 }) {
   const eventRef = row.readable_id ?? row.client_request_id ?? "";
+  const bookingUrl = row.booking_url ?? null;
   const { data: statusMap } = usePartnerStatuses();
   const { factsMap, actionFor } = useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
