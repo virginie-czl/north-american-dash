@@ -15,6 +15,7 @@ import { CreditCard, Landmark, Mail, Receipt } from "lucide-react";
 import type { PartnerFacts } from "@/lib/use-gmail";
 import { partnerKey } from "@/lib/annotations.functions";
 import {
+  missingQstForCanada,
   parseTaxRegistration,
   taxComplete,
   type PartnerAction,
@@ -142,40 +143,19 @@ export function TaxSticker({
   const ids = [registration.gst, registration.qst, registration.vat].filter(Boolean).join(" / ");
 
   if (onFile) {
+    const noQst = missingQstForCanada(registration, country);
+    // Recognised formats are shown parsed; anything else shows the raw value so
+    // the number can still be checked at a glance.
+    const detail = ids || registration.unparsed || "";
     return (
       <Sticker
         icon={<Receipt className={ICON} aria-hidden="true" />}
         label="Taxes en base"
         tone="good"
-        title={`Enregistré dans Naboo : ${ids}`}
-      />
-    );
-  }
-  // Partial registration is worth calling out: a Canadian partner with only a GST
-  // still cannot be invoiced correctly.
-  if (registration.usable) {
-    return (
-      <Sticker
-        icon={<Receipt className={ICON} aria-hidden="true" />}
-        label="Taxes incomplet"
-        tone="pending"
-        title={`En base : ${ids} — il manque ${
-          (country ?? "").toUpperCase() === "CA"
-            ? registration.gst
-              ? "le TVQ"
-              : "le GST/TPS"
-            : "un identifiant valide"
-        }`}
-      />
-    );
-  }
-  if (registration.unparsed) {
-    return (
-      <Sticker
-        icon={<Receipt className={ICON} aria-hidden="true" />}
-        label="Taxes illisible"
-        tone="bad"
-        title={`Valeur en base non reconnue : « ${registration.unparsed} » — à corriger`}
+        title={
+          `Enregistré dans Naboo : ${detail}` +
+          (noQst ? "\nGST présent, TVQ absent — à vérifier avant facturation." : "")
+        }
       />
     );
   }
@@ -204,7 +184,7 @@ export function TaxSticker({
       icon={<Receipt className={ICON} aria-hidden="true" />}
       label="Taxes absent"
       tone="none"
-      title="Rien en base et aucune demande retrouvée"
+      title="Aucun numéro en base et aucune demande retrouvée"
     />
   );
 }
@@ -368,8 +348,7 @@ export function EventStickers({
   // Tax: the least complete partner decides, so a 9-partner event with one gap
   // does not read as done.
   const taxLead = entries.reduce((worst, e) => {
-    const score = (x: typeof e) =>
-      taxComplete(x.registration, x.partner.country) ? 3 : x.registration.usable ? 2 : x.registration.unparsed ? 1 : 0;
+    const score = (x: typeof e) => (taxComplete(x.registration, x.partner.country) ? 1 : 0);
     return score(e) < score(worst) ? e : worst;
   });
 

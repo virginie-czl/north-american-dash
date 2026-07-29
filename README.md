@@ -72,6 +72,15 @@ The rules are heuristics over the vocabulary the team actually uses, in French a
 English, plus high-confidence identifier formats (IBAN, GST/BN `123456789 RT0001`,
 QST `1234567890 TQ0001`, EU VAT). Expect to tune them against real mail.
 
+**Tax registration: presence, not validity.** `owners.vat_number` is free text and
+holds everything from `121107726RT0001` to `//` to `0000000000000000000`. The rule
+is deliberately operational: if the field contains at least one non-zero digit, we
+hold a number and stop chasing — whether or not the format is one we recognise.
+Strings of zeros and punctuation-only values are treated as not filled in, since
+`0000` is the same gesture as `//`. Recognised formats are still parsed so the
+tooltip can show them, and `missingQstForCanada` surfaces a Canadian partner with a
+GST but no QST as information rather than as a chase.
+
 
 ### What gets scanned, and what does not
 

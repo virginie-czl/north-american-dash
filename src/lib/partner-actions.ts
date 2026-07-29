@@ -73,16 +73,35 @@ export function parseTaxRegistration(...sources: Array<string | null | undefined
   const gst = gstMatch ? `${gstMatch[1]}RT${gstMatch[2]}` : null;
   const qst = qstMatch ? `${qstMatch[1]}TQ${qstMatch[2]}` : null;
   const vat = vatMatch ? `${vatMatch[1]}${vatMatch[2]}` : null;
-  const usable = Boolean(gst || qst || vat);
+  const recognised = Boolean(gst || qst || vat);
 
-  return { gst, qst, vat, unparsed: usable ? null : text, usable };
+  // A registration counts as on file when the field holds real digits, whether or
+  // not the format is one we recognise: the operational question is "must we chase
+  // this partner?", not "does this validate?". Strings of zeros are excluded —
+  // "0000" is the same gesture as "//", someone clearing a required field.
+  const usable = recognised || /[1-9]/.test(text);
+
+  // `unparsed` means "we hold something we could not parse" — it only applies
+  // when the value counts as present at all, so zeros and placeholders stay null.
+  return { gst, qst, vat, unparsed: usable && !recognised ? text : null, usable };
 }
 
-/** Canadian partners need both halves; elsewhere one identifier is enough. */
-export function taxComplete(reg: TaxRegistration, country: string | null): boolean {
-  if (!reg.usable) return false;
-  if ((country ?? "").toUpperCase() === "CA") return Boolean(reg.gst && reg.qst);
-  return true;
+/**
+ * Whether we hold a tax registration for this partner.
+ *
+ * Presence is the test, not validity: if the field holds real digits we stop
+ * asking. Whether a Canadian partner has both GST and QST still matters for
+ * invoicing, so `missingQstForCanada` surfaces it as information — but it no
+ * longer triggers a chase.
+ */
+export function taxComplete(reg: TaxRegistration, _country: string | null): boolean {
+  return reg.usable;
+}
+
+/** Informational: a Canadian partner with a GST but no QST. */
+export function missingQstForCanada(reg: TaxRegistration, country: string | null): boolean {
+  if ((country ?? "").toUpperCase() !== "CA") return false;
+  return Boolean(reg.gst) && !reg.qst;
 }
 
 export type PaymentReadiness = "card" | "bank" | "none";
