@@ -365,7 +365,7 @@ export function PartnerStickers({
   const cardReady =
     cardApprovedInSlack === true ||
     facts?.card_payment === "accepted" ||
-    action.label.includes("carte");
+    action.payableBy === "card";
 
   // Nothing left to do: the contact and bank stickers are noise at that point.
   // Only the two facts worth keeping visible remain — the tax registration and

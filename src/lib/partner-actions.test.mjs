@@ -101,10 +101,10 @@ const a5 = decidePartnerAction(S({ taxRaw: "0000" }));
 t("paid, zeros only → still ask tax", a5.code === "ask_tax", a5.code);
 
 const a6 = decidePartnerAction(S({ outstanding: 5000, bankDetails: "received", taxRaw: registered }));
-t("owes, bank in hand → ours to pay", a6.code === "ours_pay" && !a6.scanUseful, a6.code);
+t("owes, bank in hand → Payout TBD", a6.code === "ours_pay" && a6.label === "Payout TBD" && a6.payableBy === "bank", JSON.stringify([a6.label, a6.payableBy]));
 
 const a7 = decidePartnerAction(S({ outstanding: 5000, cardEverAccepted: true, taxRaw: registered }));
-t("owes, card accepted before → pay by card", a7.code === "ours_pay" && a7.label.includes("carte"), a7.label);
+t("owes, card accepted before → payout by card", a7.code === "ours_pay" && a7.payableBy === "card", JSON.stringify([a7.label, a7.payableBy]));
 
 const a8 = decidePartnerAction(S({ outstanding: 5000 }));
 t("owes, nothing known → ask bank + tax", a8.code === "ask_bank_and_tax" && a8.scanUseful, a8.code);
@@ -143,7 +143,8 @@ if (fail) process.exitCode = 1;
     outstanding: 5000, taxRaw: reg, cardApprovedInSlack: true,
   }));
   t("Slack approval → payable by card, never ask IBAN",
-    slackApproved.code === "ours_pay" && slackApproved.label.includes("carte"), slackApproved.label);
+    slackApproved.code === "ours_pay" && slackApproved.payableBy === "card", JSON.stringify([slackApproved.label, slackApproved.payableBy]));
+  t("label is Payout TBD", slackApproved.label === "Payout TBD", slackApproved.label);
   t("detail cites the Slack channel",
     slackApproved.detail.includes("finance-paiement-by-card"), slackApproved.detail);
 
@@ -158,5 +159,40 @@ if (fail) process.exitCode = 1;
     !slackNoTax.detail.toLowerCase().includes("bancaire"), slackNoTax.detail);
 
   console.log(`\n[slack card] ${p} passed, ${f} failed`);
+  if (f) process.exitCode = 1;
+}
+
+// --- Payout TBD covers "not paid" and "partially paid" alike ---
+{
+  let p = 0, f = 0;
+  const t = (n, c, g = "") => { if (c) { p++; console.log("  ✓", n); } else { f++; console.log("  ✗", n, g); } };
+  const reg = "TPS 819512187RT0001 TVQ 1222113845TQ0001";
+  const base = {
+    hasPo: true, country: "CA", taxRaw: reg, taxIdentifier: null,
+    taxAsked: false, contacted: false, replied: false,
+    cardOnThisEvent: "unknown", cardEverAccepted: false,
+  };
+
+  // Nothing paid yet, bank details in hand
+  const notPaid = decidePartnerAction({ ...base, outstanding: 5000, bankDetails: "received" });
+  t("nothing paid + bank → Payout TBD", notPaid.label === "Payout TBD", notPaid.label);
+
+  // Partially paid — still outstanding, so still ours
+  const partial = decidePartnerAction({ ...base, outstanding: 1200, bankDetails: "received" });
+  t("partially paid + bank → Payout TBD", partial.label === "Payout TBD", partial.label);
+
+  // Card approved instead of bank
+  const byCard = decidePartnerAction({ ...base, outstanding: 5000, cardApprovedInSlack: true });
+  t("card approved → Payout TBD", byCard.label === "Payout TBD" && byCard.payableBy === "card", byCard.label);
+
+  // Fully paid → nothing to do, not a payout
+  const settled = decidePartnerAction({ ...base, outstanding: 0, bankDetails: "received" });
+  t("fully paid → settled, not Payout TBD", settled.code === "settled", settled.code);
+
+  // Owed but no means to pay → still a chase, not a payout
+  const noMeans = decidePartnerAction({ ...base, outstanding: 5000 });
+  t("owed without bank or card → not Payout TBD", noMeans.label !== "Payout TBD", noMeans.label);
+
+  console.log(`\n[payout] ${p} passed, ${f} failed`);
   if (f) process.exitCode = 1;
 }

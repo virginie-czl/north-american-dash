@@ -783,7 +783,7 @@ function SlaPage() {
       return paid > 0.01;
     });
     if (anyPartial)
-      return { label: "Payout to do", cls: "bg-sky-100 text-sky-800" };
+      return { label: "Payout TBD", cls: "bg-sky-100 text-sky-800" };
     // Contact is established either by the manual dropdown or by the email scan —
     // a row must not read "Contact TBD" when an email has demonstrably gone out.
     const contactMade = active.map((p) => {

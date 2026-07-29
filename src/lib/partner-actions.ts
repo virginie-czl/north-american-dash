@@ -141,6 +141,8 @@ export type PartnerSituation = {
 
 export type PartnerAction = {
   code: ActionCode;
+  /** How this partner is payable, when we hold the means. */
+  payableBy?: PaymentReadiness;
   /** Who has to move next. */
   owner: "us" | "partner" | "nobody";
   /** Whether searching the mailbox could still change this verdict. */
@@ -226,13 +228,17 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
       code: "ours_pay",
       owner: "us",
       scanUseful: false,
-      label: readiness === "card" ? "À payer (carte)" : "À payer (virement)",
+      // We hold the means to pay and something is still outstanding — whether
+      // nothing has gone out yet or only part of it. Either way the next move is
+      // ours, so it reads the same.
+      payableBy: readiness,
+      label: "Payout TBD",
       detail:
         readiness === "card"
           ? s.cardApprovedInSlack === true
-            ? "Carte approuvée dans #finance-paiement-by-card — pas besoin de coordonnées bancaires."
-            : "Le partenaire a explicitement accepté la carte — pas besoin de coordonnées bancaires."
-          : "Coordonnées bancaires en main ; le paiement est de notre côté.",
+            ? "Payable par carte (approuvée dans #finance-paiement-by-card) — reste à décaisser."
+            : "Payable par carte (acceptation explicite du partenaire) — reste à décaisser."
+          : "Coordonnées bancaires en main — reste à décaisser.",
     };
   }
 
