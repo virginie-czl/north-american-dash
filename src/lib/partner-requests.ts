@@ -22,6 +22,13 @@ export type RequestTarget = {
   currency: string | null;
   amountDue: number | null;
   needs: Needs;
+  /**
+   * What to call the event in the email body — "your payment for the ${x} event".
+   * Defaults to "L'Oréal Canada" (this template's original, single-client wording)
+   * when omitted, so existing callers are unaffected. Multi-client trackers like
+   * Marketplace NA should pass the actual client/company name per booking.
+   */
+  eventClientLabel?: string;
 };
 
 export type PartnerInput = {
@@ -34,6 +41,7 @@ export type PartnerInput = {
   amountDue: number | null;
   action: PartnerAction;
   isCancelled?: boolean | null;
+  eventClientLabel?: string;
 };
 
 /** What this partner still needs, or null when nothing is missing. */
@@ -65,6 +73,7 @@ export function buildTargets(partners: PartnerInput[]): RequestTarget[] {
       currency: p.currency,
       amountDue: p.amountDue,
       needs: needsOf(p.action, p.country)!,
+      eventClientLabel: p.eventClientLabel,
     }));
 }
 
@@ -98,7 +107,7 @@ export function composeRequest(target: RequestTarget): Composed {
 
 Hope you're doing well! ☀️
 
-I'm reaching out from Naboo regarding your payment for the L'Oréal Canada event (${ref}${dateStr}).
+I'm reaching out from Naboo regarding your payment for the ${target.eventClientLabel ?? "L'Oréal Canada"} event (${ref}${dateStr}).
 
 The easiest way for us to pay you is by credit card — if that works for you, just let me know and I can arrange that quickly!
 
@@ -125,7 +134,7 @@ Thanks so much!`,
 
 Hope you're doing well! ☀️
 
-I'm reaching out from Naboo regarding your payment for the L'Oréal Canada event (${ref}${dateStr}).
+I'm reaching out from Naboo regarding your payment for the ${target.eventClientLabel ?? "L'Oréal Canada"} event (${ref}${dateStr}).
 
 Could you share your tax number (GST/HST and provincial if applicable)? We need it for our records.
 
@@ -140,7 +149,7 @@ Thanks so much!`,
 
 Hope you're doing well! ☀️
 
-I'm reaching out from Naboo regarding your payment for the L'Oréal Canada event (${ref}${dateStr}).
+I'm reaching out from Naboo regarding your payment for the ${target.eventClientLabel ?? "L'Oréal Canada"} event (${ref}${dateStr}).
 
 The easiest way for us to pay you is by credit card — if that works for you, just let me know and I can arrange that quickly!
 

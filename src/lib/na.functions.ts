@@ -3,6 +3,8 @@ import { createServerFn } from "@tanstack/react-start";
 export interface NaPartnerLine {
   name: string | null;
   email: string | null;
+  /** The contact's own first name (owners.firstname) — distinct from the venue/company name. */
+  contact_first_name: string | null;
   currency: string | null;
   gmv_ttc: number | null;
   paid: number | null;
@@ -66,6 +68,7 @@ partners_ap AS (
         'Prestataire inconnu'
       ) AS name,
       NULLIF(o.email, '') AS email,
+      NULLIF(o.firstname, '') AS contact_first_name,
       ap.currency AS currency,
       CAST(ap.p_live_gmv_ttc_ccy AS FLOAT64) AS gmv_ttc,
       CAST(ap.p_disbursed_total_ccy AS FLOAT64) AS paid,
@@ -131,6 +134,7 @@ partners_fi AS (
         'Prestataire inconnu'
       ) AS name,
       NULLIF(o2.email, '') AS email,
+      NULLIF(o2.firstname, '') AS contact_first_name,
       part.currency AS currency,
       CAST(ROUND(part.liveconfirmed.netpayable.withtaxes / 10000, 2) AS FLOAT64) AS gmv_ttc,
       CAST(ROUND(part.disbursedtotal / 10000, 2) AS FLOAT64) AS paid,
@@ -184,7 +188,7 @@ SELECT
   ) AS balance_ccy,
   TO_JSON_STRING(
     IFNULL(p.items, IFNULL(pfi.items, CAST([] AS ARRAY<STRUCT<
-      name STRING, email STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
+      name STRING, email STRING, contact_first_name STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
       outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, commission FLOAT64,
       locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
       is_provision BOOL, payment_method STRING, vat_raw STRING, tax_identifier STRING, country STRING

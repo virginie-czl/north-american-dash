@@ -9,6 +9,19 @@ import { PartnerEmails } from "@/components/partner-emails";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
 import { buildTargets, needsOf, describeNeeds } from "@/lib/partner-requests";
+import {
+  NaCommissionRequestDialog,
+  useNaCommissionRequestDialog,
+  type NaCommissionTarget,
+} from "@/components/na-commission-request-dialog";
+import {
+  partnerClawback,
+  rowClawbackSplit,
+  naContactFor,
+  composeNaCommissionRequest,
+  composeNaRefundRequest,
+  composeNaCombinedRequest,
+} from "@/lib/na-commission-requests";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useGmailConnection, useFactScan } from "@/lib/use-gmail";
 import {
@@ -218,36 +231,8 @@ function rowPartnerToPay(row: NaRow, partners: ReturnType<typeof parseNaPartners
   return partnerToBePaidTotals(totals, partners);
 }
 
-type ClawbackSplit = { commission: Map<string, number>; refund: Map<string, number> };
-
-function rowClawbackSplit(partners: ReturnType<typeof parseNaPartners>): ClawbackSplit {
-  const commission = new Map<string, number>();
-  const refund = new Map<string, number>();
-  for (const p of partners) {
-    if (p.is_provision) continue;
-    const ro = p.raw_outstanding ?? 0;
-    if (ro >= -0.01) continue;
-    const overpaid = Math.abs(ro);
-    const comm = Math.max(p.commission ?? 0, 0);
-    const commPart = Math.min(overpaid, comm);
-    const refundPart = Math.max(overpaid - comm, 0);
-    const c = p.currency ?? "—";
-    if (commPart > 0.01) commission.set(c, (commission.get(c) ?? 0) + commPart);
-    if (refundPart > 0.01) refund.set(c, (refund.get(c) ?? 0) + refundPart);
-  }
-  return { commission, refund };
-}
-
-function partnerClawback(p: NaPartnerLine): { commission: number; refund: number } {
-  if (p.is_provision) return { commission: 0, refund: 0 };
-  const ro = p.raw_outstanding ?? 0;
-  if (ro >= -0.01) return { commission: 0, refund: 0 };
-  const overpaid = Math.abs(ro);
-  const comm = Math.max(p.commission ?? 0, 0);
-  const commPart = Math.min(overpaid, comm);
-  const refundPart = Math.max(overpaid - comm, 0);
-  return { commission: commPart, refund: refundPart };
-}
+// partnerClawback / rowClawbackSplit moved to na-commission-requests.ts —
+// the commission/refund request emails need the same math.
 
 function csvEscape(v: unknown): string {
   if (v == null) return "";
@@ -537,6 +522,7 @@ function NaPage() {
   const { data: gmailConnection } = useGmailConnection();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const requestDialog = useRequestDialog();
+  const commissionRefundDialog = useNaCommissionRequestDialog();
 
   const incompleteTargets = useMemo(
     () =>
@@ -544,15 +530,59 @@ function NaPage() {
         sorted.flatMap(({ row: r, partners: ps }) => {
           const ref = r.readable_id ?? "";
           return ps
+            // Overpaid partners are a commission-to-recover / refund case, not a
+            // bank-or-tax gap — asking them to send bank details makes no sense
+            // when we already paid them too much.
             .filter((p) => !p.is_provision)
+            .filter((p) => {
+              const cb = partnerClawback(p);
+              return cb.commission < 0.01 && cb.refund < 0.01;
+            })
             .map((p) => {
-              const a = actionFor(ref, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, false);
-              return { eventRef: ref, eventDate: r.start_date ?? null, name: p.name, email: p.email, country: null, currency: p.currency, amountDue: p.outstanding, action: a, isCancelled: p.is_provision };
+              const a = actionFor(ref, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, true, { taxTracked: false });
+              return { eventRef: ref, eventDate: r.start_date ?? null, name: p.name, email: p.email, country: null, currency: p.currency, amountDue: p.outstanding, action: a, isCancelled: p.is_provision, eventClientLabel: r.company_name ?? undefined };
             });
         }),
       ),
     [sorted, actionFor],
   );
+
+  // Overpaid partners: ask for whichever applies — the commission we're owed,
+  // a refund beyond that, or both. One email per partner, never combined
+  // across different partners on the same booking — a booking can have
+  // several unrelated vendors, and a venue should never see a caterer's figures.
+  const commissionRefundTargets = useMemo<NaCommissionTarget[]>(() => {
+    const targets: NaCommissionTarget[] = [];
+    for (const { row: r, partners: ps } of sorted) {
+      const eventRef = r.readable_id ?? "";
+      for (const p of ps) {
+        if (p.is_provision) continue;
+        const cb = partnerClawback(p);
+        if (cb.commission <= 0.01 && cb.refund <= 0.01) continue;
+
+        const contact = naContactFor(p);
+        if (!contact.address) continue;
+
+        if (cb.commission > 0.01 && cb.refund > 0.01) {
+          const combined = composeNaCombinedRequest(r, p, contact);
+          if (combined) {
+            targets.push({ eventRef, partnerName: p.name, address: contact.address, contactName: contact.name, ...combined, mode: "combined" });
+          }
+        } else if (cb.commission > 0.01) {
+          const commission = composeNaCommissionRequest(r, p, contact);
+          if (commission) {
+            targets.push({ eventRef, partnerName: p.name, address: contact.address, contactName: contact.name, ...commission, mode: "commission" });
+          }
+        } else {
+          const refund = composeNaRefundRequest(r, p, contact);
+          if (refund) {
+            targets.push({ eventRef, partnerName: p.name, address: contact.address, contactName: contact.name, ...refund, mode: "refund" });
+          }
+        }
+      }
+    }
+    return targets;
+  }, [sorted]);
 
   useRegisterTrackerActions(
     {
@@ -654,7 +684,7 @@ function NaPage() {
                       startScan(
                         sorted
                           .filter(({ row: r, partners: ps }) =>
-                            eventNeedsScan(r.readable_id ?? "", ps.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision })), false)
+                            eventNeedsScan(r.readable_id ?? "", ps.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision })), true, { taxTracked: false })
                           )
                           .map(({ row: r, partners: ps }) => ({
                             event_ref: r.readable_id ?? "",
@@ -675,6 +705,17 @@ function NaPage() {
                     >
                       <Mail className="h-3.5 w-3.5" aria-hidden="true" />
                       Request missing info ({incompleteTargets.length})
+                    </Button>
+                  )}
+                  {commissionRefundTargets.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => commissionRefundDialog.open(commissionRefundTargets)}
+                    >
+                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                      Request commission / refund ({commissionRefundTargets.length})
                     </Button>
                   )}
                 </>
@@ -765,9 +806,11 @@ function NaPage() {
                               <EventStickers
                                 eventRef={id}
                                 partners={partners.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision }))}
-                                hasPo={false}
+                                hasPo={true}
                                 factsMap={factsMap}
-                                actionFor={(ref, partner, hasPo) => actionFor(ref, partner, hasPo)}
+                                actionFor={(ref, partner, hasPo) => actionFor(ref, partner, hasPo, { taxTracked: false })}
+                                hideTax
+                                hideCardPending
                               />
                             </td>
                             <td className="na-cell">
@@ -871,6 +914,12 @@ function NaPage() {
         </div>
       {requestDialog.targets && (
         <RequestInfoDialog targets={requestDialog.targets} onClose={requestDialog.close} />
+      )}
+      {commissionRefundDialog.targets && (
+        <NaCommissionRequestDialog
+          targets={commissionRefundDialog.targets}
+          onClose={commissionRefundDialog.close}
+        />
       )}
     </div>
   );
@@ -1206,9 +1255,11 @@ function PartnerSectionCard({
                   )}
                   {!prov && (
                     <PartnerStickers
-                      action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, false)}
+                      action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, true, { taxTracked: false })}
                       facts={factsMap?.get(`${id}::${(p.name ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`)}
                       partner={{ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }}
+                      hideTax
+                      hideCardPending
                     />
                   )}
                 </td>
