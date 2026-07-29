@@ -21,6 +21,12 @@ import {
   composeNaRefundRequest,
   composeNaCombinedRequest,
 } from "@/lib/na-commission-requests";
+import {
+  fetchNaFinancialSummaries,
+  generateNaFinancialSummary,
+  type NaFinancialSummary,
+} from "@/lib/na-financial-summary.functions";
+import { partnerKey } from "@/lib/annotations.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useGmailConnection, useFactScan } from "@/lib/use-gmail";
 import {
@@ -522,6 +528,33 @@ function NaPage() {
   const { progress: scanProgress, start: startScan } = useFactScan();
   const requestDialog = useRequestDialog();
   const commissionRefundDialog = useNaCommissionRequestDialog();
+  const queryClient = useQueryClient();
+
+  const { data: financialSummaries } = useQuery({
+    queryKey: ["na-financial-summaries"],
+    queryFn: async () => {
+      const rows = await fetchNaFinancialSummaries();
+      const map = new Map<string, NaFinancialSummary>();
+      for (const r of rows) map.set(`${r.event_ref}::${r.partner_key}`, r);
+      return map;
+    },
+    staleTime: 60_000,
+  });
+
+  const summarize = useMutation({
+    mutationFn: (input: { event_ref: string; partner_name: string; partner_email: string | null }) =>
+      generateNaFinancialSummary({ data: input }),
+    onSuccess: (result) => {
+      queryClient.setQueryData<Map<string, NaFinancialSummary>>(
+        ["na-financial-summaries"],
+        (prev) => {
+          const next = new Map(prev ?? []);
+          next.set(`${result.event_ref}::${result.partner_key}`, result);
+          return next;
+        },
+      );
+    },
+  });
 
   const incompleteTargets = useMemo(
     () =>
@@ -867,7 +900,17 @@ function NaPage() {
                             <tr className="na-drawer-row">
                               <td colSpan={15} className="p-0">
                                 <div className="na-drawer-wrap">
-                                  <PartnerSectionCard id={id} partners={partners} totals={totals} actionFor={actionFor} factsMap={factsMap} />
+                                  <PartnerSectionCard
+                                    id={id}
+                                    partners={partners}
+                                    totals={totals}
+                                    actionFor={actionFor}
+                                    factsMap={factsMap}
+                                    financialSummaries={financialSummaries}
+                                    gmailConnected={gmailConnection?.connected === true}
+                                    onSummarize={(input) => summarize.mutate(input)}
+                                    summarizing={summarize.isPending ? summarize.variables : null}
+                                  />
                                   {gmailConnection?.connected && (
                                     <div className="mt-4">
                                       <PartnerEmails
@@ -1195,12 +1238,20 @@ function PartnerSectionCard({
   totals,
   actionFor,
   factsMap,
+  financialSummaries,
+  gmailConnected,
+  onSummarize,
+  summarizing,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
   totals: ReturnType<typeof sumPartners>;
   actionFor: ReturnType<typeof useActionIndex>["actionFor"];
   factsMap: ReturnType<typeof useActionIndex>["factsMap"];
+  financialSummaries: Map<string, NaFinancialSummary> | undefined;
+  gmailConnected: boolean;
+  onSummarize: (input: { event_ref: string; partner_name: string; partner_email: string | null }) => void;
+  summarizing: { event_ref: string; partner_name: string; partner_email: string | null } | null;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
@@ -1250,13 +1301,31 @@ function PartnerSectionCard({
                     </a>
                   )}
                   {!prov && (
-                    <PartnerStickers
-                      action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }, true, { taxTracked: false })}
-                      facts={factsMap?.get(`${id}::${(p.name ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`)}
-                      partner={{ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }}
-                      hideTax
-                      hideCardPending
-                    />
+                    <>
+                      <PartnerStickers
+                        action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }, true, { taxTracked: false })}
+                        facts={factsMap?.get(`${id}::${(p.name ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`)}
+                        partner={{ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }}
+                        hideTax
+                        hideCardPending
+                      />
+                      {gmailConnected && (
+                        <NaFinancialSummaryBox
+                          existing={financialSummaries?.get(`${id}::${partnerKey(p.name ?? p.email ?? "")}`)}
+                          loading={
+                            summarizing?.event_ref === id &&
+                            summarizing?.partner_name === (p.name ?? p.email ?? "")
+                          }
+                          onSummarize={() =>
+                            onSummarize({
+                              event_ref: id,
+                              partner_name: p.name ?? p.email ?? "",
+                              partner_email: p.email,
+                            })
+                          }
+                        />
+                      )}
+                    </>
                   )}
                 </td>
                 <td className="text-right">
@@ -1289,6 +1358,41 @@ function PartnerSectionCard({
       </table>
       <div className="na-section-caption px-[14px] pb-3">{caption}</div>
     </section>
+  );
+}
+
+/** AI-written recap of this partner's email thread — generated on click, shared once saved. */
+function NaFinancialSummaryBox({
+  existing,
+  loading,
+  onSummarize,
+}: {
+  existing: NaFinancialSummary | undefined;
+  loading: boolean;
+  onSummarize: () => void;
+}) {
+  return (
+    <div className="mt-1.5 rounded-md border border-border bg-slate-50 px-2 py-1.5">
+      {existing ? (
+        <>
+          <p className="text-[11px] leading-relaxed text-text-secondary">{existing.summary}</p>
+          <p className="mt-1 text-[10px] text-text-muted">
+            {existing.message_count} message{existing.message_count === 1 ? "" : "s"} ·{" "}
+            {existing.generated_by ?? "—"}
+          </p>
+        </>
+      ) : (
+        <p className="text-[11px] text-text-muted">No financial summary yet.</p>
+      )}
+      <button
+        type="button"
+        onClick={onSummarize}
+        disabled={loading}
+        className="mt-1 inline-flex items-center gap-1 text-[11px] text-sky-800 underline-offset-2 hover:underline disabled:opacity-50"
+      >
+        {loading ? "Summarizing…" : existing ? "Re-summarize" : "Summarize financials"}
+      </button>
+    </div>
   );
 }
 

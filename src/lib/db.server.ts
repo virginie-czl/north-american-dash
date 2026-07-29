@@ -137,6 +137,21 @@ const SCHEMA_STATEMENTS = [
      refreshed_at timestamptz NOT NULL DEFAULT now(),
      CHECK (id = 1)
    )`,
+  // AI-written financial summary of a partner's email thread (Marketplace NA).
+  // A step beyond the rest of the annotation layer: partner_email_facts only
+  // ever stores derived yes/no verdicts, never content — this table stores an
+  // LLM's paraphrase of the thread, shared with the whole team on purpose so
+  // a colleague without Gmail access still sees why a booking is flagged.
+  `CREATE TABLE IF NOT EXISTS na_financial_summary (
+     event_ref text NOT NULL,
+     partner_key text NOT NULL,
+     partner_name text,
+     summary text NOT NULL,
+     message_count integer NOT NULL DEFAULT 0,
+     generated_at timestamptz NOT NULL DEFAULT now(),
+     generated_by text,
+     PRIMARY KEY (event_ref, partner_key)
+   )`,
 ];
 
 /** Applies the schema once per instance. Every statement is idempotent. */
