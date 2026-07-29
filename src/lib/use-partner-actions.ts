@@ -19,6 +19,12 @@ export type ActionablePartner = {
   tax_identifier: string | null;
   country: string | null;
   is_cancelled?: boolean | null;
+  /**
+   * Card acceptance already known from the source data itself (e.g. Marketplace
+   * NA's payment_method field), independent of the Gmail scan. Takes priority
+   * over the scan's card_payment verdict when set.
+   */
+  cardOnThisEvent?: "accepted" | "refused";
 };
 
 export function useActionIndex() {
@@ -67,7 +73,7 @@ export function useActionIndex() {
         taxAsked: facts?.tax_info === "asked" || facts?.tax_info === "received",
         contacted: facts?.contacted_at != null,
         replied: facts?.replied_at != null,
-        cardOnThisEvent: facts?.card_payment ?? "unknown",
+        cardOnThisEvent: partner.cardOnThisEvent ?? facts?.card_payment ?? "unknown",
         cardEverAccepted: cardEverAccepted.has(key),
         cardApprovedInSlack:
           partner.owner_code != null &&

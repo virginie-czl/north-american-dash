@@ -315,6 +315,8 @@ export type StickerPartner = {
   tax_identifier: string | null;
   country: string | null;
   is_cancelled?: boolean | null;
+  /** Card acceptance already known from the source data (e.g. payment_method), passed through to actionFor. */
+  cardOnThisEvent?: "accepted" | "refused";
 };
 
 /** One partner, inside the event drawer. */

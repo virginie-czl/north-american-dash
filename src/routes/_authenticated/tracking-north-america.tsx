@@ -6,7 +6,6 @@ import {
 } from "@/components/tracker-chrome";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { PartnerEmails } from "@/components/partner-emails";
-import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
 import { buildTargets, needsOf, describeNeeds } from "@/lib/partner-requests";
 import {
@@ -539,7 +538,7 @@ function NaPage() {
               return cb.commission < 0.01 && cb.refund < 0.01;
             })
             .map((p) => {
-              const a = actionFor(ref, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, true, { taxTracked: false });
+              const a = actionFor(ref, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }, true, { taxTracked: false });
               return { eventRef: ref, eventDate: r.start_date ?? null, name: p.name, email: p.email, country: null, currency: p.currency, amountDue: p.outstanding, action: a, isCancelled: p.is_provision, eventClientLabel: r.company_name ?? undefined };
             });
         }),
@@ -684,7 +683,7 @@ function NaPage() {
                       startScan(
                         sorted
                           .filter(({ row: r, partners: ps }) =>
-                            eventNeedsScan(r.readable_id ?? "", ps.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision })), true, { taxTracked: false })
+                            eventNeedsScan(r.readable_id ?? "", ps.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined })), true, { taxTracked: false })
                           )
                           .map(({ row: r, partners: ps }) => ({
                             event_ref: r.readable_id ?? "",
@@ -805,7 +804,7 @@ function NaPage() {
                               <CommentersChip summary={commentSummaries?.get(id)} />
                               <EventStickers
                                 eventRef={id}
-                                partners={partners.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision }))}
+                                partners={partners.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }))}
                                 hasPo={true}
                                 factsMap={factsMap}
                                 actionFor={(ref, partner, hasPo) => actionFor(ref, partner, hasPo, { taxTracked: false })}
@@ -869,9 +868,6 @@ function NaPage() {
                               <td colSpan={15} className="p-0">
                                 <div className="na-drawer-wrap">
                                   <PartnerSectionCard id={id} partners={partners} totals={totals} actionFor={actionFor} factsMap={factsMap} />
-                                  <div className="mt-4">
-                                    <PartnerInvoicePdfs clientRequestId={row.client_request_id} />
-                                  </div>
                                   {gmailConnection?.connected && (
                                     <div className="mt-4">
                                       <PartnerEmails
@@ -1255,7 +1251,7 @@ function PartnerSectionCard({
                   )}
                   {!prov && (
                     <PartnerStickers
-                      action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }, true, { taxTracked: false })}
+                      action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }, true, { taxTracked: false })}
                       facts={factsMap?.get(`${id}::${(p.name ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`)}
                       partner={{ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }}
                       hideTax
