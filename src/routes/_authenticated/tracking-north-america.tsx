@@ -263,6 +263,7 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     "Client invoiced",
     "Client paid",
     "Client outstanding",
+    "Free invoicing",
     "Partner name",
     "Partner email",
     "Partner currency",
@@ -293,6 +294,7 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
       row.invoiced_ccy ?? "",
       row.paid_ccy ?? "",
       row.balance_ccy ?? "",
+      row.free_invoicing_status ?? "OK",
     ];
     if (partners.length === 0) {
       lines.push([...base, "", "", "", "", "", "", "", "", "", "", ""].map(csvEscape).join(","));
@@ -832,6 +834,14 @@ function NaPage() {
                               {ccyClient && (
                                 <div className="mt-1 inline-flex rounded border border-border px-1.5 py-0 text-[10px] font-medium text-text-muted">
                                   {ccyLabel(ccyClient)}
+                                </div>
+                              )}
+                              {row.free_invoicing_status && (
+                                <div
+                                  className="mt-1 inline-flex rounded bg-amber-100 px-1.5 py-0 text-[10px] font-semibold text-amber-800"
+                                  title="Not in the free-invoicing table — partner data comes from vw_reconciliation_master instead"
+                                >
+                                  {row.free_invoicing_status}
                                 </div>
                               )}
                               <CommentersChip summary={commentSummaries?.get(id)} />
