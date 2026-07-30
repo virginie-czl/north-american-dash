@@ -57,6 +57,29 @@ fi_base AS (
   WHERE fi.deleted = false
   GROUP BY crid
 ),
+-- Client-side total/invoiced source: the confirmed proposal's own priced
+-- totals, cross-checked against real client invoices. vw_balance_agee_ar has
+-- no row at all for some bookings, and the "live" GMV estimates
+-- (fct_export_events_scd1, and this same view's bk_live_* fields) have both
+-- been seen to disagree with the real invoiced amount — this is the one
+-- source that has matched a real invoice byte-for-byte so far.
+--
+-- Filters on booking_status only, NOT is_current_proposal_phase_quote: that
+-- flag lives at the per-quote level and has been seen to go transiently NULL
+-- (along with partner_name/quote_id/gmv) while this view recomputes live.
+-- source_client_proposal_id is a proposal-level field that survives that
+-- window, so this CTE stays correct even when partners_rm_dedup below is
+-- temporarily starved of data for the same booking.
+client_proposal_totals AS (
+  SELECT DISTINCT
+    rm.client_request_readable_id AS rid,
+    CAST(cp.price_totals_total_client_with_fees_at_date AS FLOAT64) / 10000 AS gmv_client_ccy,
+    CAST(cp.price_totals_total_client_with_fees_billed AS FLOAT64) / 10000 AS invoiced_ccy
+  FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
+  JOIN \`naboo-app-365515.raw_naboo_data.client_proposals\` cp ON cp.client_proposal_id = rm.source_client_proposal_id
+  WHERE rm.booking_status = 'ACCEPTED'
+    AND rm.source_client_proposal_id IS NOT NULL
+),
 -- Partner data source: one row per partner, already reconciled server-side.
 -- Same view Commissions NA already uses.
 --
@@ -121,45 +144,52 @@ partners_rm AS (
   FROM partners_rm_dedup
   GROUP BY rid
 )
+base AS (
+  SELECT
+    e.client_request_readable_id AS readable_id,
+    e.clientRequestId AS client_request_id,
+    e.company_name,
+    e.sales_referent,
+    e.em_referent,
+    e.days_before_start,
+    COALESCE(e.currency_client, fi.currency) AS currency_client,
+    e.event_name,
+    CAST(e.start_date AS STRING) AS start_date,
+    CAST(e.end_date AS STRING) AS end_date,
+    e.event_type,
+    e.participants,
+    e.billing_entity,
+    e.booking_url,
+    COALESCE(cpt.gmv_client_ccy, CAST(e.live_gross_gmv_ttc_clcurrency AS FLOAT64), fi.gmv) AS gmv_client_ccy,
+    CAST(e.live_gross_gmv_ttc_eur AS FLOAT64) AS gmv_client_eur,
+    COALESCE(cpt.invoiced_ccy, CAST(ar.total_invoiced_ccy AS FLOAT64)) AS invoiced_ccy,
+    COALESCE(CAST(ar.total_paid_client_ccy AS FLOAT64), fi.paid) AS paid_ccy,
+    CAST(ar.balance_client_ccy AS FLOAT64) AS ar_balance_ccy,
+    TO_JSON_STRING(
+      IFNULL(p.items, CAST([] AS ARRAY<STRUCT<
+        name STRING, email STRING, contact_first_name STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
+        outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, commission FLOAT64,
+        locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
+        is_provision BOOL, payment_method STRING, vat_raw STRING, tax_identifier STRING, country STRING
+      >>))
+    ) AS partners_json
+  FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
+  LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
+    ON ar.readable_id = e.client_request_readable_id
+  LEFT JOIN fi_base fi ON fi.crid = e.clientRequestId
+  LEFT JOIN client_proposal_totals cpt ON cpt.rid = e.client_request_readable_id
+  LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
+  WHERE e.bk_market = 'North America'
+    AND e.booking_status = 'ACCEPTED'
+)
 SELECT
-  e.client_request_readable_id AS readable_id,
-  e.clientRequestId AS client_request_id,
-  e.company_name,
-  e.sales_referent,
-  e.em_referent,
-  e.days_before_start,
-  COALESCE(e.currency_client, fi.currency) AS currency_client,
-  e.event_name,
-  CAST(e.start_date AS STRING) AS start_date,
-  CAST(e.end_date AS STRING) AS end_date,
-  e.event_type,
-  e.participants,
-  e.billing_entity,
-  e.booking_url,
-  COALESCE(CAST(e.live_gross_gmv_ttc_clcurrency AS FLOAT64), fi.gmv) AS gmv_client_ccy,
-  CAST(e.live_gross_gmv_ttc_eur AS FLOAT64) AS gmv_client_eur,
-  CAST(ar.total_invoiced_ccy AS FLOAT64) AS invoiced_ccy,
-  COALESCE(CAST(ar.total_paid_client_ccy AS FLOAT64), fi.paid) AS paid_ccy,
-  COALESCE(
-    CAST(ar.balance_client_ccy AS FLOAT64),
-    CASE WHEN fi.gmv IS NOT NULL THEN ROUND(COALESCE(fi.gmv, 0) - COALESCE(fi.paid, 0), 2) END
-  ) AS balance_ccy,
-  TO_JSON_STRING(
-    IFNULL(p.items, CAST([] AS ARRAY<STRUCT<
-      name STRING, email STRING, contact_first_name STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
-      outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, commission FLOAT64,
-      locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
-      is_provision BOOL, payment_method STRING, vat_raw STRING, tax_identifier STRING, country STRING
-    >>))
-  ) AS partners_json
-FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
-LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
-  ON ar.readable_id = e.client_request_readable_id
-LEFT JOIN fi_base fi ON fi.crid = e.clientRequestId
-LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
-WHERE e.bk_market = 'North America'
-  AND e.booking_status = 'ACCEPTED'
-ORDER BY e.start_date DESC NULLS LAST
+  readable_id, client_request_id, company_name, sales_referent, em_referent, days_before_start,
+  currency_client, event_name, start_date, end_date, event_type, participants, billing_entity, booking_url,
+  gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy,
+  COALESCE(ar_balance_ccy, ROUND(gmv_client_ccy - COALESCE(paid_ccy, 0), 2)) AS balance_ccy,
+  partners_json
+FROM base
+ORDER BY start_date DESC NULLS LAST
 LIMIT 3000
 `;
 
