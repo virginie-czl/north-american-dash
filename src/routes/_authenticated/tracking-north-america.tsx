@@ -267,8 +267,8 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     "Partner email",
     "Partner currency",
     "Partner GMV",
-    "Partner payable to date",
     "Partner payable (event)",
+    "Partner payable to date",
     "Partner paid",
     "Partner outstanding",
     "Commission to recover",
@@ -307,8 +307,8 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
             p.email ?? "",
             p.currency ?? "",
             p.gmv_ttc ?? "",
-            p.payable_to_date ?? "",
             p.payable ?? "",
+            p.payable_to_date ?? "",
             p.paid ?? "",
             p.outstanding ?? "",
             cb.commission > 0.01 ? cb.commission.toFixed(2) : "",
@@ -1275,11 +1275,11 @@ function PartnerSectionCard({
             <th>Partner</th>
             <th className="text-right">GMV</th>
             <th className="text-right">Commission</th>
-            <th className="text-right" title="Invoiced to the client for this partner, less commission — what is owed right now">
-              Payable to date
-            </th>
             <th className="text-right" title="Whole event: gross less commission">
               Payable (event)
+            </th>
+            <th className="text-right" title="Invoiced to the client for this partner, less commission — what is owed right now">
+              Payable to date
             </th>
             <th className="text-right">Paid</th>
             <th className="text-right">Outstanding</th>
@@ -1342,14 +1342,14 @@ function PartnerSectionCard({
                   {prov || p.commission == null ? <span className="text-text-muted">—</span> : <Money value={p.commission} currency={p.currency} kind="muted" />}
                 </td>
                 <td className="text-right">
+                  {prov ? <span className="text-text-muted">—</span> : <Money value={p.payable} currency={p.currency} />}
+                </td>
+                <td className="text-right">
                   {prov ? (
                     <span className="text-text-muted">—</span>
                   ) : (
                     <Money value={p.payable_to_date} currency={p.currency} />
                   )}
-                </td>
-                <td className="text-right">
-                  {prov ? <span className="text-text-muted">—</span> : <Money value={p.payable} currency={p.currency} />}
                 </td>
                 <td className="text-right">
                   {prov ? <span className="text-text-muted">—</span> : <Money value={p.paid} currency={p.currency} />}
@@ -1364,8 +1364,8 @@ function PartnerSectionCard({
             <td className="text-[10.5px] uppercase tracking-wide text-text-muted">Subtotal</td>
             <td className="text-right"><MultiMoney map={totals} field="gmv" /></td>
             <td className="text-right"><MultiMoney map={totals} field="commission" kind="muted" /></td>
-            <td className="text-right"><MultiMoney map={totals} field="payableToDate" /></td>
             <td className="text-right"><MultiMoney map={totals} field="payable" kind="muted" /></td>
+            <td className="text-right"><MultiMoney map={totals} field="payableToDate" /></td>
             <td className="text-right"><MultiMoney map={totals} field="paid" /></td>
             <td className="text-right"><MultiMoney map={totals} field="outstanding" kind="danger" /></td>
           </tr>
