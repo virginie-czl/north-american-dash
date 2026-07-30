@@ -143,7 +143,7 @@ partners_rm AS (
     )) AS items
   FROM partners_rm_dedup
   GROUP BY rid
-)
+),
 base AS (
   SELECT
     e.client_request_readable_id AS readable_id,
