@@ -11,6 +11,8 @@ export interface NaPartnerLine {
   outstanding: number | null;
   raw_outstanding: number | null;
   payable: number | null;
+  /** Owed right now: invoiced to the client for this partner, less commission. */
+  payable_to_date: number | null;
   commission: number | null;
   locked: boolean | null;
   locked_by_admin: boolean | null;
@@ -92,6 +94,32 @@ client_proposal_totals AS (
 -- practice — a booking fct_export_events_scd1 calls North America, this
 -- view called "RoW"). The outer query already scopes everything to NA via
 -- the driving table.
+-- Invoiced to the client, per partner quote.
+--
+-- For free-invoicing bookings the amount owed to a provider *right now* is not
+-- the whole-event total: it is what has actually been invoiced to the client for
+-- that provider, less our commission. On C-U775 the back office shows
+-- €14,112.00 of third-party services invoiced and an Amount payable of
+-- €11,033.02 — that is 14,112.00 - 3,078.98 of commission.
+--
+-- Line types in invoice_line_items: SERVICE is the provider's own work,
+-- FEE_OWNER our commission on it, FEE_CLIENT the service charge billed to the
+-- client (no quote_id, so it never attaches to a provider). Amounts are in
+-- cents, hence the /100.
+invoiced_by_quote AS (
+  SELECT
+    li.quote_id,
+    ROUND(SUM(IF(li.line_type = 'SERVICE',    li.total_incl_taxes, 0)) / 100, 2) AS invoiced_service_ttc,
+    ROUND(SUM(IF(li.line_type = 'FEE_OWNER',  li.total_incl_taxes, 0)) / 100, 2) AS invoiced_commission_ttc
+  FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
+  JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+    ON li.invoice_id = i.invoice_id
+  WHERE i.invoiceDirection = 'INCOME'
+    AND i.status = 'ISSUED'
+    AND li.deleted = false
+    AND li.quote_id IS NOT NULL
+  GROUP BY li.quote_id
+),
 partners_rm_dedup AS (
   SELECT DISTINCT
     rm.client_request_readable_id AS rid,
@@ -117,6 +145,13 @@ partners_rm_dedup AS (
     CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64) AS raw_outstanding,
     CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
       - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64) AS payable,
+    -- Payable to date: invoiced to the client for this provider, less commission.
+    -- Falls back to the whole-event figure when nothing has been invoiced yet.
+    COALESCE(
+      ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc,
+      CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
+        - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64)
+    ) AS payable_to_date,
     CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64) AS commission,
     q.quote_lock_locked_at IS NOT NULL AS locked,
     q.quote_lock_locked_by_admin_id IS NOT NULL AS locked_by_admin,
@@ -127,6 +162,7 @@ partners_rm_dedup AS (
   FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = rm.house_owner_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q ON q.quote_id = rm.quote_id
+  LEFT JOIN invoiced_by_quote ibq ON ibq.quote_id = rm.quote_id
   WHERE rm.is_current_proposal_phase_quote = TRUE
     AND rm.booking_status = 'ACCEPTED'
 ),
@@ -135,7 +171,7 @@ partners_rm AS (
     rid,
     ARRAY_AGG(STRUCT(
       name, email, contact_first_name, currency, gmv_ttc, paid, outstanding, raw_outstanding,
-      payable, commission, locked, locked_by_admin, locked_by_client, locked_by_owner,
+      payable, payable_to_date, commission, locked, locked_by_admin, locked_by_client, locked_by_owner,
       is_provision, payment_method,
       CAST(NULL AS STRING) AS vat_raw,
       CAST(NULL AS STRING) AS tax_identifier,
@@ -175,6 +211,10 @@ partners_fi_fallback AS (
       CAST(ROUND(part.outstandingPayable / 10000, 2) AS FLOAT64) AS outstanding,
       CAST(ROUND(part.outstandingPayable / 10000, 2) AS FLOAT64) AS raw_outstanding,
       CAST(ROUND(part.liveConfirmed.netPayable.withTaxes / 10000, 2) AS FLOAT64) AS payable,
+      COALESCE(
+        ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc,
+        CAST(ROUND(part.liveConfirmed.netPayable.withTaxes / 10000, 2) AS FLOAT64)
+      ) AS payable_to_date,
       CAST(ROUND(part.liveConfirmed.commission.withTaxes / 10000, 2) AS FLOAT64) AS commission,
       q.quote_lock_locked_at IS NOT NULL AS locked,
       q.quote_lock_locked_by_admin_id IS NOT NULL AS locked_by_admin,
@@ -193,6 +233,7 @@ partners_fi_fallback AS (
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q ON q.quote_id = part.quoteId
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = q.house_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = part.houseOwnerId
+  LEFT JOIN invoiced_by_quote ibq ON ibq.quote_id = part.quoteId
   WHERE e.bk_market = 'North America'
     AND e.booking_status = 'ACCEPTED'
     AND part.quoteCancelledAt IS NULL
@@ -222,7 +263,8 @@ base AS (
     TO_JSON_STRING(
       IFNULL(p.items, IFNULL(pfb.items, CAST([] AS ARRAY<STRUCT<
         name STRING, email STRING, contact_first_name STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
-        outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, commission FLOAT64,
+        outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, payable_to_date FLOAT64,
+        commission FLOAT64,
         locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
         is_provision BOOL, payment_method STRING, vat_raw STRING, tax_identifier STRING, country STRING
       >>)))
@@ -268,15 +310,21 @@ export function parseNaPartners(json: string | null): NaPartnerLine[] {
 }
 
 export function sumPartners(partners: NaPartnerLine[]) {
-  const byCcy = new Map<string, { gmv: number; paid: number; outstanding: number; payable: number; commission: number }>();
+  const byCcy = new Map<
+    string,
+    { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }
+  >();
   for (const p of partners) {
     if (p.is_provision) continue;
     const c = p.currency ?? "—";
-    const cur = byCcy.get(c) ?? { gmv: 0, paid: 0, outstanding: 0, payable: 0, commission: 0 };
+    const cur = byCcy.get(c) ?? {
+      gmv: 0, paid: 0, outstanding: 0, payable: 0, payableToDate: 0, commission: 0,
+    };
     cur.gmv += p.gmv_ttc ?? 0;
     cur.paid += p.paid ?? 0;
     cur.outstanding += p.outstanding ?? 0;
     cur.payable += p.payable ?? 0;
+    cur.payableToDate += p.payable_to_date ?? 0;
     cur.commission += p.commission ?? 0;
     byCcy.set(c, cur);
   }

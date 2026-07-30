@@ -176,8 +176,8 @@ function MultiMoney({
   field,
   kind = "neutral",
 }: {
-  map: Map<string, { gmv: number; paid: number; outstanding: number; payable: number; commission: number }>;
-  field: "gmv" | "paid" | "outstanding" | "payable" | "commission";
+  map: Map<string, { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }>;
+  field: "gmv" | "paid" | "outstanding" | "payable" | "payableToDate" | "commission";
   kind?: MoneyKind;
 }) {
   const entries = Array.from(map.entries()).filter(([, v]) => Math.abs(v[field]) > 0.005);
@@ -208,7 +208,7 @@ type SortKey =
   | "status";
 
 function partnerToBePaidTotals(
-  totals: Map<string, { gmv: number; paid: number; outstanding: number; payable: number; commission: number }>,
+  totals: Map<string, { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }>,
   partners: Array<{ payment_method: string | null; is_provision: boolean | null; currency: string | null; outstanding: number | null }>,
 ): Map<string, number> {
   // sumPartners already excludes provisions. Also subtract virtual-card legs.
@@ -267,7 +267,8 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     "Partner email",
     "Partner currency",
     "Partner GMV",
-    "Partner payable",
+    "Partner payable to date",
+    "Partner payable (event)",
     "Partner paid",
     "Partner outstanding",
     "Commission to recover",
@@ -306,6 +307,7 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
             p.email ?? "",
             p.currency ?? "",
             p.gmv_ttc ?? "",
+            p.payable_to_date ?? "",
             p.payable ?? "",
             p.paid ?? "",
             p.outstanding ?? "",
@@ -1183,11 +1185,11 @@ function PartnerOutstandingCell({
   const provOnly = nonProvOutstanding < 0.005 && provOutstanding >= 0.005;
   if (provOnly) {
     // Build a per-currency map for provision outstanding
-    const map = new Map<string, { gmv: number; paid: number; outstanding: number; payable: number; commission: number }>();
+    const map = new Map<string, { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }>();
     for (const p of partners) {
       if (!p.is_provision) continue;
       const c = p.currency ?? "—";
-      const cur = map.get(c) ?? { gmv: 0, paid: 0, outstanding: 0, payable: 0, commission: 0 };
+      const cur = map.get(c) ?? { gmv: 0, paid: 0, outstanding: 0, payable: 0, payableToDate: 0, commission: 0 };
       cur.outstanding += p.outstanding ?? 0;
       map.set(c, cur);
     }
@@ -1273,7 +1275,12 @@ function PartnerSectionCard({
             <th>Partner</th>
             <th className="text-right">GMV</th>
             <th className="text-right">Commission</th>
-            <th className="text-right">Payable</th>
+            <th className="text-right" title="Invoiced to the client for this partner, less commission — what is owed right now">
+              Payable to date
+            </th>
+            <th className="text-right" title="Whole event: gross less commission">
+              Payable (event)
+            </th>
             <th className="text-right">Paid</th>
             <th className="text-right">Outstanding</th>
           </tr>
@@ -1335,6 +1342,13 @@ function PartnerSectionCard({
                   {prov || p.commission == null ? <span className="text-text-muted">—</span> : <Money value={p.commission} currency={p.currency} kind="muted" />}
                 </td>
                 <td className="text-right">
+                  {prov ? (
+                    <span className="text-text-muted">—</span>
+                  ) : (
+                    <Money value={p.payable_to_date} currency={p.currency} />
+                  )}
+                </td>
+                <td className="text-right">
                   {prov ? <span className="text-text-muted">—</span> : <Money value={p.payable} currency={p.currency} />}
                 </td>
                 <td className="text-right">
@@ -1350,7 +1364,8 @@ function PartnerSectionCard({
             <td className="text-[10.5px] uppercase tracking-wide text-text-muted">Subtotal</td>
             <td className="text-right"><MultiMoney map={totals} field="gmv" /></td>
             <td className="text-right"><MultiMoney map={totals} field="commission" kind="muted" /></td>
-            <td className="text-right"><MultiMoney map={totals} field="payable" /></td>
+            <td className="text-right"><MultiMoney map={totals} field="payableToDate" /></td>
+            <td className="text-right"><MultiMoney map={totals} field="payable" kind="muted" /></td>
             <td className="text-right"><MultiMoney map={totals} field="paid" /></td>
             <td className="text-right"><MultiMoney map={totals} field="outstanding" kind="danger" /></td>
           </tr>
