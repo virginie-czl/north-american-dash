@@ -283,7 +283,16 @@ SELECT
   readable_id, client_request_id, company_name, sales_referent, em_referent, days_before_start,
   currency_client, event_name, start_date, end_date, event_type, participants, billing_entity, booking_url,
   gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy,
-  COALESCE(ar_balance_ccy, ROUND(gmv_client_ccy - COALESCE(paid_ccy, 0), 2)) AS balance_ccy,
+  -- What is still to be collected from the client: invoiced less received.
+  -- Not gmv - paid: the whole-event total includes amounts not yet invoiced, so
+  -- that read as outstanding money the client does not owe us yet (C-U775 showed
+  -- 9 408 EUR against a back office 0,00 EUR). NULL when nothing is invoiced yet,
+  -- so the cell shows nothing rather than a misleading zero.
+  CASE
+    WHEN invoiced_ccy IS NOT NULL
+      THEN ROUND(invoiced_ccy - COALESCE(paid_ccy, 0), 2)
+    ELSE ar_balance_ccy
+  END AS balance_ccy,
   partners_json
 FROM base
 ORDER BY start_date DESC NULLS LAST
