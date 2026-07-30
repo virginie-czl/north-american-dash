@@ -82,27 +82,18 @@ partners_rm_dedup AS (
     NULLIF(o.firstname, '') AS contact_first_name,
     rm.currency_partner AS currency,
     CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64) AS gmv_ttc,
-    CAST(rm.p_disbursed_total_pcurrency AS FLOAT64) AS paid,
-    -- 'BALANCE' proposals can have a null deposit-payable figure even when a
-    -- real live-payable figure exists (seen in practice) — fall back to it
-    -- rather than losing the number.
-    CAST(
-      COALESCE(
-        CASE
-          WHEN rm.proposal_payment_type = 'BALANCE_POST_FINAL' THEN rm.p_live_net_payable_pcurrency
-          WHEN rm.proposal_payment_type = 'BALANCE'            THEN COALESCE(rm.partner_deposit_net_payable_pcurrency, rm.p_live_net_payable_pcurrency)
-          ELSE rm.p_live_net_payable_pcurrency
-        END, 0
-      ) - COALESCE(rm.p_disbursed_total_pcurrency, 0)
-    AS FLOAT64) AS outstanding,
+    -- p_disbursed_total_pcurrency's sign is inconsistent across bookings (the
+    -- same "amount already paid" shows up positive on some, negative on
+    -- others — seen in practice) so it can't be trusted directly. Derive paid
+    -- from payable/outstanding instead, which hold up consistently everywhere
+    -- checked: payable = gmv - commission, paid = payable - outstanding.
+    CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
+      - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64)
+      - CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64) AS paid,
+    CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64) AS outstanding,
     CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64) AS raw_outstanding,
-    CAST(
-      CASE
-        WHEN rm.proposal_payment_type = 'BALANCE_POST_FINAL' THEN rm.p_live_net_payable_pcurrency
-        WHEN rm.proposal_payment_type = 'BALANCE'            THEN COALESCE(rm.partner_deposit_net_payable_pcurrency, rm.p_live_net_payable_pcurrency)
-        ELSE rm.p_live_net_payable_pcurrency
-      END AS FLOAT64
-    ) AS payable,
+    CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
+      - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64) AS payable,
     CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64) AS commission,
     q.quote_lock_locked_at IS NOT NULL AS locked,
     q.quote_lock_locked_by_admin_id IS NOT NULL AS locked_by_admin,
