@@ -83,6 +83,7 @@ import {
   ExternalLink,
   Search,
   SearchX,
+  Send,
   SlidersHorizontal,
 } from "lucide-react";
 
@@ -1264,7 +1265,7 @@ function SlaPage() {
                       {sel.end_date ? ` · ends ${fmtDate(sel.end_date)}` : ""}
                     </div>
                   </div>
-                  <div className="ml-auto flex flex-none gap-2">
+                  <div className="ml-auto flex flex-none items-center gap-2">
                     {sel.booking_url && (
                       <Button
                         variant="outline"
@@ -1278,6 +1279,22 @@ function SlaPage() {
                         </a>
                       </Button>
                     )}
+                    {/* Same targets as the list-level button, narrowed to this event. */}
+                    {(() => {
+                      if (!gmailConnection?.connected) return null;
+                      const mine = incompleteTargets.filter((t) => t.eventRef === selRef);
+                      if (mine.length === 0) return null;
+                      return (
+                        <Button
+                          size="sm"
+                          className="h-8 gap-1.5 border-0 bg-naboo text-[12.5px] font-bold text-navy shadow-none hover:bg-naboo-hover"
+                          onClick={() => requestDialog.open(mine)}
+                        >
+                          <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                          Ask {mine.length} partner{mine.length > 1 ? "s" : ""} for details
+                        </Button>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -1354,9 +1371,52 @@ function EventDetails({
   const { data: gmailConnection } = useGmailConnection();
   const requestDialog = useRequestDialog();
   const setStatus = useSetPartnerStatus();
+  const { data: commentSummaries } = useCommentSummaries();
+  const [tab, setTab] = useState<"partners" | "invoices" | "emails" | "docs" | "comments">(
+    "partners",
+  );
+
+  const tabs = [
+    { key: "partners" as const, label: "Partners", count: partners.length },
+    { key: "invoices" as const, label: "Client invoicing", count: invoices.length },
+    {
+      key: "emails" as const,
+      label: "Emails",
+      count: partners.filter((p) => p.email).length,
+    },
+    { key: "docs" as const, label: "Documents", count: null },
+    {
+      key: "comments" as const,
+      label: "Comments",
+      count: commentSummaries?.get(eventRef)?.count ?? null,
+    },
+  ];
+
   return (
-    <div className="grid gap-6 md:grid-cols-2">
-      <div>
+    <div className="flex flex-col">
+      {/* Tab bar — counts come from the same data each panel renders. */}
+      <div className="-mx-6 -mt-5 mb-5 flex flex-none gap-[18px] border-b border-border bg-white px-6">
+        {tabs.map((t) => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`inline-flex h-10 items-center gap-1.5 whitespace-nowrap border-b-2 bg-transparent p-0 text-[13px] ${
+                active
+                  ? "border-navy font-semibold text-navy"
+                  : "border-transparent font-normal text-slate-600"
+              }`}
+            >
+              {t.label}
+              {t.count != null && <span className="font-normal text-slate-400">{t.count}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <div hidden={tab !== "partners"}>
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <Truck className="h-3.5 w-3.5" />
           Partners ({partners.length})
@@ -1496,7 +1556,7 @@ function EventDetails({
         )}
       </div>
 
-      <div>
+      <div hidden={tab !== "invoices"}>
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <FileText className="h-3.5 w-3.5" />
           Invoices ({invoices.length})
@@ -1569,7 +1629,7 @@ function EventDetails({
         })()}
       </div>
 
-      <div className="md:col-span-2">
+      <div hidden={tab !== "emails"}>
         <PartnerEmails
           eventRef={eventRef}
           partners={partners.map((p) => ({
@@ -1580,11 +1640,11 @@ function EventDetails({
         />
       </div>
 
-      <div className="md:col-span-2">
+      <div hidden={tab !== "docs"}>
         <PartnerInvoicePdfs clientRequestId={row.client_request_id} />
       </div>
 
-      <div className="md:col-span-2">
+      <div hidden={tab !== "comments"}>
         <EventComments eventRef={eventRef} />
       </div>
 
