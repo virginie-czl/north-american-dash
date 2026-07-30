@@ -144,6 +144,60 @@ partners_rm AS (
   FROM partners_rm_dedup
   GROUP BY rid
 ),
+-- Fallback partner source: the nested free-invoicing table.
+--
+-- vw_reconciliation_master can hold a row for a booking while every financial
+-- field on it is NULL, with is_current_proposal_phase_quote NULL too (seen on
+-- C-U775: the partner is named but nothing else is populated). Those bookings
+-- are filtered out of partners_rm_dedup entirely and used to render as
+-- "PARTNERS (0)" even though the back office shows the provider and its amounts.
+--
+-- This CTE reconstructs the same figures from the source the back office reads,
+-- and is only consulted when partners_rm has nothing for the booking:
+--   gross = netPayable + commission, paid = |disbursedTotal|
+-- disbursedTotal's sign is inconsistent across bookings, hence the ABS.
+partners_fi_fallback AS (
+  SELECT
+    e.client_request_readable_id AS rid,
+    ARRAY_AGG(STRUCT(
+      COALESCE(
+        NULLIF(o.company_name, ''),
+        NULLIF(h.title, ''),
+        NULLIF(q.provision_name, ''),
+        'Prestataire inconnu'
+      ) AS name,
+      NULLIF(o.email, '') AS email,
+      NULLIF(o.firstname, '') AS contact_first_name,
+      part.currency AS currency,
+      CAST(ROUND((part.liveConfirmed.netPayable.withTaxes
+                  + part.liveConfirmed.commission.withTaxes) / 10000, 2) AS FLOAT64) AS gmv_ttc,
+      CAST(ROUND(ABS(part.disbursedTotal) / 10000, 2) AS FLOAT64) AS paid,
+      CAST(ROUND(part.outstandingPayable / 10000, 2) AS FLOAT64) AS outstanding,
+      CAST(ROUND(part.outstandingPayable / 10000, 2) AS FLOAT64) AS raw_outstanding,
+      CAST(ROUND(part.liveConfirmed.netPayable.withTaxes / 10000, 2) AS FLOAT64) AS payable,
+      CAST(ROUND(part.liveConfirmed.commission.withTaxes / 10000, 2) AS FLOAT64) AS commission,
+      q.quote_lock_locked_at IS NOT NULL AS locked,
+      q.quote_lock_locked_by_admin_id IS NOT NULL AS locked_by_admin,
+      q.quote_lock_locked_by_client_id IS NOT NULL AS locked_by_client,
+      q.quote_lock_locked_by_owner_id IS NOT NULL AS locked_by_owner,
+      q.provision_name IS NOT NULL AS is_provision,
+      CAST(NULL AS STRING) AS payment_method,
+      CAST(NULL AS STRING) AS vat_raw,
+      CAST(NULL AS STRING) AS tax_identifier,
+      CAST(NULL AS STRING) AS country
+    )) AS items
+  FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
+  JOIN \`naboo-app-365515.raw_naboo_data.client_request_free_invoicing\` fi
+    ON fi.clientRequestId = e.clientRequestId AND fi.deleted = false
+  CROSS JOIN UNNEST(fi.partners) AS part
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q ON q.quote_id = part.quoteId
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = q.house_id
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = part.houseOwnerId
+  WHERE e.bk_market = 'North America'
+    AND e.booking_status = 'ACCEPTED'
+    AND part.quoteCancelledAt IS NULL
+  GROUP BY rid
+),
 base AS (
   SELECT
     e.client_request_readable_id AS readable_id,
@@ -166,12 +220,12 @@ base AS (
     COALESCE(CAST(ar.total_paid_client_ccy AS FLOAT64), fi.paid) AS paid_ccy,
     CAST(ar.balance_client_ccy AS FLOAT64) AS ar_balance_ccy,
     TO_JSON_STRING(
-      IFNULL(p.items, CAST([] AS ARRAY<STRUCT<
+      IFNULL(p.items, IFNULL(pfb.items, CAST([] AS ARRAY<STRUCT<
         name STRING, email STRING, contact_first_name STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
         outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, commission FLOAT64,
         locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
         is_provision BOOL, payment_method STRING, vat_raw STRING, tax_identifier STRING, country STRING
-      >>))
+      >>)))
     ) AS partners_json
   FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
   LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
@@ -179,6 +233,7 @@ base AS (
   LEFT JOIN fi_base fi ON fi.crid = e.clientRequestId
   LEFT JOIN client_proposal_totals cpt ON cpt.rid = e.client_request_readable_id
   LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
+  LEFT JOIN partners_fi_fallback pfb ON pfb.rid = e.client_request_readable_id
   WHERE e.bk_market = 'North America'
     AND e.booking_status = 'ACCEPTED'
 )
