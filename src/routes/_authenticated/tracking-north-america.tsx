@@ -76,6 +76,7 @@ import {
   RefreshCw,
   Search,
   SearchX,
+  Send,
   SlidersHorizontal,
 } from "lucide-react";
 
@@ -452,6 +453,9 @@ function NaPage() {
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedRef, setSelectedRef] = useState<string>("");
+  const [detailTab, setDetailTab] = useState<"partners" | "emails" | "docs" | "comments">(
+    "partners",
+  );
 
   const rows = useMemo(() => data ?? [], [data]);
   const { data: commentSummaries } = useCommentSummaries();
@@ -1007,7 +1011,7 @@ function NaPage() {
                       {sel.participants ? ` · ${sel.participants} pax` : ""}
                     </div>
                   </div>
-                  <div className="ml-auto flex flex-none gap-2">
+                  <div className="ml-auto flex flex-none items-center gap-2">
                     {sel.booking_url && (
                       <a
                         href={sel.booking_url}
@@ -1019,6 +1023,22 @@ function NaPage() {
                         Back office
                       </a>
                     )}
+                    {/* Same targets as the list-level button, narrowed to this booking. */}
+                    {(() => {
+                      if (!gmailConnection?.connected) return null;
+                      const mine = incompleteTargets.filter((t) => t.eventRef === selRef);
+                      if (mine.length === 0) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => requestDialog.open(mine)}
+                          className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-naboo px-3 text-[12.5px] font-bold text-navy"
+                        >
+                          <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                          Ask {mine.length} partner{mine.length > 1 ? "s" : ""} for details
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -1061,23 +1081,65 @@ function NaPage() {
                 </div>
               </div>
 
+              {/* Tab bar — counts come from the same data the panels render. */}
+              <div className="flex flex-none gap-[18px] border-b border-border bg-white px-6">
+                {(
+                  [
+                    {
+                      key: "partners" as const,
+                      label: "Partners",
+                      count: selPartners.filter((p) => !p.is_provision).length,
+                    },
+                    {
+                      key: "emails" as const,
+                      label: "Emails",
+                      count: selPartners.filter((p) => !p.is_provision && p.email).length,
+                    },
+                    { key: "docs" as const, label: "Documents", count: null },
+                    {
+                      key: "comments" as const,
+                      label: "Comments",
+                      count: commentSummaries?.get(selRef)?.count ?? null,
+                    },
+                  ] as const
+                ).map((t) => {
+                  const active = detailTab === t.key;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setDetailTab(t.key)}
+                      className={`inline-flex h-10 items-center gap-1.5 whitespace-nowrap border-b-2 bg-transparent p-0 text-[13px] ${
+                        active
+                          ? "border-navy font-semibold text-navy"
+                          : "border-transparent font-normal text-slate-600"
+                      }`}
+                    >
+                      {t.label}
+                      {t.count != null && (
+                        <span className="font-normal text-slate-400">{t.count}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
               <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
-                <PartnerSectionCard
-                  id={selRef}
-                  partners={selPartners}
-                  totals={selTotals}
-                  actionFor={actionFor}
-                  factsMap={factsMap}
-                  financialSummaries={financialSummaries}
-                  gmailConnected={gmailConnection?.connected === true}
-                  onSummarize={(input) => summarize.mutate(input)}
-                  summarizing={summarize.isPending ? (summarize.variables ?? null) : null}
-                />
-                <div className="mt-4">
-                  <PartnerInvoicePdfs clientRequestId={sel.client_request_id} />
-                </div>
-                {gmailConnection?.connected && (
-                  <div className="mt-4">
+                {detailTab === "partners" && (
+                  <PartnerSectionCard
+                    id={selRef}
+                    partners={selPartners}
+                    totals={selTotals}
+                    actionFor={actionFor}
+                    factsMap={factsMap}
+                    financialSummaries={financialSummaries}
+                    gmailConnected={gmailConnection?.connected === true}
+                    onSummarize={(input) => summarize.mutate(input)}
+                    summarizing={summarize.isPending ? (summarize.variables ?? null) : null}
+                  />
+                )}
+                {detailTab === "emails" &&
+                  (gmailConnection?.connected ? (
                     <PartnerEmails
                       eventRef={selRef}
                       partners={selPartners
@@ -1088,11 +1150,16 @@ function NaPage() {
                           owed: p.outstanding != null ? fmtAmount(p.outstanding) : null,
                         }))}
                     />
-                  </div>
+                  ) : (
+                    <p className="rounded-lg border border-border bg-white px-4 py-8 text-center text-[12.5px] text-slate-600">
+                      Connectez Gmail depuis le menu de votre compte pour retrouver vos échanges
+                      avec ces prestataires.
+                    </p>
+                  ))}
+                {detailTab === "docs" && (
+                  <PartnerInvoicePdfs clientRequestId={sel.client_request_id} />
                 )}
-                <div className="mt-4">
-                  <CommentsSectionCard eventRef={selRef} />
-                </div>
+                {detailTab === "comments" && <CommentsSectionCard eventRef={selRef} />}
               </div>
             </>
           )}
