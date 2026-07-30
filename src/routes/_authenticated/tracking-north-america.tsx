@@ -257,6 +257,7 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     "Billing entity",
     "Event name",
     "Event type",
+    "Transaction kind",
     "Sales",
     "EM",
     "Days before start",
@@ -288,6 +289,7 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
       row.billing_entity ?? "",
       row.event_name ?? "",
       row.event_type ?? "",
+      row.transaction_kind ?? "",
       row.sales_referent ?? "",
       row.em_referent ?? "",
       row.days_before_start ?? "",
@@ -420,7 +422,9 @@ function NaPage() {
     });
     return Array.from(s).sort();
   };
-  const eventTypes = useMemo(() => uniq((r) => r.event_type), [rows]);
+  // Deal shape (TURNKEY_EM, INVOICE_CARRYING, VENUE_FINDING…) rather than the
+  // event category: it is what changes how a booking is invoiced and paid.
+  const kinds = useMemo(() => uniq((r) => r.transaction_kind), [rows]);
   const salesList = useMemo(() => uniq((r) => r.sales_referent), [rows]);
   const emList = useMemo(() => uniq((r) => r.em_referent), [rows]);
   const ccyList = useMemo(() => uniq((r) => r.currency_client), [rows]);
@@ -436,7 +440,7 @@ function NaPage() {
         const t = Date.parse(row.start_date);
         if (!Number.isNaN(t) && t < cutoff) return false;
       }
-      if (eventType !== "all" && (row.event_type ?? "") !== eventType) return false;
+      if (eventType !== "all" && (row.transaction_kind ?? "") !== eventType) return false;
       if (sales !== "all" && (row.sales_referent ?? "") !== sales) return false;
       if (em !== "all" && (row.em_referent ?? "") !== em) return false;
       if (ccy !== "all" && (row.currency_client ?? "") !== ccy) return false;
@@ -666,7 +670,7 @@ function NaPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="w-64"
               />
-              <FilterSelect label="Type" value={eventType} onChange={setEventType} options={eventTypes} />
+              <FilterSelect label="Type" value={eventType} onChange={setEventType} options={kinds} />
               <FilterSelect label="Sales" value={sales} onChange={setSales} options={salesList} />
               <FilterSelect label="EM" value={em} onChange={setEm} options={emList} />
               <FilterSelect label="Ccy" value={ccy} onChange={setCcy} options={ccyList} />

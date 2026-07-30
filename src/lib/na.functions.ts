@@ -34,6 +34,8 @@ export interface NaRow {
   start_date: string | null;
   end_date: string | null;
   event_type: string | null;
+  /** Deal shape: TURNKEY_EM, TURNKEY_AGENCY, INVOICE_CARRYING, VENUE_FINDING. */
+  transaction_kind: string | null;
   participants: number | null;
   billing_entity: string | null;
   booking_url: string | null;
@@ -281,6 +283,7 @@ base AS (
     CAST(e.start_date AS STRING) AS start_date,
     CAST(e.end_date AS STRING) AS end_date,
     e.event_type,
+    e.transaction_kind,
     e.participants,
     e.billing_entity,
     e.booking_url,
@@ -310,7 +313,7 @@ base AS (
 )
 SELECT
   readable_id, client_request_id, company_name, sales_referent, em_referent, days_before_start,
-  currency_client, event_name, start_date, end_date, event_type, participants, billing_entity, booking_url,
+  currency_client, event_name, start_date, end_date, event_type, transaction_kind, participants, billing_entity, booking_url,
   gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy,
   -- What is still to be collected from the client: invoiced less received.
   -- Not gmv - paid: the whole-event total includes amounts not yet invoiced, so
