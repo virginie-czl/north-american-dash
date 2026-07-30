@@ -121,8 +121,14 @@ invoiced_by_quote AS (
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
   JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
     ON li.invoice_id = i.invoice_id
+  -- Every status, deliberately. A cancelled invoice always comes with a credit
+  -- note that reverses it, so including both lets the pair net to zero. Filtering
+  -- on status = 'ISSUED' kept the credit note but dropped the invoice it cancelled,
+  -- subtracting an amount that had never been added: C-V176 read -113 215,94 USD
+  -- against a back office 49 830,47 USD.
+  -- Only ISSUED and CANCELLED exist on client invoices, so nothing unissued
+  -- slips in this way.
   WHERE i.invoiceDirection = 'INCOME'
-    AND i.status = 'ISSUED'
     AND li.deleted = false
     AND li.quote_id IS NOT NULL
   GROUP BY li.quote_id
