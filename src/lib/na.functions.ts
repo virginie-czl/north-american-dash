@@ -54,13 +54,19 @@ const PARTNER_STRUCT_TYPE = `STRUCT<
 
 const QUERY = `
 WITH
--- Primary source: one partner-quote row per line, already reconciled server-side
--- (no more client-side merging of two differently-shaped tables). Only
--- row_grain = 'QUOTE' rows carry real partner data — a booking can appear in
--- this view as BOOKING_ONLY (no current partner quotes at all), which must be
--- treated the same as being absent: fall back, don't show an empty breakdown.
--- This view is live/recalculated, not a stable snapshot, so a booking can move
--- between grains over time — the tag always reflects the latest read.
+-- Whether the booking is known to free invoicing at all (any row_grain). This
+-- is what the NO FREE INVOICING tag reflects — a booking present here as
+-- BOOKING_ONLY still counts as "known", it just has no partner quotes yet.
+fi_presence AS (
+  SELECT DISTINCT client_request_readable_id AS rid
+  FROM \`naboo-app-365515.finance_gld_fct_prd.vw_reconciliation_master_free_invoicing_nested\`
+),
+-- Primary source for partner data: one partner-quote row per line, already
+-- reconciled server-side (no more client-side merging of two differently-shaped
+-- tables). Only row_grain = 'QUOTE' rows carry real partner data — whenever a
+-- booking has none (whether entirely absent or only a BOOKING_ONLY row), the
+-- partner breakdown falls back to vw_reconciliation_master regardless of the
+-- tag above. This view is live/recalculated, not a stable snapshot.
 fi_nested AS (
   SELECT
     n.client_request_readable_id AS rid,
@@ -192,13 +198,14 @@ SELECT
     CAST(ar.balance_client_ccy AS FLOAT64),
     CASE WHEN fi.gmv IS NOT NULL THEN ROUND(COALESCE(fi.gmv, 0) - COALESCE(fi.paid, 0), 2) END
   ) AS balance_ccy,
-  CASE WHEN fin.items IS NULL THEN 'NO FREE INVOICING' ELSE NULL END AS free_invoicing_status,
+  CASE WHEN fp.rid IS NULL THEN 'NO FREE INVOICING' ELSE NULL END AS free_invoicing_status,
   TO_JSON_STRING(
     IFNULL(fin.items, IFNULL(rmf.items, CAST([] AS ARRAY<${PARTNER_STRUCT_TYPE}>)))
   ) AS partners_json
 FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
 LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
   ON ar.readable_id = e.client_request_readable_id
+LEFT JOIN fi_presence fp ON fp.rid = e.client_request_readable_id
 LEFT JOIN fi_nested fin ON fin.rid = e.client_request_readable_id
 LEFT JOIN fi_base fi ON fi.crid = e.clientRequestId
 LEFT JOIN rm_fallback rmf ON rmf.rid = e.client_request_readable_id
