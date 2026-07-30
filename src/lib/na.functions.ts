@@ -54,16 +54,13 @@ const PARTNER_STRUCT_TYPE = `STRUCT<
 
 const QUERY = `
 WITH
--- Every booking that has at least one row in the free-invoicing nested view,
--- whether or not it currently has partner quotes (row_grain BOOKING_ONLY vs
--- QUOTE). Existence here is what decides the NO FREE INVOICING tag — a booking
--- with zero current partners is still "in" free invoicing, just empty.
-fi_presence AS (
-  SELECT DISTINCT client_request_readable_id AS rid
-  FROM \`naboo-app-365515.finance_gld_fct_prd.vw_reconciliation_master_free_invoicing_nested\`
-),
 -- Primary source: one partner-quote row per line, already reconciled server-side
--- (no more client-side merging of two differently-shaped tables).
+-- (no more client-side merging of two differently-shaped tables). Only
+-- row_grain = 'QUOTE' rows carry real partner data — a booking can appear in
+-- this view as BOOKING_ONLY (no current partner quotes at all), which must be
+-- treated the same as being absent: fall back, don't show an empty breakdown.
+-- This view is live/recalculated, not a stable snapshot, so a booking can move
+-- between grains over time — the tag always reflects the latest read.
 fi_nested AS (
   SELECT
     n.client_request_readable_id AS rid,
@@ -162,8 +159,13 @@ rm_fallback AS (
   FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o2 ON o2.owner_id = rm.house_owner_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q2 ON q2.quote_id = rm.quote_id
-  WHERE rm.bk_market = 'North America'
-    AND rm.is_current_proposal_phase_quote = TRUE
+  -- No bk_market filter here: this view's own market classification can
+  -- disagree with fct_export_events_scd1's for the same booking (seen in
+  -- practice — a booking fct_export_events_scd1 calls North America, this
+  -- view called "RoW"). The outer query already scopes everything to NA via
+  -- the driving table; re-filtering here on a inconsistent field silently
+  -- dropped bookings that should have shown fallback partner data.
+  WHERE rm.is_current_proposal_phase_quote = TRUE
     AND rm.booking_status = 'ACCEPTED'
   GROUP BY rid
 )
@@ -190,17 +192,13 @@ SELECT
     CAST(ar.balance_client_ccy AS FLOAT64),
     CASE WHEN fi.gmv IS NOT NULL THEN ROUND(COALESCE(fi.gmv, 0) - COALESCE(fi.paid, 0), 2) END
   ) AS balance_ccy,
-  CASE WHEN fp.rid IS NULL THEN 'NO FREE INVOICING' ELSE NULL END AS free_invoicing_status,
+  CASE WHEN fin.items IS NULL THEN 'NO FREE INVOICING' ELSE NULL END AS free_invoicing_status,
   TO_JSON_STRING(
-    CASE
-      WHEN fp.rid IS NOT NULL THEN IFNULL(fin.items, CAST([] AS ARRAY<${PARTNER_STRUCT_TYPE}>))
-      ELSE IFNULL(rmf.items, CAST([] AS ARRAY<${PARTNER_STRUCT_TYPE}>))
-    END
+    IFNULL(fin.items, IFNULL(rmf.items, CAST([] AS ARRAY<${PARTNER_STRUCT_TYPE}>)))
   ) AS partners_json
 FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
 LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
   ON ar.readable_id = e.client_request_readable_id
-LEFT JOIN fi_presence fp ON fp.rid = e.client_request_readable_id
 LEFT JOIN fi_nested fin ON fin.rid = e.client_request_readable_id
 LEFT JOIN fi_base fi ON fi.crid = e.clientRequestId
 LEFT JOIN rm_fallback rmf ON rmf.rid = e.client_request_readable_id
