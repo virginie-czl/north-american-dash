@@ -1,9 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  SummaryStrip,
-  useRegisterTrackerActions,
-} from "@/components/tracker-chrome";
+import { SummaryStrip, useRegisterTrackerActions } from "@/components/tracker-chrome";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { PartnerEmails } from "@/components/partner-emails";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
@@ -65,9 +62,22 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ChevronDown, ChevronRight, RefreshCw, Lock, ArrowUpDown, MessageSquare, Banknote } from "lucide-react";
+import {
+  ArrowUpDown,
+  Banknote,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Lock,
+  MessageSquare,
+  RefreshCw,
+  Search,
+  SearchX,
+  SlidersHorizontal,
+} from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/tracking-north-america")({
   // Presentation aside, the data query refuses too (requireTracker).
@@ -81,13 +91,18 @@ export const Route = createFileRoute("/_authenticated/tracking-north-america")({
           : allowed.includes("na")
             ? "/tracking-north-america"
             : null;
-      throw redirect(fallback ? { to: fallback } : { to: "/auth", search: { status: "no-tracker" } });
+      throw redirect(
+        fallback ? { to: fallback } : { to: "/auth", search: { status: "no-tracker" } },
+      );
     }
   },
   head: () => ({
     meta: [
       { title: "Tracking North America" },
-      { name: "description", content: "North America deals tracker — bookings and partner payouts." },
+      {
+        name: "description",
+        content: "North America deals tracker — bookings and partner payouts.",
+      },
     ],
   }),
   component: NaPage,
@@ -164,7 +179,9 @@ function Money({
   const mutedCls = kind === "muted" ? "text-text-secondary" : "";
   const emptyCls = isZero ? "text-text-muted" : "text-text-primary";
   return (
-    <span className={`inline-flex items-baseline gap-1 tabular-nums ${alignCls} ${dangerCls || mutedCls || emptyCls}`}>
+    <span
+      className={`inline-flex items-baseline gap-1 tabular-nums ${alignCls} ${dangerCls || mutedCls || emptyCls}`}
+    >
       <span>{formatted}</span>
       {showCcy && currency && (
         <span className="text-[10px] text-text-muted">{ccyLabel(currency)}</span>
@@ -178,7 +195,17 @@ function MultiMoney({
   field,
   kind = "neutral",
 }: {
-  map: Map<string, { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }>;
+  map: Map<
+    string,
+    {
+      gmv: number;
+      paid: number;
+      outstanding: number;
+      payable: number;
+      payableToDate: number;
+      commission: number;
+    }
+  >;
   field: "gmv" | "paid" | "outstanding" | "payable" | "payableToDate" | "commission";
   kind?: MoneyKind;
 }) {
@@ -195,7 +222,6 @@ function MultiMoney({
   );
 }
 
-
 type SortKey =
   | "start_date"
   | "readable_id"
@@ -210,8 +236,23 @@ type SortKey =
   | "status";
 
 function partnerToBePaidTotals(
-  totals: Map<string, { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }>,
-  partners: Array<{ payment_method: string | null; is_provision: boolean | null; currency: string | null; outstanding: number | null }>,
+  totals: Map<
+    string,
+    {
+      gmv: number;
+      paid: number;
+      outstanding: number;
+      payable: number;
+      payableToDate: number;
+      commission: number;
+    }
+  >,
+  partners: Array<{
+    payment_method: string | null;
+    is_provision: boolean | null;
+    currency: string | null;
+    outstanding: number | null;
+  }>,
 ): Map<string, number> {
   // sumPartners already excludes provisions. Also subtract virtual-card legs.
   const out = new Map<string, number>();
@@ -231,7 +272,10 @@ function partnerToBePaidTotals(
   return out;
 }
 
-function rowPartnerToPay(row: NaRow, partners: ReturnType<typeof parseNaPartners>): Map<string, number> {
+function rowPartnerToPay(
+  row: NaRow,
+  partners: ReturnType<typeof parseNaPartners>,
+): Map<string, number> {
   const clientBal = row.balance_ccy ?? 0;
   if (clientBal > 0.01) return new Map();
   const totals = sumPartners(partners);
@@ -342,7 +386,9 @@ function downloadCsv(lines: string[], filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function exportRecoverCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNaPartners> }>) {
+function exportRecoverCsv(
+  rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNaPartners> }>,
+) {
   const headers = [
     "Start date",
     "Booking",
@@ -405,6 +451,7 @@ function NaPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [selectedRef, setSelectedRef] = useState<string>("");
 
   const rows = useMemo(() => data ?? [], [data]);
   const { data: commentSummaries } = useCommentSummaries();
@@ -477,8 +524,14 @@ function NaPage() {
     const dir = sortDir === "asc" ? 1 : -1;
     arr.sort((a, b) => {
       if (sortKey === "status") {
-        const av = Array.from(rowPartnerToPay(a.row, a.partners).values()).reduce((s, v) => s + v, 0);
-        const bv = Array.from(rowPartnerToPay(b.row, b.partners).values()).reduce((s, v) => s + v, 0);
+        const av = Array.from(rowPartnerToPay(a.row, a.partners).values()).reduce(
+          (s, v) => s + v,
+          0,
+        );
+        const bv = Array.from(rowPartnerToPay(b.row, b.partners).values()).reduce(
+          (s, v) => s + v,
+          0,
+        );
         return (av - bv) * dir;
       }
       const av = a.row[sortKey as Exclude<SortKey, "status">] as unknown;
@@ -550,8 +603,11 @@ function NaPage() {
   });
 
   const summarize = useMutation({
-    mutationFn: (input: { event_ref: string; partner_name: string; partner_email: string | null }) =>
-      generateNaFinancialSummary({ data: input }),
+    mutationFn: (input: {
+      event_ref: string;
+      partner_name: string;
+      partner_email: string | null;
+    }) => generateNaFinancialSummary({ data: input }),
     onSuccess: (result) => {
       queryClient.setQueryData<Map<string, NaFinancialSummary>>(
         ["na-financial-summaries"],
@@ -569,19 +625,45 @@ function NaPage() {
       buildTargets(
         sorted.flatMap(({ row: r, partners: ps }) => {
           const ref = r.readable_id ?? "";
-          return ps
-            // Overpaid partners are a commission-to-recover / refund case, not a
-            // bank-or-tax gap — asking them to send bank details makes no sense
-            // when we already paid them too much.
-            .filter((p) => !p.is_provision)
-            .filter((p) => {
-              const cb = partnerClawback(p);
-              return cb.commission < 0.01 && cb.refund < 0.01;
-            })
-            .map((p) => {
-              const a = actionFor(ref, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }, true, { taxTracked: false });
-              return { eventRef: ref, eventDate: r.start_date ?? null, name: p.name, email: p.email, country: null, currency: p.currency, amountDue: p.outstanding, action: a, isCancelled: p.is_provision, eventClientLabel: r.company_name ?? undefined };
-            });
+          return (
+            ps
+              // Overpaid partners are a commission-to-recover / refund case, not a
+              // bank-or-tax gap — asking them to send bank details makes no sense
+              // when we already paid them too much.
+              .filter((p) => !p.is_provision)
+              .filter((p) => {
+                const cb = partnerClawback(p);
+                return cb.commission < 0.01 && cb.refund < 0.01;
+              })
+              .map((p) => {
+                const a = actionFor(
+                  ref,
+                  {
+                    name: p.name,
+                    email: p.email,
+                    amount_due: p.outstanding,
+                    vat_raw: null,
+                    tax_identifier: null,
+                    country: null,
+                    cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
+                  },
+                  true,
+                  { taxTracked: false },
+                );
+                return {
+                  eventRef: ref,
+                  eventDate: r.start_date ?? null,
+                  name: p.name,
+                  email: p.email,
+                  country: null,
+                  currency: p.currency,
+                  amountDue: p.outstanding,
+                  action: a,
+                  isCancelled: p.is_provision,
+                  eventClientLabel: r.company_name ?? undefined,
+                };
+              })
+          );
         }),
       ),
     [sorted, actionFor],
@@ -606,17 +688,38 @@ function NaPage() {
         if (cb.commission > 0.01 && cb.refund > 0.01) {
           const combined = composeNaCombinedRequest(r, p, contact);
           if (combined) {
-            targets.push({ eventRef, partnerName: p.name, address: contact.address, contactName: contact.name, ...combined, mode: "combined" });
+            targets.push({
+              eventRef,
+              partnerName: p.name,
+              address: contact.address,
+              contactName: contact.name,
+              ...combined,
+              mode: "combined",
+            });
           }
         } else if (cb.commission > 0.01) {
           const commission = composeNaCommissionRequest(r, p, contact);
           if (commission) {
-            targets.push({ eventRef, partnerName: p.name, address: contact.address, contactName: contact.name, ...commission, mode: "commission" });
+            targets.push({
+              eventRef,
+              partnerName: p.name,
+              address: contact.address,
+              contactName: contact.name,
+              ...commission,
+              mode: "commission",
+            });
           }
         } else {
           const refund = composeNaRefundRequest(r, p, contact);
           if (refund) {
-            targets.push({ eventRef, partnerName: p.name, address: contact.address, contactName: contact.name, ...refund, mode: "refund" });
+            targets.push({
+              eventRef,
+              partnerName: p.name,
+              address: contact.address,
+              contactName: contact.name,
+              ...refund,
+              mode: "refund",
+            });
           }
         }
       }
@@ -640,339 +743,362 @@ function NaPage() {
     [isFetching, sorted.length, recoverCount],
   );
 
+  // ── Split view ────────────────────────────────────────────────────────────
+  // Presentation only. Amounts, tags, email actions and the commission/refund
+  // dialogs all come from the same hooks and helpers as the previous layout.
+  const selected = useMemo(() => {
+    if (filtered.length === 0) return null;
+    const hit = filtered.find(({ row }) => (row.readable_id ?? "") === selectedRef);
+    return hit ?? filtered[0];
+  }, [filtered, selectedRef]);
+
+  const groups = useMemo(() => {
+    const buckets: Array<{
+      key: string;
+      title: string;
+      dot: string;
+      rows: typeof filtered;
+    }> = [
+      { key: "owed", title: "To pay", dot: "#f59e0b", rows: [] },
+      { key: "claim", title: "To reclaim", dot: "#dc2626", rows: [] },
+      { key: "clear", title: "Settled", dot: "#9ca3af", rows: [] },
+    ];
+    const put = (k: string, item: (typeof filtered)[number]) =>
+      buckets.find((b) => b.key === k)!.rows.push(item);
+    for (const item of filtered) {
+      const claw = rowClawbackSplit(item.partners);
+      if (claw.commission.size > 0 || claw.refund.size > 0) put("claim", item);
+      else if (rowPartnerToPay(item.row, item.partners).size > 0) put("owed", item);
+      else put("clear", item);
+    }
+    return buckets.filter((b) => b.rows.length > 0);
+  }, [filtered]);
+
+  const sel = selected?.row ?? null;
+  const selPartners = selected?.partners ?? [];
+  const selRef = sel?.readable_id ?? "";
+  const selTotals = useMemo(() => sumPartners(selPartners), [selPartners]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
-      <SummaryStrip
-        title="Marketplace North America"
-        stats={[
-          { label: "Bookings", value: isLoading ? "…" : String(totals.clients) },
-          { label: "Partner lines", value: isLoading ? "…" : String(totals.partnerLines) },
-          { label: "Sales referents", value: String(salesList.length) },
-          { label: "Currencies", value: String(ccyList.length) },
-        ]}
-        alert={recoverCount > 0 ? `${recoverCount} to recover` : null}
-      >
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Kpi title="Bookings" value={totals.clients.toString()} />
-          <Kpi title="Partner lines" value={totals.partnerLines.toString()} />
-          <Kpi title="Sales referents" value={salesList.length.toString()} />
-          <Kpi title="Currencies" value={ccyList.length.toString()} />
+      {error != null && (
+        <div
+          role="alert"
+          className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-2.5 text-sm text-rose-800"
+        >
+          Failed to load data: {(error as Error).message}
         </div>
-      </SummaryStrip>
+      )}
 
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex-none border-b border-border px-5 py-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="mr-auto text-sm font-semibold">Deals</h2>
-              <Input
-                placeholder="Search booking, company, partner…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-64"
-              />
-              <FilterSelect label="Type" value={eventType} onChange={setEventType} options={kinds} />
-              <FilterSelect label="Sales" value={sales} onChange={setSales} options={salesList} />
-              <FilterSelect label="EM" value={em} onChange={setEm} options={emList} />
-              <FilterSelect label="Ccy" value={ccy} onChange={setCcy} options={ccyList} />
-              <MultiFilter
-                label="Billing entity"
-                selected={billing}
-                options={billingList}
-                onToggle={(v: string) =>
-                  setBilling((prev) => {
-                    const n = new Set(prev);
-                    if (n.has(v)) n.delete(v);
-                    else n.add(v);
-                    return n;
-                  })
-                }
-                onClear={() => setBilling(new Set())}
-              />
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Status: All</SelectItem>
-                  <SelectItem value="partner_to_pay">Partner to be paid</SelectItem>
-                  <SelectItem value="commission">Commission to recover</SelectItem>
-                  <SelectItem value="refund">Refund to ask</SelectItem>
-                  <SelectItem value="none">No action</SelectItem>
-                </SelectContent>
-              </Select>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+      <div className="flex min-h-0 flex-1 overflow-x-auto">
+        {/* ── List column ───────────────────────────────────────────────── */}
+        <div className="flex w-[470px] flex-none flex-col border-r border-border bg-white">
+          <div className="flex-none border-b border-border px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="flex h-8 flex-1 items-center gap-2 rounded-md border border-input bg-white px-2.5">
+                <Search className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
                 <input
-                  type="checkbox"
-                  checked={showAncient}
-                  onChange={(e) => setShowAncient(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-input"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search booking, company, partner…"
+                  aria-label="Search"
+                  className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] outline-none"
                 />
-                Include bookings &gt; 100d old
-              </label>
-            </div>
-          </div>
-          {(gmailConnection?.connected || gmailConnection?.connected === false) && (
-            <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2">
-              {gmailConnection.connected ? (
-                <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5"
-                    disabled={scanProgress.running || sorted.length === 0}
-                    onClick={() =>
-                      startScan(
-                        sorted
-                          .filter(({ row: r, partners: ps }) =>
-                            eventNeedsScan(r.readable_id ?? "", ps.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined })), true, { taxTracked: false })
-                          )
-                          .map(({ row: r, partners: ps }) => ({
-                            event_ref: r.readable_id ?? "",
-                            partners: ps.filter((p) => !p.is_provision).map((p) => ({ name: p.name ?? "", email: p.email })),
-                          })),
-                      )
-                    }
+              </span>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12px] text-slate-700"
                   >
-                    <Mail className="h-3.5 w-3.5" aria-hidden="true" />
-                    {scanProgress.running ? `Searching… ${scanProgress.done}/${scanProgress.total}` : "Search my emails"}
-                  </Button>
-                  {incompleteTargets.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5"
-                      onClick={() => requestDialog.open(incompleteTargets)}
-                    >
-                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
-                      Request missing info ({incompleteTargets.length})
-                    </Button>
-                  )}
-                  {commissionRefundTargets.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5"
-                      onClick={() => commissionRefundDialog.open(commissionRefundTargets)}
-                    >
-                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
-                      Request commission / refund ({commissionRefundTargets.length})
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <button type="button" onClick={() => { window.location.href = "/api/gmail/connect"; }} className="text-[11.5px] text-slate-600 underline-offset-2 hover:underline">
-                  Connect Gmail
+                    <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                    Filters
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-[340px] space-y-2">
+                  <FilterSelect
+                    label="Type"
+                    value={eventType}
+                    onChange={setEventType}
+                    options={kinds}
+                  />
+                  <FilterSelect
+                    label="Sales"
+                    value={sales}
+                    onChange={setSales}
+                    options={salesList}
+                  />
+                  <FilterSelect label="EM" value={em} onChange={setEm} options={emList} />
+                  <FilterSelect label="Ccy" value={ccy} onChange={setCcy} options={ccyList} />
+                  <MultiFilter
+                    label="Billing entity"
+                    selected={billing}
+                    options={billingList}
+                    onToggle={(v: string) =>
+                      setBilling((prev) => {
+                        const n = new Set(prev);
+                        if (n.has(v)) n.delete(v);
+                        else n.add(v);
+                        return n;
+                      })
+                    }
+                    onClear={() => setBilling(new Set())}
+                  />
+                  <label className="flex cursor-pointer items-center gap-2 pt-1 text-[12px] text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={showAncient}
+                      onChange={(e) => setShowAncient(e.target.checked)}
+                      className="h-3.5 w-3.5 accent-navy"
+                    />
+                    Show events older than 100 days
+                  </label>
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <span className="rounded-full bg-slate-100 px-2.5 py-[3px] text-[11.5px] text-slate-600">
+                {filtered.length} / {rows.length}
+              </span>
+              {gmailConnection?.connected && incompleteTargets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => requestDialog.open(incompleteTargets)}
+                  className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
+                >
+                  Request missing info ({incompleteTargets.length})
                 </button>
               )}
             </div>
-          )}
-          <div className="flex min-h-0 flex-1 flex-col">
-            {isLoading && <div className="p-6 text-sm text-muted-foreground">Loading…</div>}
-            {error && (
-              <div role="alert" className="p-6 text-sm text-destructive">
-                Failed to load data: {(error as Error).message}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-auto">
+            {isLoading && (
+              <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</p>
+            )}
+            {!isLoading && filtered.length === 0 && (
+              <div className="flex flex-col items-center gap-2.5 px-12 py-16 text-center">
+                <SearchX className="h-6 w-6 text-slate-400" aria-hidden="true" />
+                <span className="font-display text-base font-bold">
+                  {search ? `Nothing matches “${search}”` : "Nothing to show"}
+                </span>
+                <span className="text-[12.5px] leading-relaxed text-slate-600">
+                  Search covers booking refs, companies, events and partner names.
+                </span>
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch("")}
+                    className="inline-flex h-[30px] items-center rounded-md border border-input bg-white px-3 text-[12px] font-medium text-slate-700"
+                  >
+                    Clear the search
+                  </button>
+                )}
               </div>
             )}
-            {!isLoading && !error && (
-              <div className="sla-scroll px-2">
-                <table className="na-table w-full border-collapse text-[12px]">
-                  <thead>
-                    <tr className="na-group-row">
-                      <th className="na-group na-group-event" colSpan={6}>Deal</th>
-                      <th className="na-group na-group-client na-col-client" colSpan={4}>Client</th>
-                      <th className="na-group na-group-partner na-col-partner" colSpan={5}>Partner</th>
-                      <th className="na-group" colSpan={1}>Status</th>
-                    </tr>
-                    <tr className="na-head-row">
-                      <th className="na-cell w-8"></th>
-                      <SortTh label="Start" k="start_date" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                      <SortTh label="Booking" k="readable_id" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                      <SortTh label="Company / Event" k="company_name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                      <SortTh label="Sales / EM" k="sales_referent" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                      <SortTh label="Days" k="days_before_start" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                      <SortTh label="GMV" k="gmv_client_ccy" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" className="na-col-client" />
-                      <SortTh label="Invoiced" k="invoiced_ccy" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" className="na-col-client" />
-                      <SortTh label="Paid" k="paid_ccy" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" className="na-col-client" />
-                      <SortTh label="Outstanding" k="balance_ccy" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" className="na-col-client" />
-                      <th className="na-cell na-col-partner text-right">GMV</th>
-                      <th
-                        className="na-cell na-col-partner text-right"
-                        title="Whole event: gross less commission"
+            {!isLoading &&
+              groups.map((g) => (
+                <Fragment key={g.key}>
+                  <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-100 bg-[#fafaf8] px-4 py-2">
+                    <span
+                      className="h-[7px] w-[7px] flex-none rounded-full"
+                      style={{ background: g.dot }}
+                    />
+                    <span className="text-[11px] font-bold uppercase tracking-[0.07em] text-slate-600">
+                      {g.title}
+                    </span>
+                    <span className="text-[11px] text-slate-400">{g.rows.length}</span>
+                  </div>
+                  {g.rows.map(({ row: r, partners: ps }) => {
+                    const ref = r.readable_id ?? "";
+                    const isSel = selRef === ref;
+                    const owed = rowPartnerToPay(r, ps);
+                    const owedLabel = Array.from(owed.entries())
+                      .map(([c, v]) => `${fmtAmount(v)} ${ccyLabel(c)}`)
+                      .join(" · ");
+                    return (
+                      <button
+                        key={ref}
+                        type="button"
+                        onClick={() => setSelectedRef(ref)}
+                        className={`flex w-full gap-2.5 border-b border-slate-100 px-4 py-2.5 text-left ${
+                          isSel ? "bg-naboo/25" : "hover:bg-slate-50"
+                        }`}
+                        style={{ borderLeft: `3px solid ${isSel ? "#101f34" : "transparent"}` }}
                       >
-                        Payable (event)
-                      </th>
-                      <th
-                        className="na-cell na-col-partner text-right"
-                        title="Invoiced to the client for these partners, less commission — what is owed right now"
-                      >
-                        Payable to date
-                      </th>
-                      <th className="na-cell na-col-partner text-right">Paid</th>
-                      <th className="na-cell na-col-partner text-right">Outstanding</th>
-                      <SortTh label="Status" k="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                    </tr>
-
-                  </thead>
-                  <tbody>
-                    {sorted.map(({ row, partners }, idx) => {
-                      const id = row.readable_id ?? "";
-                      const isOpen = expanded.has(id);
-                      const totals = sumPartners(partners);
-                      const zebra = idx % 2 === 1;
-                      const ccyClient = row.currency_client;
-                      const anyLockedAdmin = partners.some((p) => p.locked_by_admin);
-                      const anyLockedClient = partners.some((p) => p.locked_by_client);
-                      const anyLocked = partners.some((p) => p.locked);
-                      const clawSplit = rowClawbackSplit(partners);
-                      return (
-                        <Fragment key={id}>
-                          <tr
-                            className={`na-body-row cursor-pointer ${zebra ? "na-zebra" : ""}`}
-                            onClick={() => toggle(id)}
-                          >
-                            <td className="na-cell">
-                              {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                            </td>
-                            <td className="na-cell whitespace-nowrap text-text-secondary">{fmtDate(row.start_date)}</td>
-                            <td className="na-cell font-mono text-xs">
-                              {row.booking_url ? (
-                                <a
-                                  href={row.booking_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-primary hover:underline"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  {row.readable_id}
-                                </a>
-                              ) : (
-                                row.readable_id
-                              )}
-                              {ccyClient && (
-                                <div className="mt-1 inline-flex rounded border border-border px-1.5 py-0 text-[10px] font-medium text-text-muted">
-                                  {ccyLabel(ccyClient)}
-                                </div>
-                              )}
-                              <CommentersChip summary={commentSummaries?.get(id)} />
-                              <EventStickers
-                                eventRef={id}
-                                partners={partners.map((p) => ({ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, is_cancelled: p.is_provision, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }))}
-                                hasPo={true}
-                                factsMap={factsMap}
-                                actionFor={(ref, partner, hasPo) => actionFor(ref, partner, hasPo, { taxTracked: false })}
-                                hideTax
-                                hideCardPending
-                              />
-                            </td>
-                            <td className="na-cell">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <div className="min-w-0">
-                                  <div className="truncate font-medium text-text-primary">{row.company_name ?? "—"}</div>
-                                  {row.billing_entity && (
-                                    <div className="truncate text-[11px] text-text-muted">{row.billing_entity}</div>
-                                  )}
-                                </div>
-                                <LockChip
-                                  locked={anyLocked}
-                                  admin={anyLockedAdmin}
-                                  client={anyLockedClient}
-                                  em={row.em_referent}
-                                />
-                              </div>
-                            </td>
-                            <td className="na-cell whitespace-nowrap">
-                              <div className="text-text-secondary">{abbrevPerson(row.sales_referent) || "—"}</div>
-                              <div className="text-[11px] text-text-muted">{abbrevPerson(row.em_referent) || "—"}</div>
-                            </td>
-                            <td className="na-cell text-right text-text-secondary">
-                              {row.days_before_start ?? <span className="text-text-muted">—</span>}
-                            </td>
-                            <td className="na-cell na-col-client text-right">
-                              <Money value={row.gmv_client_ccy} currency={ccyClient} />
-                            </td>
-                            <td className="na-cell na-col-client text-right">
-                              <Money value={row.invoiced_ccy} currency={ccyClient} />
-                            </td>
-                            <td className="na-cell na-col-client text-right">
-                              <Money value={row.paid_ccy} currency={ccyClient} />
-                            </td>
-                            <td className="na-cell na-col-client text-right">
-                              <Money value={row.balance_ccy} currency={ccyClient} kind="danger" />
-                            </td>
-                            <td className="na-cell na-col-partner text-right">
-                              <MultiMoney map={totals} field="gmv" />
-                            </td>
-                            <td className="na-cell na-col-partner text-right">
-                              <MultiMoney map={totals} field="payable" kind="muted" />
-                            </td>
-                            <td className="na-cell na-col-partner text-right">
-                              <MultiMoney map={totals} field="payableToDate" />
-                            </td>
-                            <td className="na-cell na-col-partner text-right">
-                              <MultiMoney map={totals} field="paid" />
-                            </td>
-                            <td className="na-cell na-col-partner text-right">
-                              <PartnerOutstandingCell partners={partners} totals={totals} />
-                            </td>
-                            <td className="na-cell">
-                              <StatusCell owed={rowPartnerToPay(row, partners)} commission={clawSplit.commission} refund={clawSplit.refund} />
-                            </td>
-                          </tr>
-                          {isOpen && (
-                            <tr className="na-drawer-row">
-                              <td colSpan={15} className="p-0">
-                                <div className="na-drawer-wrap">
-                                  <PartnerSectionCard
-                                    id={id}
-                                    partners={partners}
-                                    totals={totals}
-                                    actionFor={actionFor}
-                                    factsMap={factsMap}
-                                    financialSummaries={financialSummaries}
-                                    gmailConnected={gmailConnection?.connected === true}
-                                    onSummarize={(input) => summarize.mutate(input)}
-                                    summarizing={summarize.isPending ? summarize.variables : null}
-                                  />
-                                  {gmailConnection?.connected && (
-                                    <div className="mt-4">
-                                      <PartnerEmails
-                                        eventRef={id}
-                                        partners={partners
-                                          .filter((p) => !p.is_provision && p.email)
-                                          .map((p) => ({
-                                            name: p.name,
-                                            email: p.email,
-                                            owed: p.outstanding != null
-                                              ? `${p.outstanding.toLocaleString("en-CA", { minimumFractionDigits: 2 })} ${p.currency ?? ""}`
-                                              : null,
-                                          }))}
-                                      />
-                                    </div>
-                                  )}
-                                  <div className="mt-4">
-                                    <CommentsSectionCard eventRef={id} />
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                    {sorted.length === 0 && (
-                      <tr>
-                        <td colSpan={15} className="na-cell text-center text-sm text-text-muted py-8">
-                          No bookings match the current filters.
-                        </td>
-                      </tr>
-                    )}
-
-                  </tbody>
-                </table>
-              </div>
-            )}
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-1.5">
+                            <span className="truncate text-[13px] font-medium">
+                              {r.company_name ?? "—"}
+                            </span>
+                            <span className="flex-none font-mono text-[10.5px] text-slate-400">
+                              {ref}
+                            </span>
+                          </span>
+                          <span className="mt-0.5 block truncate text-[11.5px] text-slate-500">
+                            {r.event_name ?? "—"}
+                          </span>
+                          <span className="mt-1 inline-flex">
+                            <StatusCell
+                              owed={owed}
+                              commission={rowClawbackSplit(ps).commission}
+                              refund={rowClawbackSplit(ps).refund}
+                            />
+                          </span>
+                        </span>
+                        <span className="flex-none whitespace-nowrap text-right">
+                          <span className="block text-[13px] font-semibold tabular-nums">
+                            {owedLabel || "—"}
+                          </span>
+                          <span className="block text-[10.5px] text-slate-400">to pay</span>
+                          <span className="mt-1.5 block text-[10.5px] text-slate-400">
+                            {fmtDate(r.start_date)}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </Fragment>
+              ))}
           </div>
         </div>
+
+        {/* ── Detail pane ───────────────────────────────────────────────── */}
+        <div className="flex min-w-[780px] flex-1 flex-col bg-[#fafaf8]">
+          {sel == null ? (
+            <div className="flex flex-1 items-center justify-center px-10 text-center">
+              <span className="text-sm text-slate-500">
+                Select a booking on the left to see its detail.
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="flex-none border-b border-border bg-white px-6 pb-3.5 pt-4">
+                <div className="flex items-start gap-3.5">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <h1 className="font-display text-2xl font-bold tracking-tight">
+                        {sel.company_name ?? "—"}
+                      </h1>
+                      {sel.booking_url ? (
+                        <a
+                          href={sel.booking_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="border-b border-dotted border-slate-400 font-mono text-[12.5px] no-underline"
+                        >
+                          {selRef}
+                        </a>
+                      ) : (
+                        <span className="font-mono text-[12.5px]">{selRef}</span>
+                      )}
+                      <LockChip
+                        locked={selPartners.some((p) => p.locked)}
+                        admin={selPartners.some((p) => p.locked_by_admin)}
+                        client={selPartners.some((p) => p.locked_by_client)}
+                        em={sel.em_referent}
+                      />
+                    </div>
+                    <div className="mt-1 text-[13px] text-slate-500">
+                      {sel.event_name ?? "—"} ·{" "}
+                      {(sel.transaction_kind ?? "—").replaceAll("_", " ").toLowerCase()} ·{" "}
+                      {sel.billing_entity ?? "—"} · {fmtDate(sel.start_date)}
+                      {sel.participants ? ` · ${sel.participants} pax` : ""}
+                    </div>
+                  </div>
+                  <div className="ml-auto flex flex-none gap-2">
+                    {sel.booking_url && (
+                      <a
+                        href={sel.booking_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 no-underline"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                        Back office
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-5">
+                  {[
+                    {
+                      label: "Client GMV",
+                      node: <Money value={sel.gmv_client_ccy} currency={sel.currency_client} />,
+                    },
+                    {
+                      label: "Invoiced",
+                      node: <Money value={sel.invoiced_ccy} currency={sel.currency_client} />,
+                    },
+                    {
+                      label: "Received",
+                      node: <Money value={sel.paid_ccy} currency={sel.currency_client} />,
+                    },
+                    {
+                      label: "To cash in",
+                      node: (
+                        <Money
+                          value={sel.balance_ccy}
+                          currency={sel.currency_client}
+                          kind="danger"
+                        />
+                      ),
+                    },
+                    {
+                      label: "To pay partners",
+                      node: <MultiMoney map={selTotals} field="outstanding" kind="danger" />,
+                    },
+                  ].map((s) => (
+                    <div key={s.label} className="bg-white px-3 py-2.5">
+                      <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                        {s.label}
+                      </div>
+                      <div className="mt-0.5 text-base font-semibold tabular-nums">{s.node}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
+                <PartnerSectionCard
+                  id={selRef}
+                  partners={selPartners}
+                  totals={selTotals}
+                  actionFor={actionFor}
+                  factsMap={factsMap}
+                  financialSummaries={financialSummaries}
+                  gmailConnected={gmailConnection?.connected === true}
+                  onSummarize={(input) => summarize.mutate(input)}
+                  summarizing={summarize.isPending ? (summarize.variables ?? null) : null}
+                />
+                <div className="mt-4">
+                  <PartnerInvoicePdfs clientRequestId={sel.client_request_id} />
+                </div>
+                {gmailConnection?.connected && (
+                  <div className="mt-4">
+                    <PartnerEmails
+                      eventRef={selRef}
+                      partners={selPartners
+                        .filter((p) => !p.is_provision && p.email)
+                        .map((p) => ({
+                          name: p.name,
+                          email: p.email,
+                          owed: p.outstanding != null ? fmtAmount(p.outstanding) : null,
+                        }))}
+                    />
+                  </div>
+                )}
+                <div className="mt-4">
+                  <CommentsSectionCard eventRef={selRef} />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
       {requestDialog.targets && (
         <RequestInfoDialog targets={requestDialog.targets} onClose={requestDialog.close} />
       )}
@@ -990,7 +1116,9 @@ function Kpi({ title, value }: { title: string; value: string }) {
   return (
     <Card>
       <CardHeader className="pb-1">
-        <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">{title}</CardTitle>
+        <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
+          {title}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="text-2xl font-semibold">{value}</div>
@@ -1013,7 +1141,12 @@ function MultiFilter({
   onClear: () => void;
 }) {
   const count = selected.size;
-  const summary = count === 0 ? `${label}: All` : count === 1 ? `${label}: ${[...selected][0]}` : `${label}: ${count}`;
+  const summary =
+    count === 0
+      ? `${label}: All`
+      : count === 1
+        ? `${label}: ${[...selected][0]}`
+        : `${label}: ${count}`;
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -1026,7 +1159,11 @@ function MultiFilter({
         <div className="mb-2 flex items-center justify-between">
           <span className="text-xs font-medium text-muted-foreground">{label}</span>
           {count > 0 && (
-            <button type="button" onClick={onClear} className="text-xs text-primary hover:underline">
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-xs text-primary hover:underline"
+            >
               Clear
             </button>
           )}
@@ -1049,7 +1186,6 @@ function MultiFilter({
     </Popover>
   );
 }
-
 
 function FilterSelect({
   label,
@@ -1108,7 +1244,6 @@ function SortHead({
       </button>
     </TableHead>
   );
-
 }
 
 function SortTh({
@@ -1205,11 +1340,28 @@ function PartnerOutstandingCell({
   const provOnly = nonProvOutstanding < 0.005 && provOutstanding >= 0.005;
   if (provOnly) {
     // Build a per-currency map for provision outstanding
-    const map = new Map<string, { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }>();
+    const map = new Map<
+      string,
+      {
+        gmv: number;
+        paid: number;
+        outstanding: number;
+        payable: number;
+        payableToDate: number;
+        commission: number;
+      }
+    >();
     for (const p of partners) {
       if (!p.is_provision) continue;
       const c = p.currency ?? "—";
-      const cur = map.get(c) ?? { gmv: 0, paid: 0, outstanding: 0, payable: 0, payableToDate: 0, commission: 0 };
+      const cur = map.get(c) ?? {
+        gmv: 0,
+        paid: 0,
+        outstanding: 0,
+        payable: 0,
+        payableToDate: 0,
+        commission: 0,
+      };
       cur.outstanding += p.outstanding ?? 0;
       map.set(c, cur);
     }
@@ -1223,28 +1375,47 @@ function PartnerOutstandingCell({
   return <MultiMoney map={totals} field="outstanding" kind="danger" />;
 }
 
-function StatusCell({ owed, commission, refund }: { owed: Map<string, number>; commission: Map<string, number>; refund: Map<string, number> }) {
+function StatusCell({
+  owed,
+  commission,
+  refund,
+}: {
+  owed: Map<string, number>;
+  commission: Map<string, number>;
+  refund: Map<string, number>;
+}) {
   const fmt = (m: Map<string, number>) =>
-    Array.from(m.entries()).map(([c, v]) => `${fmtAmount(v)} ${ccyLabel(c)}`).join(" · ");
+    Array.from(m.entries())
+      .map(([c, v]) => `${fmtAmount(v)} ${ccyLabel(c)}`)
+      .join(" · ");
   if (owed.size === 0 && commission.size === 0 && refund.size === 0) {
     return <span className="text-text-muted">—</span>;
   }
   return (
     <span className="flex flex-col items-start gap-1">
       {owed.size > 0 && (
-        <span className="na-pill na-pill-green inline-flex items-center gap-1 whitespace-nowrap" title="Client paid — partner outstanding">
+        <span
+          className="na-pill na-pill-green inline-flex items-center gap-1 whitespace-nowrap"
+          title="Client paid — partner outstanding"
+        >
           <Banknote className="h-3 w-3" />
           Partner to be paid · {fmt(owed)}
         </span>
       )}
       {commission.size > 0 && (
-        <span className="na-pill na-pill-amber inline-flex items-center gap-1 whitespace-nowrap" title="Commission fronted to partner — to recover">
+        <span
+          className="na-pill na-pill-amber inline-flex items-center gap-1 whitespace-nowrap"
+          title="Commission fronted to partner — to recover"
+        >
           <Banknote className="h-3 w-3" />
           Commission to recover · {fmt(commission)}
         </span>
       )}
       {refund.size > 0 && (
-        <span className="na-pill na-pill-red inline-flex items-center gap-1 whitespace-nowrap" title="Partner over-refunded beyond commission — refund to ask">
+        <span
+          className="na-pill na-pill-red inline-flex items-center gap-1 whitespace-nowrap"
+          title="Partner over-refunded beyond commission — refund to ask"
+        >
           <Banknote className="h-3 w-3" />
           Refund to ask · {fmt(refund)}
         </span>
@@ -1252,7 +1423,6 @@ function StatusCell({ owed, commission, refund }: { owed: Map<string, number>; c
     </span>
   );
 }
-
 
 function PartnerSectionCard({
   id,
@@ -1272,7 +1442,11 @@ function PartnerSectionCard({
   factsMap: ReturnType<typeof useActionIndex>["factsMap"];
   financialSummaries: Map<string, NaFinancialSummary> | undefined;
   gmailConnected: boolean;
-  onSummarize: (input: { event_ref: string; partner_name: string; partner_email: string | null }) => void;
+  onSummarize: (input: {
+    event_ref: string;
+    partner_name: string;
+    partner_email: string | null;
+  }) => void;
   summarizing: { event_ref: string; partner_name: string; partner_email: string | null } | null;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
@@ -1283,7 +1457,6 @@ function PartnerSectionCard({
       : `${payableCount} partner${payableCount === 1 ? "" : "s"} payable`;
   return (
     <section className="na-section-card na-section-card-partner">
-
       <header className="na-section-head">
         <span aria-hidden>👥</span>
         <span>Partners</span>
@@ -1298,7 +1471,10 @@ function PartnerSectionCard({
             <th className="text-right" title="Whole event: gross less commission">
               Payable (event)
             </th>
-            <th className="text-right" title="Invoiced to the client for this partner, less commission — what is owed right now">
+            <th
+              className="text-right"
+              title="Invoiced to the client for this partner, less commission — what is owed right now"
+            >
               Payable to date
             </th>
             <th className="text-right">Paid</th>
@@ -1330,15 +1506,45 @@ function PartnerSectionCard({
                   {!prov && (
                     <>
                       <PartnerStickers
-                        action={actionFor(id, { name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null, cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined }, true, { taxTracked: false })}
-                        facts={factsMap?.get(`${id}::${(p.name ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`)}
-                        partner={{ name: p.name, email: p.email, amount_due: p.outstanding, vat_raw: null, tax_identifier: null, country: null }}
+                        action={actionFor(
+                          id,
+                          {
+                            name: p.name,
+                            email: p.email,
+                            amount_due: p.outstanding,
+                            vat_raw: null,
+                            tax_identifier: null,
+                            country: null,
+                            cardOnThisEvent:
+                              p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
+                          },
+                          true,
+                          { taxTracked: false },
+                        )}
+                        facts={factsMap?.get(
+                          `${id}::${(p.name ?? "")
+                            .toLowerCase()
+                            .normalize("NFD")
+                            .replace(/[\u0300-\u036f]/g, "")
+                            .replace(/[^a-z0-9]+/g, "-")
+                            .replace(/^-+|-+$/g, "")}`,
+                        )}
+                        partner={{
+                          name: p.name,
+                          email: p.email,
+                          amount_due: p.outstanding,
+                          vat_raw: null,
+                          tax_identifier: null,
+                          country: null,
+                        }}
                         hideTax
                         hideCardPending
                       />
                       {gmailConnected && (
                         <NaFinancialSummaryBox
-                          existing={financialSummaries?.get(`${id}::${partnerKey(p.name ?? p.email ?? "")}`)}
+                          existing={financialSummaries?.get(
+                            `${id}::${partnerKey(p.name ?? p.email ?? "")}`,
+                          )}
                           loading={
                             summarizing?.event_ref === id &&
                             summarizing?.partner_name === (p.name ?? p.email ?? "")
@@ -1356,13 +1562,25 @@ function PartnerSectionCard({
                   )}
                 </td>
                 <td className="text-right">
-                  {prov ? <span className="text-text-muted">—</span> : <Money value={p.gmv_ttc} currency={p.currency} />}
+                  {prov ? (
+                    <span className="text-text-muted">—</span>
+                  ) : (
+                    <Money value={p.gmv_ttc} currency={p.currency} />
+                  )}
                 </td>
                 <td className="text-right text-text-secondary">
-                  {prov || p.commission == null ? <span className="text-text-muted">—</span> : <Money value={p.commission} currency={p.currency} kind="muted" />}
+                  {prov || p.commission == null ? (
+                    <span className="text-text-muted">—</span>
+                  ) : (
+                    <Money value={p.commission} currency={p.currency} kind="muted" />
+                  )}
                 </td>
                 <td className="text-right">
-                  {prov ? <span className="text-text-muted">—</span> : <Money value={p.payable} currency={p.currency} />}
+                  {prov ? (
+                    <span className="text-text-muted">—</span>
+                  ) : (
+                    <Money value={p.payable} currency={p.currency} />
+                  )}
                 </td>
                 <td className="text-right">
                   {prov ? (
@@ -1372,22 +1590,42 @@ function PartnerSectionCard({
                   )}
                 </td>
                 <td className="text-right">
-                  {prov ? <span className="text-text-muted">—</span> : <Money value={p.paid} currency={p.currency} />}
+                  {prov ? (
+                    <span className="text-text-muted">—</span>
+                  ) : (
+                    <Money value={p.paid} currency={p.currency} />
+                  )}
                 </td>
                 <td className="text-right">
-                  {prov ? <span className="text-text-muted">—</span> : <Money value={p.outstanding} currency={p.currency} kind="danger" />}
+                  {prov ? (
+                    <span className="text-text-muted">—</span>
+                  ) : (
+                    <Money value={p.outstanding} currency={p.currency} kind="danger" />
+                  )}
                 </td>
               </tr>
             );
           })}
           <tr className="na-sub-subtotal">
             <td className="text-[10.5px] uppercase tracking-wide text-text-muted">Subtotal</td>
-            <td className="text-right"><MultiMoney map={totals} field="gmv" /></td>
-            <td className="text-right"><MultiMoney map={totals} field="commission" kind="muted" /></td>
-            <td className="text-right"><MultiMoney map={totals} field="payable" kind="muted" /></td>
-            <td className="text-right"><MultiMoney map={totals} field="payableToDate" /></td>
-            <td className="text-right"><MultiMoney map={totals} field="paid" /></td>
-            <td className="text-right"><MultiMoney map={totals} field="outstanding" kind="danger" /></td>
+            <td className="text-right">
+              <MultiMoney map={totals} field="gmv" />
+            </td>
+            <td className="text-right">
+              <MultiMoney map={totals} field="commission" kind="muted" />
+            </td>
+            <td className="text-right">
+              <MultiMoney map={totals} field="payable" kind="muted" />
+            </td>
+            <td className="text-right">
+              <MultiMoney map={totals} field="payableToDate" />
+            </td>
+            <td className="text-right">
+              <MultiMoney map={totals} field="paid" />
+            </td>
+            <td className="text-right">
+              <MultiMoney map={totals} field="outstanding" kind="danger" />
+            </td>
           </tr>
         </tbody>
       </table>
@@ -1435,11 +1673,12 @@ function NaFinancialSummaryBox({
 // Comments
 // ─────────────────────────────────────────────────────────────
 
-
 function initialsOf(name?: string | null, email?: string | null) {
   const src = (name || email || "?").trim();
   const parts = src.split(/\s+/);
-  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || src[0]?.toUpperCase() || "?";
+  return (
+    ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || src[0]?.toUpperCase() || "?"
+  );
 }
 
 function CommentersChip({ summary }: { summary: EventCommentSummary | undefined }) {
@@ -1526,18 +1765,16 @@ function CommentsSectionCard({ eventRef }: { eventRef: string }) {
         {comments?.map((c) => (
           <div key={c.id} className="flex gap-3 px-4 py-3">
             <UserAvatar
-  name={c.user_name}
-  email={c.user_email}
-  picture={c.user_avatar_url}
-  className="h-6 w-6"
-  fallbackClassName="bg-slate-200 text-slate-700"
-  textClassName="text-[10px]"
-/>
+              name={c.user_name}
+              email={c.user_email}
+              picture={c.user_avatar_url}
+              className="h-6 w-6"
+              fallbackClassName="bg-slate-200 text-slate-700"
+              textClassName="text-[10px]"
+            />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-[11px] text-text-muted">
-                <span className="font-medium text-text-primary">
-                  {c.user_name || c.user_email}
-                </span>
+                <span className="font-medium text-text-primary">{c.user_name || c.user_email}</span>
                 <span>·</span>
                 <span>{fmtWhen(c.created_at)}</span>
                 {user?.id === c.user_id && (
@@ -1551,9 +1788,7 @@ function CommentsSectionCard({ eventRef }: { eventRef: string }) {
                   </button>
                 )}
               </div>
-              <div className="mt-0.5 whitespace-pre-wrap text-xs text-text-primary">
-                {c.body}
-              </div>
+              <div className="mt-0.5 whitespace-pre-wrap text-xs text-text-primary">{c.body}</div>
             </div>
           </div>
         ))}
@@ -1573,22 +1808,25 @@ function CommentsSectionCard({ eventRef }: { eventRef: string }) {
           rows={2}
           className="min-h-[36px] flex-1 resize-y rounded-md border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
         />
-        <Button
-          size="sm"
-          onClick={submit}
-          disabled={!user || !body.trim() || addComment.isPending}
-        >
+        <Button size="sm" onClick={submit} disabled={!user || !body.trim() || addComment.isPending}>
           {addComment.isPending ? "Posting…" : "Post"}
         </Button>
       </div>
       {addComment.isError && (
-        <div role="alert" className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+        <div
+          role="alert"
+          className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+        >
           Comment not saved: {String((addComment.error as Error)?.message ?? addComment.error)}
         </div>
       )}
       {deleteComment.isError && (
-        <div role="alert" className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-          Comment not deleted: {String((deleteComment.error as Error)?.message ?? deleteComment.error)}
+        <div
+          role="alert"
+          className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+        >
+          Comment not deleted:{" "}
+          {String((deleteComment.error as Error)?.message ?? deleteComment.error)}
         </div>
       )}
     </section>
