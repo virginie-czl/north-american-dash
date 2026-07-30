@@ -108,6 +108,29 @@ client_proposal_totals AS (
 -- FEE_OWNER our commission on it, FEE_CLIENT the service charge billed to the
 -- client (no quote_id, so it never attaches to a provider). Amounts are in
 -- cents, hence the /100.
+-- Invoiced to the client, per booking.
+--
+-- Summed from the invoice lines rather than taken from the proposal's
+-- price_totals_total_client_with_fees_billed, which can lag behind reality: on
+-- C-V176 it still held 210 098,91 USD from an invoice that had since been
+-- cancelled and credited, where the back office showed 71 882,97 USD.
+--
+-- SERVICE + FEE_CLIENT only. FEE_OWNER lines are our commission invoiced to the
+-- partner, not to the client, and would otherwise inflate the client total.
+-- All statuses, so a cancelled invoice and its credit note cancel each other.
+invoiced_client AS (
+  SELECT
+    i.clientRequestReadableId AS rid,
+    ROUND(SUM(IF(li.line_type IN ('SERVICE', 'FEE_CLIENT'), li.total_incl_taxes, 0)) / 100, 2)
+      AS invoiced_ttc
+  FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
+  JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+    ON li.invoice_id = i.invoice_id
+  WHERE i.invoiceDirection = 'INCOME'
+    AND li.deleted = false
+    AND i.clientRequestReadableId IS NOT NULL
+  GROUP BY rid
+),
 invoiced_by_quote AS (
   SELECT
     li.quote_id,
@@ -295,7 +318,7 @@ base AS (
     e.booking_url,
     COALESCE(cpt.gmv_client_ccy, CAST(e.live_gross_gmv_ttc_clcurrency AS FLOAT64), fi.gmv) AS gmv_client_ccy,
     CAST(e.live_gross_gmv_ttc_eur AS FLOAT64) AS gmv_client_eur,
-    COALESCE(cpt.invoiced_ccy, CAST(ar.total_invoiced_ccy AS FLOAT64)) AS invoiced_ccy,
+    COALESCE(ic.invoiced_ttc, cpt.invoiced_ccy, CAST(ar.total_invoiced_ccy AS FLOAT64)) AS invoiced_ccy,
     COALESCE(CAST(ar.total_paid_client_ccy AS FLOAT64), fi.paid) AS paid_ccy,
     CAST(ar.balance_client_ccy AS FLOAT64) AS ar_balance_ccy,
     TO_JSON_STRING(
@@ -312,6 +335,7 @@ base AS (
     ON ar.readable_id = e.client_request_readable_id
   LEFT JOIN fi_base fi ON fi.crid = e.clientRequestId
   LEFT JOIN client_proposal_totals cpt ON cpt.rid = e.client_request_readable_id
+  LEFT JOIN invoiced_client ic ON ic.rid = e.client_request_readable_id
   LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
   LEFT JOIN partners_fi_fallback pfb ON pfb.rid = e.client_request_readable_id
   WHERE e.bk_market = 'North America'
