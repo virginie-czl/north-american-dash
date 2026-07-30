@@ -109,6 +109,11 @@ client_proposal_totals AS (
 invoiced_by_quote AS (
   SELECT
     li.quote_id,
+    -- Guard against ever subtracting across currencies: invoice lines are in the
+    -- client's currency and the partner figures in the partner's. They match on
+    -- every North American booking today, but a mismatch would silently produce a
+    -- nonsense number rather than an error.
+    ANY_VALUE(li.currency) AS line_ccy,
     ROUND(SUM(IF(li.line_type = 'SERVICE',    li.total_incl_taxes, 0)) / 100, 2) AS invoiced_service_ttc,
     ROUND(SUM(IF(li.line_type = 'FEE_OWNER',  li.total_incl_taxes, 0)) / 100, 2) AS invoiced_commission_ttc
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
@@ -141,14 +146,30 @@ partners_rm_dedup AS (
     CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
       - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64)
       - CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64) AS paid,
-    CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64) AS outstanding,
+    -- Outstanding is what is owed *now*: payable to date less what has gone out.
+    -- Using the view's own whole-event remainder counted amounts not yet invoiced
+    -- to the client as money we already owe the partner.
+    ROUND(
+      COALESCE(
+        IF(ibq.line_ccy = rm.currency_partner,
+           ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc, NULL),
+        CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
+          - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64)
+      )
+      - (
+        CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
+          - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64)
+          - CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64)
+      ), 2) AS outstanding,
+    -- The view's own figure, kept for reference: remainder over the whole event.
     CAST(rm.p_outstanding_payable_pcurrency AS FLOAT64) AS raw_outstanding,
     CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
       - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64) AS payable,
     -- Payable to date: invoiced to the client for this provider, less commission.
     -- Falls back to the whole-event figure when nothing has been invoiced yet.
     COALESCE(
-      ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc,
+      IF(ibq.line_ccy = rm.currency_partner,
+         ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc, NULL),
       CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64)
         - CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64)
     ) AS payable_to_date,
@@ -208,11 +229,19 @@ partners_fi_fallback AS (
       CAST(ROUND((part.liveConfirmed.netPayable.withTaxes
                   + part.liveConfirmed.commission.withTaxes) / 10000, 2) AS FLOAT64) AS gmv_ttc,
       CAST(ROUND(ABS(part.disbursedTotal) / 10000, 2) AS FLOAT64) AS paid,
-      CAST(ROUND(part.outstandingPayable / 10000, 2) AS FLOAT64) AS outstanding,
+      ROUND(
+        COALESCE(
+          IF(ibq.line_ccy = part.currency,
+             ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc, NULL),
+          CAST(ROUND(part.liveConfirmed.netPayable.withTaxes / 10000, 2) AS FLOAT64)
+        )
+        - CAST(ROUND(ABS(part.disbursedTotal) / 10000, 2) AS FLOAT64)
+      , 2) AS outstanding,
       CAST(ROUND(part.outstandingPayable / 10000, 2) AS FLOAT64) AS raw_outstanding,
       CAST(ROUND(part.liveConfirmed.netPayable.withTaxes / 10000, 2) AS FLOAT64) AS payable,
       COALESCE(
-        ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc,
+        IF(ibq.line_ccy = part.currency,
+           ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc, NULL),
         CAST(ROUND(part.liveConfirmed.netPayable.withTaxes / 10000, 2) AS FLOAT64)
       ) AS payable_to_date,
       CAST(ROUND(part.liveConfirmed.commission.withTaxes / 10000, 2) AS FLOAT64) AS commission,

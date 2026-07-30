@@ -776,7 +776,7 @@ function NaPage() {
                     <tr className="na-group-row">
                       <th className="na-group na-group-event" colSpan={6}>Deal</th>
                       <th className="na-group na-group-client na-col-client" colSpan={4}>Client</th>
-                      <th className="na-group na-group-partner na-col-partner" colSpan={4}>Partner</th>
+                      <th className="na-group na-group-partner na-col-partner" colSpan={5}>Partner</th>
                       <th className="na-group" colSpan={1}>Status</th>
                     </tr>
                     <tr className="na-head-row">
@@ -791,7 +791,18 @@ function NaPage() {
                       <SortTh label="Paid" k="paid_ccy" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" className="na-col-client" />
                       <SortTh label="Outstanding" k="balance_ccy" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" className="na-col-client" />
                       <th className="na-cell na-col-partner text-right">GMV</th>
-                      <th className="na-cell na-col-partner text-right">Payable</th>
+                      <th
+                        className="na-cell na-col-partner text-right"
+                        title="Whole event: gross less commission"
+                      >
+                        Payable (event)
+                      </th>
+                      <th
+                        className="na-cell na-col-partner text-right"
+                        title="Invoiced to the client for these partners, less commission — what is owed right now"
+                      >
+                        Payable to date
+                      </th>
                       <th className="na-cell na-col-partner text-right">Paid</th>
                       <th className="na-cell na-col-partner text-right">Outstanding</th>
                       <SortTh label="Status" k="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -888,7 +899,10 @@ function NaPage() {
                               <MultiMoney map={totals} field="gmv" />
                             </td>
                             <td className="na-cell na-col-partner text-right">
-                              <MultiMoney map={totals} field="payable" />
+                              <MultiMoney map={totals} field="payable" kind="muted" />
+                            </td>
+                            <td className="na-cell na-col-partner text-right">
+                              <MultiMoney map={totals} field="payableToDate" />
                             </td>
                             <td className="na-cell na-col-partner text-right">
                               <MultiMoney map={totals} field="paid" />
