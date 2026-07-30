@@ -108,12 +108,14 @@ function ccyLabel(ccy: string | null | undefined) {
 function fmtAmount(value: number | null | undefined) {
   if (value == null) return null;
   try {
+    // Always two decimals: these figures get reconciled against the back office
+    // and against partner invoices, where the cents matter.
     return new Intl.NumberFormat("fr-FR", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(value);
   } catch {
-    return value.toFixed(0);
+    return value.toFixed(2);
   }
 }
 
