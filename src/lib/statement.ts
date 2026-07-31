@@ -471,6 +471,10 @@ h1 .ref { color: #9CA3AF; font-weight: 600 }
   margin-top: 16px;
   break-inside: avoid;
 }
+/* Two tiles rather than three: the commission statement carries only a base and a
+   net, and the three-column grid would squeeze both into the left two thirds and
+   wrap their labels. */
+.tiles-2 { grid-template-columns: 1fr 1.15fr }
 .tile {
   padding: 13px 16px 14px;
   border: 1px solid #E5E7EB;
@@ -774,60 +778,105 @@ export function buildStatementHtml(input: StatementInput, options: StatementHtml
         } either way.`
       : "";
 
+  return documentShell({
+    kind: "Statement of account",
+    // The running footer says "Statement C-P222", not the whole title.
+    footerLabel: "Statement",
+    label: "STATEMENT OF ACCOUNT",
+    reference: input.booking.readable_id,
+    generatedOn: input.generatedOn,
+    currencies,
+    metaCells: [
+      { label: "Billed to", value: input.booking.billed_to },
+      { label: "Event", value: input.booking.event },
+      { label: "Booking", value: input.booking.readable_id },
+      { label: "Billing entity", value: input.booking.billing_entity },
+    ],
+    bodyHtml: `${tiles}\n${blocks}`,
+    footnoteHtml: `Generated from Naboo's finance records on ${esc(generated)}.${esc(nettingNote)}
+    Amounts are shown including taxes${headline ? ` in ${esc(currencies)}` : ""}.
+    Questions on this statement: <a href="mailto:${esc(email)}">${esc(email)}</a>${
+      name ? ` (${esc(name)}, event manager)` : ""
+    }.`,
+    contactEmail: email,
+    fontBaseUrl: options.fontBaseUrl,
+  });
+}
+
+export type DocumentShellOptions = {
+  /** Used for the page title and the H1, e.g. "Commission statement". */
+  kind: string;
+  /** The running footer's own label, when it is shorter than the H1's. */
+  footerLabel?: string;
+  /** The running header's right-hand label, in caps. */
+  label: string;
+  reference: string;
+  /** ISO day; every date in the document is derived from it. */
+  generatedOn: string;
+  currencies: string;
+  metaCells: Array<{ label: string; value: string }>;
+  /** Tiles, tables and the closing bar — already escaped by the caller. */
+  bodyHtml: string;
+  /** Already escaped, and may contain the contact's mailto link. */
+  footnoteHtml: string;
+  contactEmail: string;
+  fontBaseUrl?: string;
+};
+
+/**
+ * The page itself: fonts, stylesheet, the two running bands, the H1, the meta
+ * strip and the footnote.
+ *
+ * Shared by every document this tracker issues so they cannot drift apart — the
+ * client statement of account and the per-provider commission statement differ in
+ * their tables, not in their furniture.
+ */
+export function documentShell(options: DocumentShellOptions): string {
+  const generated = fmtLongDay(options.generatedOn);
+  const ref = esc(options.reference);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>${esc(`Statement of account ${input.booking.readable_id}`)}</title>
+<title>${esc(`${options.kind} ${options.reference}`)}</title>
 <style>${FONT_FACES(options.fontBaseUrl ?? "")}${CSS_TEXT}</style>
 </head>
 <body>
 <header class="running-header">
   <span class="logo">naboo</span>
   <span class="hdr-right">
-    <span class="hdr-title">Statement of account</span>
-    <span class="hdr-meta">Booking ${esc(input.booking.readable_id)} · issued ${esc(
-      generated,
-    )} · ${esc(currencies)}</span>
+    <span class="hdr-title">${esc(options.label)}</span>
+    <span class="hdr-meta">Booking ${ref} · issued ${esc(generated)} · ${esc(
+      options.currencies,
+    )}</span>
   </span>
 </header>
 <footer class="running-footer">
-  <span>Naboo Group · ${esc(email)}</span>
-  <span>Statement ${esc(input.booking.readable_id)} · ${esc(generated)}</span>
+  <span>Naboo Group · ${esc(options.contactEmail)}</span>
+  <span>${esc(options.footerLabel ?? options.kind)} ${ref} · ${esc(generated)}</span>
 </footer>
 <main>
-  <h1>Statement of account <span class="ref">· ${esc(input.booking.readable_id)}</span></h1>
+  <h1>${esc(options.kind)} <span class="ref">· ${ref}</span></h1>
 
   <div class="meta">
-    <div>
-      <div class="meta-label">Billed to</div>
-      <div class="meta-value">${esc(input.booking.billed_to)}</div>
-    </div>
-    <div>
-      <div class="meta-label">Event</div>
-      <div class="meta-value">${esc(input.booking.event)}</div>
-    </div>
-    <div>
-      <div class="meta-label">Booking</div>
-      <div class="meta-value">${esc(input.booking.readable_id)}</div>
-    </div>
-    <div>
-      <div class="meta-label">Billing entity</div>
-      <div class="meta-value">${esc(input.booking.billing_entity)}</div>
-    </div>
+${options.metaCells
+  .map(
+    (c) => `    <div>
+      <div class="meta-label">${esc(c.label)}</div>
+      <div class="meta-value">${esc(c.value)}</div>
+    </div>`,
+  )
+  .join("\n")}
   </div>
 
-${tiles}
-${blocks}
+${options.bodyHtml}
 
   <p class="footnote">
-    Generated from Naboo's finance records on ${esc(generated)}.${esc(nettingNote)}
-    Amounts are shown including taxes${headline ? ` in ${esc(currencies)}` : ""}.
-    Questions on this statement: <a href="mailto:${esc(email)}">${esc(email)}</a>${
-      name ? ` (${esc(name)}, event manager)` : ""
-    }.
+    ${options.footnoteHtml}
   </p>
 </main>
 </body>
 </html>`;
 }
+
+export { esc as escapeHtml, pluralise };

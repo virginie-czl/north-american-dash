@@ -20,6 +20,10 @@ export type NaCommissionableItem = {
 export interface NaPartnerLine {
   /** Owner code (O-XXXX) — matches credit-card approvals in #finance-paiement-by-card. */
   owner_code: string | null;
+  /** House code (H-XXXX): the venue, and the key a commission statement is drawn on. */
+  house_code: string | null;
+  /** How many NABCO commission documents exist for this provider on this booking. */
+  commission_doc_count: number | null;
   /** Every payment we made to this provider on this booking. */
   disbursements: NaDisbursement[] | null;
   /** The lines a commission is applied to, and its rate. */
@@ -178,6 +182,21 @@ commissionable AS (
       AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
       AND cpi.object_data_label IS NOT NULL
   )
+  GROUP BY quote_id
+),
+-- How many commission documents exist per provider quote. Only used to decide
+-- whether a partner card offers a commission statement at all: a card with no
+-- NABCO document must not offer a button that produces an empty page.
+--
+-- NABCO-% are the commission notes addressed to the providers, and the FEE_OWNER
+-- line items are what attach one to a particular quote.
+commission_docs_by_quote AS (
+  SELECT li.quote_id AS quote_id, COUNT(DISTINCT i.invoice_id) AS doc_count
+  FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
+  JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+    ON li.invoice_id = i.invoice_id AND li.deleted = false
+  WHERE i.invoiceNumber LIKE 'NABCO-%'
+    AND li.line_type = 'FEE_OWNER'
   GROUP BY quote_id
 ),
 client_invoices AS (
@@ -386,6 +405,8 @@ partners_rm_dedup AS (
     NULLIF(COALESCE(rm.owner_email, rm.service_owner_email, rm.partner_email), '') AS email,
     NULLIF(o.firstname, '') AS contact_first_name,
     o.readable_id AS owner_code,
+    h.readable_id AS house_code,
+    IFNULL(cd.doc_count, 0) AS commission_doc_count,
     IFNULL(d.items, CAST([] AS ARRAY<STRUCT<
       amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
     >>)) AS disbursements,
@@ -440,6 +461,8 @@ partners_rm_dedup AS (
   FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = rm.house_owner_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q ON q.quote_id = rm.quote_id
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = rm.house_mongo_id
+  LEFT JOIN commission_docs_by_quote cd ON cd.quote_id = rm.quote_id
   LEFT JOIN invoiced_by_quote ibq ON ibq.quote_id = rm.quote_id
   LEFT JOIN disbursements d
     ON d.crid = rm.client_request_id AND d.house_id = rm.house_mongo_id
@@ -451,7 +474,8 @@ partners_rm AS (
   SELECT
     rid,
     ARRAY_AGG(STRUCT(
-      name, email, contact_first_name, owner_code, disbursements, commissionable,
+      name, email, contact_first_name, owner_code, house_code, commission_doc_count,
+      disbursements, commissionable,
       commissionable_base_ht, currency, gmv_ttc, paid, outstanding, raw_outstanding,
       payable, payable_to_date, commission, locked, locked_by_admin, locked_by_client, locked_by_owner,
       is_provision, payment_method,
@@ -487,6 +511,8 @@ partners_fi_fallback AS (
       NULLIF(o.email, '') AS email,
       NULLIF(o.firstname, '') AS contact_first_name,
       o.readable_id AS owner_code,
+      h.readable_id AS house_code,
+      IFNULL(cd.doc_count, 0) AS commission_doc_count,
       CAST([] AS ARRAY<STRUCT<
         amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
       >>) AS disbursements,

@@ -30,6 +30,7 @@ import {
   type NaFinancialSummary,
 } from "@/lib/na-financial-summary.functions";
 import { generateNaStatement } from "@/lib/statement.functions";
+import { generateNaCommissionStatement } from "@/lib/commission-statement.functions";
 import { partnerKey } from "@/lib/annotations.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useGmailConnection, useFactScan, useRecoveryLog } from "@/lib/use-gmail";
@@ -727,6 +728,15 @@ function NaPage() {
   // day it is downloaded — never served from the tracker's cached payload.
   const statement = useMutation({
     mutationFn: (readableId: string) => generateNaStatement({ data: { readable_id: readableId } }),
+    onSuccess: (file) => saveStatementPdf(file.filename, file.pdf_base64),
+  });
+
+  // Per-provider commission recap. The server refuses to render when the
+  // commissionable base does not lead to the commission actually invoiced, so the
+  // error it returns is worth showing in full rather than truncating.
+  const commissionStatement = useMutation({
+    mutationFn: (input: { readable_id: string; house_code: string }) =>
+      generateNaCommissionStatement({ data: input }),
     onSuccess: (file) => saveStatementPdf(file.filename, file.pdf_base64),
   });
 
@@ -1630,6 +1640,22 @@ function NaPage() {
                       if (mine.length > 0) commissionRefundDialog.open(mine);
                       else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
                     }}
+                    commissionStatement={{
+                      request: (p) =>
+                        p.house_code &&
+                        commissionStatement.mutate({
+                          readable_id: selRef,
+                          house_code: p.house_code,
+                        }),
+                      pendingFor: (p) =>
+                        commissionStatement.isPending &&
+                        commissionStatement.variables?.house_code === p.house_code,
+                      errorFor: (p) =>
+                        commissionStatement.isError &&
+                        commissionStatement.variables?.house_code === p.house_code
+                          ? String(commissionStatement.error)
+                          : null,
+                    }}
                     // Whoever already wrote to this provider about this booking.
                     sentFor={(p) =>
                       latestSend(
@@ -2180,6 +2206,7 @@ function PartnerSectionCard({
   cardApprovedCodes,
   onRequest,
   sentFor,
+  commissionStatement,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
@@ -2190,6 +2217,12 @@ function PartnerSectionCard({
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
   /** The recovery email already sent to this provider on this booking, if any. */
   sentFor: (partner: ReturnType<typeof parseNaPartners>[number]) => RecoverySend | undefined;
+  /** Downloads the provider's commission recap, when it has commission documents. */
+  commissionStatement: {
+    request: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
+    pendingFor: (partner: ReturnType<typeof parseNaPartners>[number]) => boolean;
+    errorFor: (partner: ReturnType<typeof parseNaPartners>[number]) => string | null;
+  };
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
@@ -2255,7 +2288,7 @@ function PartnerSectionCard({
         return (
           <div
             key={`${id}-p-${i}`}
-            className={`flex items-start gap-4 rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)] transition-colors hover:border-navy ${
+            className={`flex flex-wrap items-start gap-4 rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)] transition-colors hover:border-navy ${
               prov ? "opacity-70" : ""
             }`}
           >
@@ -2360,54 +2393,74 @@ function PartnerSectionCard({
                   )}
                 </span>
               </span>
-              {prov ? (
-                <span className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-semibold text-[#9CA3AF]">
-                  Excluded
-                </span>
-              ) : alreadyAsked ? (
-                // Someone has written to this provider about this booking. Nobody
-                // writes again — the ledger says who and when.
-                <span
-                  title={`${alreadyAsked.sent_by}${alreadyAsked.subject ? ` — ${alreadyAsked.subject}` : ""}`}
-                  className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-[#F3F4F6] px-3 text-xs font-semibold text-[#6B7280]"
-                >
-                  <Check className="h-3 w-3" aria-hidden="true" />
-                  {recoverySentLabel(alreadyAsked)}
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  disabled={
-                    !hasRecoveryAsk &&
-                    // Nothing owed either way, or waiting on the provider: the card
-                    // is issued, or it is theirs to debit. Nothing to open here.
-                    (action?.code === "settled" ||
-                      cardIssued ||
-                      (p.payment_method === "CREDIT_CARD" && action?.code === "ours_pay"))
-                  }
-                  onClick={() => onRequest(p)}
-                  className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-navy bg-white px-3 text-xs font-semibold text-navy transition-colors hover:bg-[#FAFAF8] disabled:border-border disabled:text-[#9CA3AF]"
-                >
-                  {/* Marketplace NA never asks for bank or tax details, so every
+              <span className="flex flex-col items-end gap-1.5">
+                {prov ? (
+                  <span className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-semibold text-[#9CA3AF]">
+                    Excluded
+                  </span>
+                ) : alreadyAsked ? (
+                  // Someone has written to this provider about this booking. Nobody
+                  // writes again — the ledger says who and when.
+                  <span
+                    title={`${alreadyAsked.sent_by}${alreadyAsked.subject ? ` — ${alreadyAsked.subject}` : ""}`}
+                    className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-[#F3F4F6] px-3 text-xs font-semibold text-[#6B7280]"
+                  >
+                    <Check className="h-3 w-3" aria-hidden="true" />
+                    {recoverySentLabel(alreadyAsked)}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={
+                      !hasRecoveryAsk &&
+                      // Nothing owed either way, or waiting on the provider: the card
+                      // is issued, or it is theirs to debit. Nothing to open here.
+                      (action?.code === "settled" ||
+                        cardIssued ||
+                        (p.payment_method === "CREDIT_CARD" && action?.code === "ours_pay"))
+                    }
+                    onClick={() => onRequest(p)}
+                    className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-navy bg-white px-3 text-xs font-semibold text-navy transition-colors hover:bg-[#FAFAF8] disabled:border-border disabled:text-[#9CA3AF]"
+                  >
+                    {/* Marketplace NA never asks for bank or tax details, so every
                       label here is either a payout state or a recovery ask. The
                       card is a state we act on elsewhere, not something we debit
                       from this screen. */}
-                  {hasRefundToClaim
-                    ? "Ask for the refund"
-                    : hasCommissionToClaim
-                      ? "Ask for the commission"
-                      : action?.code === "settled"
-                        ? "Nothing to do"
-                        : cardIssued
-                          ? "Card to debit"
-                          : action?.code === "ours_pay"
-                            ? p.payment_method === "CREDIT_CARD"
-                              ? "Card to debit"
-                              : "Pay by transfer"
-                            : "Open in back office"}
-                </button>
-              )}
+                    {hasRefundToClaim
+                      ? "Ask for the refund"
+                      : hasCommissionToClaim
+                        ? "Ask for the commission"
+                        : action?.code === "settled"
+                          ? "Nothing to do"
+                          : cardIssued
+                            ? "Card to debit"
+                            : action?.code === "ours_pay"
+                              ? p.payment_method === "CREDIT_CARD"
+                                ? "Card to debit"
+                                : "Pay by transfer"
+                              : "Open in back office"}
+                  </button>
+                )}
+                {/* Only where there is something to consolidate: a provider with no
+                  commission document would download an empty page. */}
+                {!prov && (p.commission_doc_count ?? 0) > 0 && p.house_code && (
+                  <button
+                    type="button"
+                    disabled={commissionStatement.pendingFor(p)}
+                    onClick={() => commissionStatement.request(p)}
+                    className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium text-[#4B5563] underline-offset-2 hover:text-navy hover:underline disabled:text-[#9CA3AF] disabled:no-underline"
+                  >
+                    <Download className="h-3 w-3" aria-hidden="true" />
+                    {commissionStatement.pendingFor(p) ? "Preparing…" : "Commission statement"}
+                  </button>
+                )}
+              </span>
             </div>
+            {commissionStatement.errorFor(p) && (
+              <p role="alert" className="basis-full text-[11px] leading-relaxed text-rose-800">
+                {commissionStatement.errorFor(p)}
+              </p>
+            )}
           </div>
         );
       })}
