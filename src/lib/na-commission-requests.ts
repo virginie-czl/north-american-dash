@@ -132,7 +132,14 @@ function commissionBlock(partner: NaPartnerLine, commission: number): string {
     .filter(Boolean)
     .join(", ");
   const base = partner.commissionable_base_ht ?? null;
-  const rates = [...new Set(items.map((i) => i.rate_pct).filter((r) => r != null))];
+  // A rate above 100% is not a rate — it is a unit error upstream, and this text
+  // goes to the provider we are billing. The stored value is a percentage scaled
+  // by 10,000, and dividing it by 1,000 once printed "120%" here. Say nothing
+  // rather than quote a figure that cannot be true; the base and the amount below
+  // still stand on their own.
+  const rates = [
+    ...new Set(items.map((i) => i.rate_pct).filter((r) => r != null && r > 0 && r <= 100)),
+  ];
   const rate =
     rates.length === 1
       ? `${rates[0]}%`

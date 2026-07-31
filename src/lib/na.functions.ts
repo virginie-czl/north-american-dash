@@ -155,8 +155,13 @@ disbursements AS (
   GROUP BY crid, p.house_id
 ),
 -- Commissionable lines and their rate. The table holds duplicate rows per item,
--- hence the DISTINCT before aggregating, and the rate is stored in
--- hundred-thousandths (70000 = 7%).
+-- hence the DISTINCT before aggregating.
+--
+-- The rate is a percentage scaled by 10,000: 70000 is 7%, 120000 is 12%. Across
+-- the whole table the values are 120000 (12%, by far the commonest), 100000,
+-- 150000, 80000 and the like, down to 70500 for 7.05% — which is the commission
+-- model, 12% by default and negotiable up to 15%. Dividing by 1,000 instead read
+-- 120% and put that figure in an email to the provider it was billed to.
 commissionable AS (
   SELECT
     quote_id,
@@ -167,7 +172,7 @@ commissionable AS (
       cpi.quote_id AS quote_id,
       cpi.object_data_label AS label,
       ROUND(cpi.object_data_prices_price_base_price_price_without_vat / 10000, 2) AS base_ht,
-      ROUND(cpi.price_option_fees_owner_fees_rate / 1000, 2) AS rate_pct
+      ROUND(cpi.price_option_fees_owner_fees_rate / 10000, 2) AS rate_pct
     FROM \`naboo-app-365515.raw_naboo_data.client_pricing_items\` cpi
     WHERE cpi.type != 'OWNER_FEES'
       AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0

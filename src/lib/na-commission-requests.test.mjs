@@ -189,6 +189,39 @@ t("net 15 terms in body", commissionOnly.body.includes("net 15"));
 t("ACH for NABOO_US billing entity", commissionOnly.body.includes("ACH"));
 t("body does not mention any other partner", !commissionOnly.body.includes("Venue B"));
 
+// ── The commission rate, as the provider reads it ───────────────────────────
+// The stored rate is a percentage scaled by 10,000 (70000 = 7%, 120000 = 12%).
+// Dividing by 1,000 in the query printed ten times the real rate in this very
+// paragraph — 70% on a 7% commission — in a document addressed to the provider
+// being billed.
+{
+  const rated = (rate_pct) =>
+    partner({
+      raw_outstanding: -50,
+      commission: 100,
+      commissionable: [{ label: "Bedrooms", base_ht: 1000, rate_pct }],
+      commissionable_base_ht: 1000,
+    });
+
+  const seven = composeNaCommissionRequest(row, rated(7), naContactFor(rated(7)));
+  t("a 7% rate reads as 7%", seven.body.includes("Commission rate: 7%"), seven.body);
+  const twelve = composeNaCommissionRequest(row, rated(12), naContactFor(rated(12)));
+  t("the standard 12% reads as 12%", twelve.body.includes("Commission rate: 12%"));
+  const fine = composeNaCommissionRequest(row, rated(7.05), naContactFor(rated(7.05)));
+  t("a fractional rate survives", fine.body.includes("Commission rate: 7.05%"));
+
+  // Defence in depth against a future unit slip: a rate over 100% cannot be one,
+  // so the line is dropped rather than quoted. It cannot catch every scale error
+  // (a mis-scaled 7% reads as 70%, which is not impossible on its face), but a
+  // mis-scaled rate of 10% or more — nine tenths of the real ones — lands here.
+  const absurd = composeNaCommissionRequest(row, rated(120), naContactFor(rated(120)));
+  t("an impossible rate is not quoted at all", !absurd.body.includes("Commission rate"));
+  t("but the base still is", absurd.body.includes("Commissionable base"), absurd.body);
+  t("and so is the amount owed", absurd.body.includes("50.00 USD"));
+  const hundred = composeNaCommissionRequest(row, rated(100), naContactFor(rated(100)));
+  t("a real 100% rate is still shown", hundred.body.includes("Commission rate: 100%"));
+}
+
 const efPartner = partner({ raw_outstanding: -50, commission: 100 });
 const efBody = composeNaCommissionRequest(
   { ...row, billing_entity: "NABOO_CA" },
