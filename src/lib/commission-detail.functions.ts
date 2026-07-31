@@ -127,8 +127,27 @@ disbursements AS (
     AND p.client_request_id IN (SELECT crid FROM prov)
   GROUP BY crid, p.house_id
 ),
--- Commissionable lines and their rate. The table holds duplicate rows per item,
--- hence the DISTINCT before aggregating; without it the base doubles.
+-- Commissionable lines and their rate, one line per pricing option.
+--
+-- The dedup key is the option's own id, not its values. There are no duplicate
+-- *rows* in this table at all (3,418 commissionable rows on North American
+-- bookings, 3,418 distinct pricing_item_id) — what repeats is the option: one
+-- option_price_id carries a row per night and, per night, a row per revision. So
+-- SELECT DISTINCT on (label, quantity, price, rate) merged whatever happened to
+-- look alike: on C-P222's Hyatt quote it turned five separate nights of "ROH
+-- Default - Single room" into two, purely because their figures matched.
+--
+-- Measured against the reconciliation invariant across the 203 North American
+-- provider lines that carry a commission, this key takes the number whose services
+-- reproduce the recorded commission from 87 to 111, and loses none.
+--
+-- Two details that are load-bearing:
+--   * option_price_id is NULL on 248 rows, and grouping those together would merge
+--     genuinely separate lines — hence the fallback to the row's own id.
+--   * the values come off ONE row (the latest revision) rather than from a column's
+--     worth of ANY_VALUE each: 149 option groups hold rows that disagree, and
+--     independent ANY_VALUEs can pair a quantity from one revision with a price
+--     from another, producing a base that never existed.
 --
 -- The rate leaves here raw and is converted in TypeScript by ratePctFromStored,
 -- so the scale lives in exactly one tested place: it is a percentage scaled by
@@ -141,27 +160,38 @@ commissionable AS (
               ORDER BY base_ht DESC, label) AS items,
     ROUND(SUM(base_ht), 2) AS base_total_ht
   FROM (
-    SELECT DISTINCT
-      cpi.quote_id AS quote_id,
-      cpi.object_data_label AS label,
-      SAFE_CAST(cpi.price_option_quantity AS FLOAT64) AS qty,
-      cpi.object_data_prices_unit AS unit,
-      ROUND(cpi.object_data_prices_price_base_price_price_without_vat / 10000, 2) AS unit_excl_tax,
+    SELECT
+      quote_id,
+      pick.label AS label,
+      pick.qty   AS qty,
+      pick.unit  AS unit,
+      ROUND(pick.unit_ht / 10000, 2) AS unit_excl_tax,
       -- Quantity × unit price: the line total the commission is charged on.
-      ROUND(SAFE_CAST(cpi.price_option_quantity AS FLOAT64)
-            * cpi.object_data_prices_price_base_price_price_without_vat / 10000, 2) AS base_ht,
-      CAST(cpi.price_option_fees_owner_fees_rate AS FLOAT64) AS rate_raw
-    FROM \`naboo-app-365515.raw_naboo_data.client_pricing_items\` cpi
-    WHERE cpi.quote_id IN (SELECT quote_id FROM prov)
-      AND cpi.type != 'OWNER_FEES'
-      AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
-      AND cpi.object_data_label IS NOT NULL
-      -- A line with no unit price or no quantity has no base: it cannot carry a
-      -- commission, and left in it lands in the reconciled subset contributing
-      -- nothing but a second copy of its own name (C-P222 carries an unpriced
-      -- "Game Show" beside the priced one).
-      AND IFNULL(cpi.object_data_prices_price_base_price_price_without_vat, 0) > 0
-      AND IFNULL(SAFE_CAST(cpi.price_option_quantity AS FLOAT64), 0) > 0
+      ROUND(pick.qty * pick.unit_ht / 10000, 2) AS base_ht,
+      pick.rate_raw AS rate_raw
+    FROM (
+      SELECT
+        cpi.quote_id AS quote_id,
+        ARRAY_AGG(STRUCT(
+          cpi.object_data_label AS label,
+          SAFE_CAST(cpi.price_option_quantity AS FLOAT64) AS qty,
+          cpi.object_data_prices_unit AS unit,
+          cpi.object_data_prices_price_base_price_price_without_vat AS unit_ht,
+          CAST(cpi.price_option_fees_owner_fees_rate AS FLOAT64) AS rate_raw
+        ) ORDER BY cpi.updated_at DESC, cpi.pricing_item_id DESC LIMIT 1)[OFFSET(0)] AS pick
+      FROM \`naboo-app-365515.raw_naboo_data.client_pricing_items\` cpi
+      WHERE cpi.quote_id IN (SELECT quote_id FROM prov)
+        AND cpi.type != 'OWNER_FEES'
+        AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
+        AND cpi.object_data_label IS NOT NULL
+        -- A line with no unit price or no quantity has no base: it cannot carry a
+        -- commission, and left in it lands in the reconciled subset contributing
+        -- nothing but a second copy of its own name (C-P222 carries an unpriced
+        -- "Game Show" beside the priced one).
+        AND IFNULL(cpi.object_data_prices_price_base_price_price_without_vat, 0) > 0
+        AND IFNULL(SAFE_CAST(cpi.price_option_quantity AS FLOAT64), 0) > 0
+      GROUP BY quote_id, COALESCE(cpi.option_price_id, cpi.pricing_item_id)
+    )
   )
   GROUP BY quote_id
 )
