@@ -11,7 +11,12 @@ import postgres from "postgres";
 type Sql = ReturnType<typeof postgres>;
 
 let client: Sql | null = null;
-let schemaPromise: Promise<void> | null = null;
+
+// The bootstrap memo lives on globalThis rather than in a module variable: the server
+// bundle can hold more than one copy of this module (each server function chunk that
+// imports it), and a per-copy memo replays the whole schema once per copy.
+const SCHEMA_MEMO = Symbol.for("naboo.tracker.schemaBootstrap");
+type SchemaHost = { [SCHEMA_MEMO]?: Promise<void> | null };
 
 function connectionString(): string {
   // Vercel names this differently depending on which provider was chosen.
@@ -38,6 +43,11 @@ function getClient(): Sql {
       connect_timeout: 10,
       // Prepared statements are not supported through transaction-mode poolers.
       prepare: false,
+      // The schema bootstrap is all CREATE ... IF NOT EXISTS, so Postgres answers
+      // every statement with `NOTICE: relation "…" already exists, skipping`. Those
+      // are notices we provoke on purpose and they carry nothing; left on, they buried
+      // the one line that mattered when the card mirror was failing to write.
+      onnotice: () => {},
     });
   }
   return client;
@@ -163,15 +173,6 @@ const SCHEMA_STATEMENTS = [
      updated_by text,
      updated_at timestamptz NOT NULL DEFAULT now()
    )`,
-  // Single-row cache of #finance-paiement-by-card approvals, kept warm by a
-  // 15-minute cron. Serverless instances do not share memory, so this is what
-  // lets every instance see fresh data without each one re-hitting Slack.
-  `CREATE TABLE IF NOT EXISTS slack_card_approvals_cache (
-     id smallint PRIMARY KEY DEFAULT 1,
-     approvals jsonb NOT NULL,
-     refreshed_at timestamptz NOT NULL DEFAULT now(),
-     CHECK (id = 1)
-   )`,
   // AI-written financial summary of a partner's email thread (Marketplace NA).
   // A step beyond the rest of the annotation layer: partner_email_facts only
   // ever stores derived yes/no verdicts, never content — this table stores an
@@ -216,18 +217,19 @@ const SCHEMA_STATEMENTS = [
 
 /** Applies the schema once per instance. Every statement is idempotent. */
 async function ensureSchema(sql: Sql): Promise<void> {
-  if (!schemaPromise) {
-    schemaPromise = (async () => {
+  const host = globalThis as SchemaHost;
+  if (!host[SCHEMA_MEMO]) {
+    host[SCHEMA_MEMO] = (async () => {
       for (const statement of SCHEMA_STATEMENTS) {
         await sql.unsafe(statement);
       }
     })().catch((error) => {
       // Let the next call retry rather than caching the failure forever.
-      schemaPromise = null;
+      host[SCHEMA_MEMO] = null;
       throw error;
     });
   }
-  return schemaPromise;
+  return host[SCHEMA_MEMO];
 }
 
 /** Returns a ready-to-use client with the schema guaranteed to exist. */

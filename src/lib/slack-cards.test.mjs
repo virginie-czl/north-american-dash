@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { parseApprovals } from "./slack-cards.server.ts";
 
 let pass = 0,
@@ -97,6 +98,54 @@ t(
   "approval by a colleague counts",
   byOther[0]?.ownerCode === "O-G0264" && byOther[0]?.approvedBy === "Gaspard De Surville",
 );
+
+// ── Where Slack may be called from, and how failures travel ─────────────────
+// Three defects made the refresh button lie: the insert was double-encoded, the read
+// path refreshed itself, and a try/catch turned every failure into a 200. The first is
+// covered by a live Postgres check; these pin the other two in place.
+console.log("\n[the mirror's plumbing]");
+{
+  const src = readFileSync(new URL("./slack-cards.functions.ts", import.meta.url), "utf8");
+  const body = (name) => {
+    const start = src.indexOf(name);
+    if (start < 0) return "";
+    // To the start of the next top-level declaration.
+    const rest = src.slice(start);
+    const end = rest.slice(1).search(/\n(?:export |async function |function |\/\*\*)/);
+    return end < 0 ? rest : rest.slice(0, end + 1);
+  };
+
+  // Comments explain the old bug by name, so the checks below read code only.
+  const stripComments = (text) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/[^\n]*$/gm, "");
+  const code = stripComments(src);
+
+  const refresh = body("async function refreshMirror");
+  const read = body("export const fetchCardApprovals");
+  const sync = body("export const syncCardApprovals");
+
+  t(
+    "only refreshMirror reaches the Slack module",
+    (src.match(/slack-cards\.server/g) ?? []).length === 1,
+  );
+  t("and it is refreshMirror that does", /slack-cards\.server/.test(refresh));
+  t("the read path never imports it", !/slack-cards\.server/.test(read));
+  t("the read path never refreshes", !/refreshMirror/.test(read));
+  // A refresh that cannot refresh is a failed call: the button's path must not catch.
+  t("syncCardApprovals does not catch", !/\bcatch\b/.test(sync), sync);
+  // The insert: no manual serialisation, no jsonb round-trip.
+  t("the insert does not stringify its rows", !/JSON\.stringify/.test(stripComments(refresh)));
+  t("nor go through jsonb_to_recordset", !/jsonb_to_recordset/.test(code));
+  t("it uses the driver's bulk insert", /INSERT INTO slack_card_approvals \$\{sql\(/.test(refresh));
+  t("and still upserts on the owner code", /ON CONFLICT \(owner_code\) DO UPDATE/.test(refresh));
+  // Both failure modes are named, because the difference is the diagnosis.
+  t("a Slack failure says the mirror was untouched", /The mirror was left as it was/.test(refresh));
+  t("a write failure says nothing was saved", /Nothing was saved/.test(refresh));
+  t(
+    "both keep the original error as the cause",
+    (refresh.match(/cause: error/g) ?? []).length === 2,
+  );
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

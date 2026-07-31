@@ -125,6 +125,10 @@ function CardTrackingPage() {
       queryClient.invalidateQueries({ queryKey: ["na-card-evidence"] });
       queryClient.invalidateQueries({ queryKey: ["slack-card-approvals"] });
     },
+    // A sync that fails in silence cannot be told apart from one that found nothing
+    // to do — which is how an empty mirror went unnoticed. The message is rendered
+    // next to the button, and logged so it also reaches the runtime logs.
+    onError: (error) => console.error("Card approvals sync failed:", error),
   });
 
   const save = useMutation({
@@ -279,6 +283,15 @@ function CardTrackingPage() {
           {syncCards.isSuccess && !syncCards.isPending && (
             <span className="text-[11.5px] text-slate-500">
               {syncCards.data.synced} approval{syncCards.data.synced === 1 ? "" : "s"} mirrored
+            </span>
+          )}
+          {syncCards.isError && (
+            <span
+              role="alert"
+              title={String((syncCards.error as Error).message ?? syncCards.error)}
+              className="max-w-[420px] truncate text-[11.5px] text-rose-800"
+            >
+              {String((syncCards.error as Error).message ?? syncCards.error)}
             </span>
           )}
           <span className="text-xs text-muted-foreground">

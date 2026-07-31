@@ -108,53 +108,15 @@ async function fetchFromSlack(): Promise<CardApproval[]> {
   return approvals;
 }
 
-// Per-instance fast path — a warm Fluid Compute instance serving several
-// requests in a row does not need to re-read Postgres every time.
-const MEMORY_CACHE_TTL_MS = 5 * 60_000;
-let memoryCache: { at: number; approvals: CardApproval[] } | null = null;
-
-// How stale the shared Postgres cache may be before a request pays the cost of
-// a live Slack call itself. Set generously above the 15-minute cron cadence so
-// one missed tick does not immediately fall back to Slack for every request.
-const SHARED_CACHE_MAX_AGE_MS = 20 * 60_000;
-
-/** Called by the 15-minute cron: always hits Slack, then republishes the shared cache. */
-export async function refreshSharedCardApprovalsCache(): Promise<CardApproval[]> {
-  const approvals = await fetchFromSlack();
-  const { db } = await import("./db.server");
-  const sql = await db();
-  await sql`
-    INSERT INTO slack_card_approvals_cache (id, approvals, refreshed_at)
-    VALUES (1, ${sql.json(approvals)}, now())
-    ON CONFLICT (id) DO UPDATE SET approvals = EXCLUDED.approvals, refreshed_at = now()
-  `;
-  memoryCache = { at: Date.now(), approvals };
-  return approvals;
-}
-
 /**
- * Card approvals for the tracker to read. Serverless instances share no
- * memory, so the source of truth is the Postgres cache the cron keeps warm —
- * this only calls Slack directly if that shared cache is missing or stale
- * (e.g. before the cron has ever run, or after it has been failing).
+ * Reads the channel live. The only path in the app that calls Slack.
+ *
+ * There was a second Postgres cache here (slack_card_approvals_cache, kept warm by a
+ * 15-minute cron) from when page loads read approvals through Slack. They read the
+ * slack_card_approvals mirror now, so that cache had no readers left — a table and a
+ * cron that looked live and served nobody. Both are gone; the table itself can be
+ * dropped by hand.
  */
-export async function fetchCardApprovals(): Promise<CardApproval[]> {
-  if (memoryCache && Date.now() - memoryCache.at < MEMORY_CACHE_TTL_MS) {
-    return memoryCache.approvals;
-  }
-
-  const { db } = await import("./db.server");
-  const sql = await db();
-  const rows = await sql<{ approvals: CardApproval[]; refreshed_at: Date }[]>`
-    SELECT approvals, refreshed_at FROM slack_card_approvals_cache WHERE id = 1
-  `;
-  const row = rows[0];
-  if (row && Date.now() - new Date(row.refreshed_at).getTime() < SHARED_CACHE_MAX_AGE_MS) {
-    memoryCache = { at: Date.now(), approvals: row.approvals };
-    return row.approvals;
-  }
-
-  // Shared cache missing or stale — fetch live and repair it, so the next
-  // request (and the next cron tick) find it warm again.
-  return refreshSharedCardApprovalsCache();
+export async function fetchCardApprovalsLive(): Promise<CardApproval[]> {
+  return fetchFromSlack();
 }

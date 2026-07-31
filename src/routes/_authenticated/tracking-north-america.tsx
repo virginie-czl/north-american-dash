@@ -697,6 +697,12 @@ function NaPage() {
   const syncCards = useMutation({
     mutationFn: () => syncCardApprovals(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["slack-card-approvals"] }),
+    // Refresh here re-syncs the approvals as a side effect of recomputing the page, so
+    // there is no button of its own to hang a message off. It must still not fail in
+    // silence: the age badge beside the cache indicator shows the mirror standing
+    // still, and this puts the reason in the runtime logs. Card tracking NA is where
+    // the failure is shown in full.
+    onError: (error) => console.error("Card approvals sync failed:", error),
   });
 
   const { data: financialSummaries } = useQuery({
