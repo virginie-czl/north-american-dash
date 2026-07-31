@@ -598,7 +598,7 @@ function NaPage() {
     [sorted],
   );
 
-  const { factsMap, actionFor, eventNeedsScan } = useActionIndex();
+  const { factsMap, actionFor, eventNeedsScan, cardApprovedCodes } = useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const commissionRefundDialog = useNaCommissionRequestDialog();
@@ -1249,6 +1249,7 @@ function NaPage() {
                     totals={selTotals}
                     actionFor={actionFor}
                     factsMap={factsMap}
+                    cardApprovedCodes={cardApprovedCodes}
                     onRequest={(p) => {
                       // Same targets the list-level button builds, narrowed to
                       // this partner — no new email logic.
@@ -1731,6 +1732,7 @@ function PartnerSectionCard({
   totals,
   actionFor,
   factsMap,
+  cardApprovedCodes,
   onRequest,
 }: {
   id: string;
@@ -1738,6 +1740,7 @@ function PartnerSectionCard({
   totals: ReturnType<typeof sumPartners>;
   actionFor: ReturnType<typeof useActionIndex>["actionFor"];
   factsMap: ReturnType<typeof useActionIndex>["factsMap"];
+  cardApprovedCodes: ReturnType<typeof useActionIndex>["cardApprovedCodes"];
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
@@ -1779,6 +1782,11 @@ function PartnerSectionCard({
         const overpaid = (p.outstanding ?? 0) < -0.01;
         const claw = partnerClawback(p);
         const hasCommissionToClaim = claw.commission > 0.01;
+        // A card approved in #finance-paiement-by-card means the money is
+        // already available to the provider: the next move is theirs, not ours,
+        // and it is certainly not a bank-details chase.
+        const cardIssued =
+          p.owner_code != null && cardApprovedCodes?.has(p.owner_code.toUpperCase()) === true;
         // The last metric is the one that decides the next move, so it carries the
         // emphasis: amber when it is money to claw back, muted when nothing is due.
         const outTone = prov
@@ -1817,7 +1825,16 @@ function PartnerSectionCard({
               )}
               {!prov && action && (
                 <>
-                  <div className="mt-2 text-xs text-[#374151]">{action.detail}</div>
+                  <div className="mt-2 text-xs text-[#374151]">
+                    {cardIssued
+                      ? "Carte émise et approuvée — au prestataire de la débiter."
+                      : action.detail}
+                  </div>
+                  {cardIssued && (
+                    <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#E7F8F3] px-2 py-[2px] text-[10.5px] font-semibold text-[#00593C]">
+                      Card issued, service provider to debit it
+                    </span>
+                  )}
                   <PartnerStickers
                     action={action}
                     facts={factsMap?.get(`${id}::${key}`)}
@@ -1881,6 +1898,8 @@ function PartnerSectionCard({
                   type="button"
                   disabled={
                     action?.code === "settled" ||
+                    // Card issued: waiting on the provider, nothing to open.
+                    (!overpaid && !hasCommissionToClaim && cardIssued) ||
                     (!overpaid &&
                       !hasCommissionToClaim &&
                       p.payment_method === "CREDIT_CARD" &&
@@ -1899,11 +1918,13 @@ function PartnerSectionCard({
                       ? "Ask for the refund"
                       : hasCommissionToClaim
                         ? "Ask for the commission"
-                        : action?.code === "ours_pay"
-                          ? p.payment_method === "CREDIT_CARD"
-                            ? "Card to debit"
-                            : "Pay by transfer"
-                          : "Open in back office"}
+                        : cardIssued
+                          ? "Card to debit"
+                          : action?.code === "ours_pay"
+                            ? p.payment_method === "CREDIT_CARD"
+                              ? "Card to debit"
+                              : "Pay by transfer"
+                            : "Open in back office"}
                 </button>
               )}
             </div>

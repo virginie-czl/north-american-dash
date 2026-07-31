@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 
 export interface NaPartnerLine {
+  /** Owner code (O-XXXX) — matches credit-card approvals in #finance-paiement-by-card. */
+  owner_code: string | null;
   name: string | null;
   email: string | null;
   /** The contact's own first name (owners.firstname) — distinct from the venue/company name. */
@@ -196,6 +198,7 @@ partners_rm_dedup AS (
     ) AS name,
     NULLIF(COALESCE(rm.owner_email, rm.service_owner_email, rm.partner_email), '') AS email,
     NULLIF(o.firstname, '') AS contact_first_name,
+    o.readable_id AS owner_code,
     rm.currency_partner AS currency,
     CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64) AS gmv_ttc,
     -- p_disbursed_total_pcurrency's sign is inconsistent across bookings (the
@@ -251,7 +254,7 @@ partners_rm AS (
   SELECT
     rid,
     ARRAY_AGG(STRUCT(
-      name, email, contact_first_name, currency, gmv_ttc, paid, outstanding, raw_outstanding,
+      name, email, contact_first_name, owner_code, currency, gmv_ttc, paid, outstanding, raw_outstanding,
       payable, payable_to_date, commission, locked, locked_by_admin, locked_by_client, locked_by_owner,
       is_provision, payment_method,
       CAST(NULL AS STRING) AS vat_raw,
@@ -285,6 +288,7 @@ partners_fi_fallback AS (
       ) AS name,
       NULLIF(o.email, '') AS email,
       NULLIF(o.firstname, '') AS contact_first_name,
+      o.readable_id AS owner_code,
       part.currency AS currency,
       CAST(ROUND((part.liveConfirmed.netPayable.withTaxes
                   + part.liveConfirmed.commission.withTaxes) / 10000, 2) AS FLOAT64) AS gmv_ttc,
@@ -352,7 +356,7 @@ base AS (
     CAST(ar.balance_client_ccy AS FLOAT64) AS ar_balance_ccy,
     TO_JSON_STRING(
       IFNULL(p.items, IFNULL(pfb.items, CAST([] AS ARRAY<STRUCT<
-        name STRING, email STRING, contact_first_name STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
+        name STRING, email STRING, contact_first_name STRING, owner_code STRING, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
         outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, payable_to_date FLOAT64,
         commission FLOAT64,
         locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
