@@ -182,7 +182,9 @@ const commissionOnly = composeNaCommissionRequest(
 );
 t("subject has client name", commissionOnly.subject.includes("InterSolutions"));
 t("subject has booking ID", commissionOnly.subject.includes("C-V885"));
-t("body greets first name", commissionOnly.body.startsWith("Hi Renaissance"));
+// The greeting is deliberately impersonal: the only name on a partner line is the
+// venue's, and "Hi Renaissance" addresses a hotel as if it were a person.
+t("body greets the desk, not the venue's name", commissionOnly.body.startsWith("Hi team,"));
 t("body has the commission amount", commissionOnly.body.includes("50.00 USD"), commissionOnly.body);
 t("body never mentions a rate (not tracked here)", !/%/.test(commissionOnly.body));
 t("net 15 terms in body", commissionOnly.body.includes("net 15"));
@@ -195,31 +197,58 @@ t("body does not mention any other partner", !commissionOnly.body.includes("Venu
 // paragraph — 70% on a 7% commission — in a document addressed to the provider
 // being billed.
 {
+  const ratedPartner = partner({ raw_outstanding: -50, commission: 100 });
+  // The breakdown now arrives as a per-provider detail fetched on demand, not on
+  // the partner line. 10 nights at 100.00 is a base of 1,000.00 — quantity times
+  // unit price, which is the number a rate can be applied to.
+  const detail = (rate_pct) => ({
+    event_ref: "C-V885",
+    house_code: "H-0001",
+    disbursements: [],
+    commissionable: [
+      { label: "Bedrooms", base_ht: 1000, qty: 10, unit: "NIGHT", unit_excl_tax: 100, rate_pct },
+    ],
+    commissionable_base_ht: 1000,
+    commission_ht: (1000 * rate_pct) / 100,
+    commission_ttc: null,
+  });
   const rated = (rate_pct) =>
-    partner({
-      raw_outstanding: -50,
-      commission: 100,
-      commissionable: [{ label: "Bedrooms", base_ht: 1000, rate_pct }],
-      commissionable_base_ht: 1000,
-    });
+    composeNaCommissionRequest(row, ratedPartner, naContactFor(ratedPartner), detail(rate_pct));
 
-  const seven = composeNaCommissionRequest(row, rated(7), naContactFor(rated(7)));
+  const seven = rated(7);
   t("a 7% rate reads as 7%", seven.body.includes("Commission rate: 7%"), seven.body);
-  const twelve = composeNaCommissionRequest(row, rated(12), naContactFor(rated(12)));
-  t("the standard 12% reads as 12%", twelve.body.includes("Commission rate: 12%"));
-  const fine = composeNaCommissionRequest(row, rated(7.05), naContactFor(rated(7.05)));
-  t("a fractional rate survives", fine.body.includes("Commission rate: 7.05%"));
+  t("and the base it applies to", seven.body.includes("Commissionable base: 1,000.00"), seven.body);
+  t("the base is quantity × unit price, not the unit price", !seven.body.includes("100.00 USD\n"));
+  t("the standard 12% reads as 12%", rated(12).body.includes("Commission rate: 12%"));
+  t("a fractional rate survives", rated(7.05).body.includes("Commission rate: 7.05%"));
 
   // Defence in depth against a future unit slip: a rate over 100% cannot be one,
   // so the line is dropped rather than quoted. It cannot catch every scale error
   // (a mis-scaled 7% reads as 70%, which is not impossible on its face), but a
   // mis-scaled rate of 10% or more — nine tenths of the real ones — lands here.
-  const absurd = composeNaCommissionRequest(row, rated(120), naContactFor(rated(120)));
+  const absurd = rated(120);
   t("an impossible rate is not quoted at all", !absurd.body.includes("Commission rate"));
   t("but the base still is", absurd.body.includes("Commissionable base"), absurd.body);
   t("and so is the amount owed", absurd.body.includes("50.00 USD"));
-  const hundred = composeNaCommissionRequest(row, rated(100), naContactFor(rated(100)));
-  t("a real 100% rate is still shown", hundred.body.includes("Commission rate: 100%"));
+  t("a real 100% rate is still shown", rated(100).body.includes("Commission rate: 100%"));
+
+  // Without the detail the email still goes out — it just states the amount.
+  const bare = composeNaCommissionRequest(row, ratedPartner, naContactFor(ratedPartner));
+  t("no detail: the amount is still asked for", bare.body.includes("50.00 USD"), bare.body);
+  t("no detail: no base is invented", !bare.body.includes("Commissionable base"));
+
+  // The bug this reconciliation exists to catch: a base that cannot imply the
+  // commission being claimed is not printed at all. 1,000.00 at 7% is 70.00, so a
+  // recorded commission of 3,513.51 means the lines are wrong, not the commission.
+  const mismatched = composeNaCommissionRequest(row, ratedPartner, naContactFor(ratedPartner), {
+    ...detail(7),
+    commission_ht: 3513.51,
+  });
+  t(
+    "a base that does not imply the commission is withheld",
+    !/Commissionable/.test(mismatched.body),
+  );
+  t("but the commission is still claimed", mismatched.body.includes("50.00 USD"));
 }
 
 const efPartner = partner({ raw_outstanding: -50, commission: 100 });

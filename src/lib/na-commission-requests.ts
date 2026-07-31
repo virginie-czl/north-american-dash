@@ -19,6 +19,8 @@
  * refund to ask the partner for.
  */
 import type { NaRow, NaPartnerLine } from "./na.functions";
+import type { NaCommissionDetail } from "./commission-detail.functions";
+import { reconcileAgainst } from "./commission-statement.ts";
 
 export type NaClawback = { commission: number; refund: number };
 
@@ -123,34 +125,52 @@ export type NaComposed = { subject: string; body: string };
  * The commission section, spelled out: which lines carry a commission, the base
  * they are computed on, the rate, and the resulting amount. A bare total invites
  * a "where does that come from?" reply and a second round trip.
+ *
+ * The itemisation only appears when it *adds up*. The pricing table holds sibling
+ * rows that double-count — Hyatt's quote on C-P222 lists Guestrooms alongside two
+ * ROH Default rows at the same unit price — so the base is chosen by the same
+ * reconciliation the commission statement uses: the subset of lines whose
+ * commission equals the commission being asked for. When no subset does, the email
+ * states the amount and nothing else, rather than a base the provider can multiply
+ * out and disprove.
+ *
+ * The detail is fetched per provider on demand (getCommissionDetail); without it
+ * the email still goes out, just without the breakdown.
  */
-function commissionBlock(partner: NaPartnerLine, commission: number): string {
+function commissionBlock(
+  partner: NaPartnerLine,
+  commission: number,
+  detail: NaCommissionDetail | null | undefined,
+): string {
   const ccy = partner.currency;
-  const items = partner.commissionable ?? [];
-  const names = items
-    .map((i) => i.label)
-    .filter(Boolean)
-    .join(", ");
-  const base = partner.commissionable_base_ht ?? null;
-  // A rate above 100% is not a rate — it is a unit error upstream, and this text
-  // goes to the provider we are billing. The stored value is a percentage scaled
-  // by 10,000, and dividing it by 1,000 once printed "120%" here. Say nothing
-  // rather than quote a figure that cannot be true; the base and the amount below
-  // still stand on their own.
-  const rates = [
-    ...new Set(items.map((i) => i.rate_pct).filter((r) => r != null && r > 0 && r <= 100)),
-  ];
-  const rate =
-    rates.length === 1
-      ? `${rates[0]}%`
-      : rates.length > 1
-        ? rates.map((r) => `${r}%`).join(" / ")
-        : "—";
-
   const lines: string[] = [];
-  if (names) lines.push(`• Commissionable items: ${names}`);
-  if (base != null && base > 0.01) lines.push(`• Commissionable base: ${fmtMoney(base, ccy)}`);
-  if (rate !== "—") lines.push(`• Commission rate: ${rate}`);
+
+  const services = (detail?.commissionable ?? []).map((i) => ({
+    service: i.label ?? "—",
+    qty: i.qty,
+    unit: i.unit,
+    unit_excl_tax: i.unit_excl_tax,
+    rate_pct: i.rate_pct,
+  }));
+  // Reconciled against the commission excluding tax where finance records one:
+  // that is the figure a rate applied to a base can actually produce.
+  const target = detail?.commission_ht ?? commission;
+  const rec = services.length > 0 ? reconcileAgainst(services, target) : null;
+
+  if (rec?.ok) {
+    const names = rec.services
+      .map((s) => s.service)
+      .filter(Boolean)
+      .join(", ");
+    if (names) lines.push(`• Commissionable items: ${names}`);
+    lines.push(`• Commissionable base: ${fmtMoney(rec.base, ccy)}`);
+    // A rate above 100% is not a rate — it is a unit error upstream, and this text
+    // goes to the provider we are billing. Say nothing rather than quote a figure
+    // that cannot be true; the base and the amount below still stand on their own.
+    const rates = rec.rates.filter((r) => r > 0 && r <= 100);
+    if (rates.length > 0) lines.push(`• Commission rate: ${rates.map((r) => `${r}%`).join(" / ")}`);
+  }
+
   lines.push(`• Commission due incl. tax: ${fmtMoney(commission, ccy)}`);
   return lines.join("\n");
 }
@@ -160,8 +180,11 @@ function commissionBlock(partner: NaPartnerLine, commission: number): string {
  * reference is what lets the other side find it in their own ledger instead of
  * disputing the total.
  */
-function paymentsBlock(partner: NaPartnerLine): string {
-  const rows = partner.disbursements ?? [];
+function paymentsBlock(
+  partner: NaPartnerLine,
+  detail: NaCommissionDetail | null | undefined,
+): string {
+  const rows = detail?.disbursements ?? [];
   if (rows.length === 0) {
     return `• Total paid by Naboo: ${fmtMoney(partner.paid, partner.currency)}`;
   }
@@ -186,6 +209,7 @@ export function composeNaCommissionRequest(
   row: NaRow,
   partner: NaPartnerLine,
   to: { name: string | null },
+  detail?: NaCommissionDetail | null,
 ): NaComposed | null {
   const { commission } = partnerClawback(partner);
   if (commission <= 0.01) return null;
@@ -206,7 +230,7 @@ Thanks again for taking such good care of the ${client} group!
 
 I'm reaching out about the commission for that program. Here's what we have on our end:
 
-${commissionBlock(partner, commission)}
+${commissionBlock(partner, commission, detail)}
 
 Would you be able to confirm those figures? Once you give me the green light, I'll issue our commission invoice right away and send it over with our wire details.
 
@@ -226,6 +250,7 @@ export function composeNaRefundRequest(
   row: NaRow,
   partner: NaPartnerLine,
   to: { name: string | null },
+  detail?: NaCommissionDetail | null,
 ): NaComposed | null {
   const { refund } = partnerClawback(partner);
   if (refund <= 0.01) return null;
@@ -264,6 +289,7 @@ export function composeNaCombinedRequest(
   row: NaRow,
   partner: NaPartnerLine,
   to: { name: string | null },
+  detail?: NaCommissionDetail | null,
 ): NaComposed | null {
   const { commission, refund } = partnerClawback(partner);
   if (commission <= 0.01 || refund <= 0.01) return null;
@@ -286,7 +312,7 @@ I've just finished reconciling the ${client} program and wanted to send you ever
 
 2) Overpayment
 • Total invoice due: ${fmtMoney(invoiceDue(partner), ccy)}
-${paymentsBlock(partner)}
+${paymentsBlock(partner, detail)}
 • Refund due to Naboo: ${fmtMoney(refund, ccy)}
 
 Total to be paid to Naboo (commission + overpayment): ${fmtMoney(commission + refund, ccy)}

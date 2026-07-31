@@ -155,7 +155,32 @@ export function reconcile(
   services: CommissionService[],
   documents: CommissionDoc[],
 ): Reconciliation {
-  const net = netOfDocuments(documents);
+  if (documents.length === 0) {
+    return reconcileAgainst(services, 0, {
+      noTarget: "No commission document has been issued to this provider on this booking.",
+    });
+  }
+  return reconcileAgainst(services, netOfDocuments(documents), {
+    stale:
+      "This is usually a pricing line that has moved since the commission was invoiced, or a " +
+      "commission document that has not reached the warehouse yet.",
+  });
+}
+
+/**
+ * The same invariant against any authoritative commission figure.
+ *
+ * The statement reconciles against the net of the commission documents; a recovery
+ * email reconciles against the commission the reconciliation master holds. Both are
+ * "the amount we are claiming", and in both cases a base that does not imply it is
+ * not a base worth printing.
+ */
+export function reconcileAgainst(
+  services: CommissionService[],
+  target: number,
+  messages: { noTarget?: string; stale?: string } = {},
+): Reconciliation {
+  const net = round2(target);
   const fail = (reason: string, chosen = services): Reconciliation => ({
     ok: false,
     services: chosen,
@@ -167,9 +192,7 @@ export function reconcile(
     reason,
   });
 
-  if (documents.length === 0) {
-    return fail("No commission document has been issued to this provider on this booking.");
-  }
+  if (net === 0 && messages.noTarget) return fail(messages.noTarget);
   if (services.length === 0) {
     return fail(
       "No commissionable service line was found for this provider, so the commission of " +
@@ -206,11 +229,10 @@ export function reconcile(
 
   const all = commissionOfServices(candidates);
   return fail(
-    `The commissionable services do not reconcile with the commission documents: ` +
+    `The commissionable services do not reconcile with the commission claimed: ` +
       `${fmtMoney(round2(candidates.reduce((t, s) => t + serviceBase(s), 0)))} of services imply ` +
-      `${fmtMoney(all)} of commission, while the documents net to ${fmtMoney(net)}. ` +
-      `This is usually a pricing line that has moved since the commission was invoiced, or a ` +
-      `commission document that has not reached the warehouse yet.`,
+      `${fmtMoney(all)} of commission, against ${fmtMoney(net)}.` +
+      (messages.stale ? ` ${messages.stale}` : ""),
     candidates,
   );
 }

@@ -1,22 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
 
-export type NaDisbursement = {
-  amount: number | null;
-  currency: string | null;
-  /** dd/mm/yy, as recorded in the bank feed. */
-  paid_on: string | null;
-  /** Derived from the label — see the disbursements CTE. */
-  method: "card" | "wire" | null;
-  reference: string | null;
-};
-
-export type NaCommissionableItem = {
-  label: string | null;
-  base_ht: number | null;
-  /** Percentage, e.g. 7 for 7%. */
-  rate_pct: number | null;
-};
-
 export interface NaPartnerLine {
   /** Owner code (O-XXXX) — matches credit-card approvals in #finance-paiement-by-card. */
   owner_code: string | null;
@@ -24,12 +7,6 @@ export interface NaPartnerLine {
   house_code: string | null;
   /** How many NABCO commission documents exist for this provider on this booking. */
   commission_doc_count: number | null;
-  /** Every payment we made to this provider on this booking. */
-  disbursements: NaDisbursement[] | null;
-  /** The lines a commission is applied to, and its rate. */
-  commissionable: NaCommissionableItem[] | null;
-  /** Sum of the commissionable lines, before tax. */
-  commissionable_base_ht: number | null;
   name: string | null;
   email: string | null;
   /** The contact's own first name (owners.firstname) — distinct from the venue/company name. */
@@ -123,67 +100,6 @@ export interface NaRow {
 
 const QUERY = `
 WITH
--- Disbursements to each provider, for the recovery emails.
---
--- Card vs wire is not stored: provider_payload_kind is PENNYLANE on both, because
--- it says where the bank feed came from, not how we paid. The signature is in the
--- label — an MCC between pipes, or two bare codes joined by a slash — a rule that
--- classifies all 865 North American host payments with nothing left over.
--- It parses a bank feed format, so it will degrade silently if that format
--- changes: see paymentMethodFromLabel and its tests.
-disbursements AS (
-  SELECT
-    p.client_request_id AS crid,
-    p.house_id AS house_id,
-    ARRAY_AGG(STRUCT(
-      CAST(ROUND(p.amount / 10000, 2) AS FLOAT64) AS amount,
-      p.currency AS currency,
-      FORMAT_DATETIME('%d/%m/%y', p.date) AS paid_on,
-      IF(
-        REGEXP_CONTAINS(IFNULL(p.provider_payload_label, ''), r'\\|\\s*\\d{4}\\s*\\|')
-          OR REGEXP_CONTAINS(
-               IFNULL(p.provider_payload_label, ''),
-               r'\\b[HCO]-[A-Za-z0-9]+\\s*/\\s*[HCO]-[A-Za-z0-9]+\\b'),
-        'card', 'wire'
-      ) AS method,
-      COALESCE(
-        REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*([^|]+?)\\s*\\|\\s*id:'),
-        REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*(.+)$'),
-        p.provider_payload_label
-      ) AS reference
-    ) ORDER BY p.date) AS items
-  FROM \`naboo-app-365515.raw_naboo_data.payments\` p
-  WHERE p.deleted = FALSE
-    AND p.kind = 'HOST_PAYMENT'
-    AND p.flow = 'OUTFLOW_PAYMENT'
-  GROUP BY crid, p.house_id
-),
--- Commissionable lines and their rate. The table holds duplicate rows per item,
--- hence the DISTINCT before aggregating.
---
--- The rate is a percentage scaled by 10,000: 70000 is 7%, 120000 is 12%. Across
--- the whole table the values are 120000 (12%, by far the commonest), 100000,
--- 150000, 80000 and the like, down to 70500 for 7.05% — which is the commission
--- model, 12% by default and negotiable up to 15%. Dividing by 1,000 instead read
--- 120% and put that figure in an email to the provider it was billed to.
-commissionable AS (
-  SELECT
-    quote_id,
-    ARRAY_AGG(STRUCT(label, base_ht, rate_pct) ORDER BY base_ht DESC) AS items,
-    ROUND(SUM(base_ht), 2) AS base_total_ht
-  FROM (
-    SELECT DISTINCT
-      cpi.quote_id AS quote_id,
-      cpi.object_data_label AS label,
-      ROUND(cpi.object_data_prices_price_base_price_price_without_vat / 10000, 2) AS base_ht,
-      ROUND(cpi.price_option_fees_owner_fees_rate / 10000, 2) AS rate_pct
-    FROM \`naboo-app-365515.raw_naboo_data.client_pricing_items\` cpi
-    WHERE cpi.type != 'OWNER_FEES'
-      AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
-      AND cpi.object_data_label IS NOT NULL
-  )
-  GROUP BY quote_id
-),
 -- How many commission documents exist per provider quote. Only used to decide
 -- whether a partner card offers a commission statement at all: a card with no
 -- NABCO document must not offer a button that produces an empty page.
@@ -407,13 +323,6 @@ partners_rm_dedup AS (
     o.readable_id AS owner_code,
     h.readable_id AS house_code,
     IFNULL(cd.doc_count, 0) AS commission_doc_count,
-    IFNULL(d.items, CAST([] AS ARRAY<STRUCT<
-      amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
-    >>)) AS disbursements,
-    IFNULL(cm.items, CAST([] AS ARRAY<STRUCT<
-      label STRING, base_ht FLOAT64, rate_pct FLOAT64
-    >>)) AS commissionable,
-    IFNULL(cm.base_total_ht, 0) AS commissionable_base_ht,
     rm.currency_partner AS currency,
     CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64) AS gmv_ttc,
     -- p_disbursed_total_pcurrency's sign is inconsistent across bookings (the
@@ -464,9 +373,6 @@ partners_rm_dedup AS (
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = rm.house_mongo_id
   LEFT JOIN commission_docs_by_quote cd ON cd.quote_id = rm.quote_id
   LEFT JOIN invoiced_by_quote ibq ON ibq.quote_id = rm.quote_id
-  LEFT JOIN disbursements d
-    ON d.crid = rm.client_request_id AND d.house_id = rm.house_mongo_id
-  LEFT JOIN commissionable cm ON cm.quote_id = rm.quote_id
   WHERE rm.is_current_proposal_phase_quote = TRUE
     AND rm.booking_status = 'ACCEPTED'
 ),
@@ -475,8 +381,7 @@ partners_rm AS (
     rid,
     ARRAY_AGG(STRUCT(
       name, email, contact_first_name, owner_code, house_code, commission_doc_count,
-      disbursements, commissionable,
-      commissionable_base_ht, currency, gmv_ttc, paid, outstanding, raw_outstanding,
+      currency, gmv_ttc, paid, outstanding, raw_outstanding,
       payable, payable_to_date, commission, locked, locked_by_admin, locked_by_client, locked_by_owner,
       is_provision, payment_method,
       CAST(NULL AS STRING) AS vat_raw,
@@ -513,13 +418,6 @@ partners_fi_fallback AS (
       o.readable_id AS owner_code,
       h.readable_id AS house_code,
       IFNULL(cd.doc_count, 0) AS commission_doc_count,
-      CAST([] AS ARRAY<STRUCT<
-        amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
-      >>) AS disbursements,
-      CAST([] AS ARRAY<STRUCT<
-        label STRING, base_ht FLOAT64, rate_pct FLOAT64
-      >>) AS commissionable,
-      CAST(0 AS FLOAT64) AS commissionable_base_ht,
       part.currency AS currency,
       CAST(ROUND((part.liveConfirmed.netPayable.withTaxes
                   + part.liveConfirmed.commission.withTaxes) / 10000, 2) AS FLOAT64) AS gmv_ttc,
@@ -589,10 +487,8 @@ base AS (
     TO_JSON_STRING(
       IFNULL(p.items, IFNULL(pfb.items, CAST([] AS ARRAY<STRUCT<
         name STRING, email STRING, contact_first_name STRING, owner_code STRING,
-        disbursements ARRAY<STRUCT<amount FLOAT64, currency STRING, paid_on STRING,
-          method STRING, reference STRING>>,
-        commissionable ARRAY<STRUCT<label STRING, base_ht FLOAT64, rate_pct FLOAT64>>,
-        commissionable_base_ht FLOAT64, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
+        house_code STRING, commission_doc_count INT64,
+        currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
         outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, payable_to_date FLOAT64,
         commission FLOAT64,
         locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,

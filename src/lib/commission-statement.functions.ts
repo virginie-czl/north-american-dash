@@ -111,6 +111,12 @@ svc AS (
       AND cpi.type != 'OWNER_FEES'
       AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
       AND cpi.object_data_label IS NOT NULL
+      -- A line with no unit price or no quantity has no base: it cannot carry a
+      -- commission, and left in it lands in the reconciled subset contributing
+      -- nothing but a second copy of its own name (C-P222 carries an unpriced
+      -- "Game Show" beside the priced one).
+      AND IFNULL(cpi.object_data_prices_price_base_price_price_without_vat, 0) > 0
+      AND IFNULL(SAFE_CAST(cpi.price_option_quantity AS FLOAT64), 0) > 0
   ) s
 )
 SELECT

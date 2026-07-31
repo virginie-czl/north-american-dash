@@ -31,6 +31,12 @@ import {
 } from "@/lib/na-financial-summary.functions";
 import { generateNaStatement } from "@/lib/statement.functions";
 import { generateNaCommissionStatement } from "@/lib/commission-statement.functions";
+import {
+  getCommissionDetail,
+  indexCommissionDetail,
+  commissionDetailKey,
+  type NaCommissionDetail,
+} from "@/lib/commission-detail.functions";
 import { partnerKey } from "@/lib/annotations.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useGmailConnection, useFactScan, useRecoveryLog } from "@/lib/use-gmail";
@@ -766,59 +772,119 @@ function NaPage() {
   // a refund beyond that, or both. One email per partner, never combined
   // across different partners on the same booking — a booking can have
   // several unrelated vendors, and a venue should never see a caterer's figures.
-  const commissionRefundTargets = useMemo<NaCommissionTarget[]>(() => {
-    const targets: NaCommissionTarget[] = [];
+  // Each plan is one email waiting to be written: the booking, the provider and
+  // which ask applies. Composing is deferred because the itemised breakdown — what
+  // we paid out, which services carry a commission — is no longer in the page
+  // payload. It is fetched for the bookings in play when the dialog opens, which is
+  // what took a ~109 MB pricing-item scan off every page load.
+  type RecoveryPlan = {
+    eventRef: string;
+    row: NaRow;
+    partner: NaPartnerLine;
+    contact: { address: string; name: string | null };
+    mode: "commission" | "refund" | "combined";
+  };
+
+  const recoveryPlans = useMemo<RecoveryPlan[]>(() => {
+    const plans: RecoveryPlan[] = [];
     for (const { row: r, partners: ps } of sorted) {
       const eventRef = r.readable_id ?? "";
       for (const p of ps) {
         if (p.is_provision) continue;
         const cb = partnerClawback(p);
         if (cb.commission <= 0.01 && cb.refund <= 0.01) continue;
-
         const contact = naContactFor(p);
         if (!contact.address) continue;
-
-        if (cb.commission > 0.01 && cb.refund > 0.01) {
-          const combined = composeNaCombinedRequest(r, p, contact);
-          if (combined) {
-            targets.push({
-              eventRef,
-              partnerName: p.name,
-              address: contact.address,
-              contactName: contact.name,
-              ...combined,
-              mode: "combined",
-            });
-          }
-        } else if (cb.commission > 0.01) {
-          const commission = composeNaCommissionRequest(r, p, contact);
-          if (commission) {
-            targets.push({
-              eventRef,
-              partnerName: p.name,
-              address: contact.address,
-              contactName: contact.name,
-              ...commission,
-              mode: "commission",
-            });
-          }
-        } else {
-          const refund = composeNaRefundRequest(r, p, contact);
-          if (refund) {
-            targets.push({
-              eventRef,
-              partnerName: p.name,
-              address: contact.address,
-              contactName: contact.name,
-              ...refund,
-              mode: "refund",
-            });
-          }
-        }
+        plans.push({
+          eventRef,
+          row: r,
+          partner: p,
+          contact: { address: contact.address, name: contact.name },
+          mode:
+            cb.commission > 0.01 && cb.refund > 0.01
+              ? "combined"
+              : cb.commission > 0.01
+                ? "commission"
+                : "refund",
+        });
       }
     }
-    return targets;
+    return plans;
   }, [sorted]);
+
+  const composePlan = useCallback(
+    (plan: RecoveryPlan, detail: NaCommissionDetail | null): NaCommissionTarget | null => {
+      const composed =
+        plan.mode === "combined"
+          ? composeNaCombinedRequest(plan.row, plan.partner, plan.contact, detail)
+          : plan.mode === "commission"
+            ? composeNaCommissionRequest(plan.row, plan.partner, plan.contact, detail)
+            : composeNaRefundRequest(plan.row, plan.partner, plan.contact, detail);
+      if (!composed) return null;
+      return {
+        eventRef: plan.eventRef,
+        partnerName: plan.partner.name,
+        address: plan.contact.address,
+        contactName: plan.contact.name,
+        ...composed,
+        mode: plan.mode,
+      };
+    },
+    [],
+  );
+
+  // Without the detail: enough to count the asks, show the buttons and check the
+  // ledger. The itemisation is added when the dialog opens.
+  const commissionRefundTargets = useMemo<NaCommissionTarget[]>(
+    () =>
+      recoveryPlans
+        .map((plan) => composePlan(plan, null))
+        .filter((t): t is NaCommissionTarget => t != null),
+    [recoveryPlans, composePlan],
+  );
+
+  const commissionDetail = useMutation({
+    mutationFn: (eventRefs: string[]) => getCommissionDetail({ data: { event_refs: eventRefs } }),
+  });
+
+  /**
+   * Opens the dialog with the breakdown filled in.
+   *
+   * The detail is a separate query now, so it is fetched for the bookings the round
+   * covers and the emails are composed with it. If that fetch fails the emails
+   * still go out — the composers leave the breakdown out rather than the amount.
+   */
+  const openRecoveryDialog = useCallback(
+    async (wanted: NaCommissionTarget[]) => {
+      const keys = new Set(
+        wanted.map((t) => `${t.eventRef}::${t.address.toLowerCase()}::${t.mode}`),
+      );
+      const plans = recoveryPlans.filter((plan) =>
+        keys.has(`${plan.eventRef}::${plan.contact.address.toLowerCase()}::${plan.mode}`),
+      );
+      if (plans.length === 0) {
+        commissionRefundDialog.open(wanted);
+        return;
+      }
+      let index = new Map<string, NaCommissionDetail>();
+      try {
+        const rows = await commissionDetail.mutateAsync([...new Set(plans.map((p) => p.eventRef))]);
+        index = indexCommissionDetail(rows);
+      } catch (error) {
+        console.error("commission detail unavailable — composing without the breakdown:", error);
+      }
+      const composed = plans
+        .map((plan) =>
+          composePlan(
+            plan,
+            index.get(commissionDetailKey(plan.eventRef, plan.partner.house_code)) ?? null,
+          ),
+        )
+        .filter((t): t is NaCommissionTarget => t != null);
+      commissionRefundDialog.open(composed.length > 0 ? composed : wanted);
+    },
+    [recoveryPlans, composePlan, commissionDetail, commissionRefundDialog],
+  );
 
   // Client recoveries: one email per booking, to the address its invoices were
   // billed to. A booking with no contact on file is left out rather than sent to
@@ -1279,7 +1345,7 @@ function NaPage() {
               {gmailConnection?.connected && unsentPartnerTargets.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => commissionRefundDialog.open(commissionRefundTargets)}
+                  onClick={() => void openRecoveryDialog(commissionRefundTargets)}
                   className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
                 >
                   Recover from {unsentPartnerTargets.length} partner
@@ -1478,7 +1544,7 @@ function NaPage() {
                       return (
                         <button
                           type="button"
-                          onClick={() => commissionRefundDialog.open(mine)}
+                          onClick={() => void openRecoveryDialog(mine)}
                           className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-naboo px-3 text-[12.5px] font-bold text-navy"
                         >
                           <Send className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1637,7 +1703,7 @@ function NaPage() {
                           t.eventRef === selRef &&
                           t.address.toLowerCase() === (p.email ?? "").toLowerCase(),
                       );
-                      if (mine.length > 0) commissionRefundDialog.open(mine);
+                      if (mine.length > 0) void openRecoveryDialog(mine);
                       else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
                     }}
                     commissionStatement={{
