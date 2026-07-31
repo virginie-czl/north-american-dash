@@ -34,7 +34,7 @@ import {
   useEventComments,
   type EventCommentSummary,
 } from "@/lib/use-annotations";
-import { Fragment, useMemo, useState } from "react";
+import { useCallback, Fragment, useMemo, useState } from "react";
 import { Mail } from "lucide-react";
 import {
   getNaRows,
@@ -64,6 +64,15 @@ import {
 } from "@/components/ui/table";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { parseNaInvoices } from "@/lib/na.functions";
+import {
+  GROUP_META,
+  GROUP_ORDER,
+  MOVE_PILL,
+  isRecover,
+  needsAMove,
+  type Move,
+  type MoveGroup,
+} from "@/lib/tracker-move";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -455,6 +464,7 @@ function NaPage() {
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedRef, setSelectedRef] = useState<string>("");
+  const [scope, setScope] = useState<"move" | "recover" | "all">("move");
   const [detailTab, setDetailTab] = useState<
     "partners" | "invoices" | "emails" | "docs" | "comments"
   >("partners");
@@ -752,33 +762,141 @@ function NaPage() {
   // ── Split view ────────────────────────────────────────────────────────────
   // Presentation only. Amounts, tags, email actions and the commission/refund
   // dialogs all come from the same hooks and helpers as the previous layout.
-  const selected = useMemo(() => {
-    if (filtered.length === 0) return null;
-    const hit = filtered.find(({ row }) => (row.readable_id ?? "") === selectedRef);
-    return hit ?? filtered[0];
-  }, [filtered, selectedRef]);
+
+  // One move per booking, derived from the same helpers the partner cards use so
+  // the pills, the scope counts and the dialog agree.
+  const moveFor = useCallback(
+    (r: NaRow, ps: ReturnType<typeof parseNaPartners>): Move => {
+      const ccy = ps.find((p) => p.currency)?.currency ?? r.currency_client;
+      const fmt = (v: number) => `${fmtAmount(v)} ${ccyLabel(ccy)}`;
+      const live = ps.filter((p) => !p.is_provision);
+
+      if (live.length === 0) {
+        return {
+          group: "blocked",
+          label: "No partner line",
+          headline: "—",
+          headlineLabel: "nothing priced",
+        };
+      }
+
+      const claw = rowClawbackSplit(ps);
+      const clawTotal =
+        [...claw.commission.values()].reduce((a, b) => a + b, 0) +
+        [...claw.refund.values()].reduce((a, b) => a + b, 0);
+      if (clawTotal > 0.01) {
+        return {
+          group: "ours",
+          label: `Recover ${fmt(clawTotal)}`,
+          headline: fmt(clawTotal),
+          headlineLabel: `to recover ${ccyLabel(ccy)}`,
+        };
+      }
+
+      const toPay = rowPartnerToPay(r, ps);
+      const payTotal = [...toPay.values()].reduce((a, b) => a + b, 0);
+      if (payTotal > 0.01) {
+        // Whose move it is depends on whether we can actually pay yet.
+        const actions = live.map((p) =>
+          actionFor(
+            r.readable_id ?? "",
+            {
+              name: p.name,
+              email: p.email,
+              amount_due: p.outstanding,
+              vat_raw: null,
+              tax_identifier: null,
+              country: null,
+              cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
+            },
+            true,
+            { taxTracked: false },
+          ),
+        );
+        const canPay = actions.some((a) => a.code === "ours_pay");
+        const waiting = actions.some((a) => a.code === "await_reply");
+        if (canPay) {
+          return {
+            group: "ours",
+            label: "Pay the partner",
+            headline: fmt(payTotal),
+            headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+          };
+        }
+        if (waiting) {
+          return {
+            group: "waiting",
+            label: "Waiting on a reply",
+            headline: fmt(payTotal),
+            headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+          };
+        }
+        return {
+          group: "partner",
+          label: "Ask for details",
+          headline: fmt(payTotal),
+          headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+        };
+      }
+
+      if ((r.balance_ccy ?? 0) > 0.01) {
+        return {
+          group: "client",
+          label: "Client to pay",
+          headline: `${fmtAmount(r.balance_ccy)} ${ccyLabel(r.currency_client)}`,
+          headlineLabel: `client outstanding ${ccyLabel(r.currency_client)}`,
+        };
+      }
+
+      return {
+        group: "done",
+        label: "Nothing to do",
+        headline: fmt(0),
+        headlineLabel: `settled ${ccyLabel(ccy)}`,
+      };
+    },
+    [actionFor],
+  );
+
+  const withMove = useMemo(
+    () => filtered.map((item) => ({ ...item, move: moveFor(item.row, item.partners) })),
+    [filtered, moveFor],
+  );
+
+  const scoped = useMemo(() => {
+    if (scope === "recover") return withMove.filter((x) => isRecover(x.move));
+    if (scope === "move") return withMove.filter((x) => needsAMove(x.move.group));
+    return withMove;
+  }, [withMove, scope]);
+
+  const scopeCounts = useMemo(
+    () => ({
+      move: withMove.filter((x) => needsAMove(x.move.group)).length,
+      recover: withMove.filter((x) => isRecover(x.move)).length,
+      all: withMove.length,
+    }),
+    [withMove],
+  );
 
   const groups = useMemo(() => {
-    const buckets: Array<{
-      key: string;
-      title: string;
-      dot: string;
-      rows: typeof filtered;
-    }> = [
-      { key: "owed", title: "To pay", dot: "#f59e0b", rows: [] },
-      { key: "claim", title: "To reclaim", dot: "#dc2626", rows: [] },
-      { key: "clear", title: "Settled", dot: "#9ca3af", rows: [] },
-    ];
-    const put = (k: string, item: (typeof filtered)[number]) =>
-      buckets.find((b) => b.key === k)!.rows.push(item);
-    for (const item of filtered) {
-      const claw = rowClawbackSplit(item.partners);
-      if (claw.commission.size > 0 || claw.refund.size > 0) put("claim", item);
-      else if (rowPartnerToPay(item.row, item.partners).size > 0) put("owed", item);
-      else put("clear", item);
+    const byGroup = new Map<MoveGroup, typeof scoped>();
+    for (const item of scoped) {
+      const list = byGroup.get(item.move.group) ?? [];
+      list.push(item);
+      byGroup.set(item.move.group, list);
     }
-    return buckets.filter((b) => b.rows.length > 0);
-  }, [filtered]);
+    return GROUP_ORDER.filter((g) => (byGroup.get(g)?.length ?? 0) > 0).map((g) => ({
+      key: g,
+      title: GROUP_META[g].title,
+      dot: GROUP_META[g].dot,
+      rows: byGroup.get(g)!,
+    }));
+  }, [scoped]);
+
+  const selected = useMemo(() => {
+    if (scoped.length === 0) return null;
+    return scoped.find(({ row }) => (row.readable_id ?? "") === selectedRef) ?? scoped[0];
+  }, [scoped, selectedRef]);
 
   const sel = selected?.row ?? null;
   const selPartners = selected?.partners ?? [];
@@ -865,9 +983,30 @@ function NaPage() {
             </div>
 
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              <span className="rounded-full bg-slate-100 px-2.5 py-[3px] text-[11.5px] text-slate-600">
-                {filtered.length} / {rows.length}
-              </span>
+              {/* Scope chips: Needs a move is the default, per the handoff. */}
+              {(
+                [
+                  { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
+                  { key: "recover" as const, label: "To recover", count: scopeCounts.recover },
+                  { key: "all" as const, label: "All", count: scopeCounts.all },
+                ] as const
+              ).map((s) => {
+                const active = scope === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    onClick={() => setScope(s.key)}
+                    className={`inline-flex h-[26px] items-center rounded-full px-2.5 text-[11.5px] ${
+                      active
+                        ? "bg-navy font-semibold text-white"
+                        : "bg-[#F3F4F6] font-medium text-[#4B5563]"
+                    }`}
+                  >
+                    {s.label} {s.count}
+                  </button>
+                );
+              })}
               {gmailConnection?.connected && incompleteTargets.length > 0 && (
                 <button
                   type="button"
@@ -917,13 +1056,9 @@ function NaPage() {
                     </span>
                     <span className="text-[11px] text-slate-400">{g.rows.length}</span>
                   </div>
-                  {g.rows.map(({ row: r, partners: ps }) => {
+                  {g.rows.map(({ row: r, partners: ps, move }) => {
                     const ref = r.readable_id ?? "";
                     const isSel = selRef === ref;
-                    const owed = rowPartnerToPay(r, ps);
-                    const owedLabel = Array.from(owed.entries())
-                      .map(([c, v]) => `${fmtAmount(v)} ${ccyLabel(c)}`)
-                      .join(" · ");
                     return (
                       <button
                         key={ref}
@@ -949,19 +1084,21 @@ function NaPage() {
                           <span className="mt-0.5 block truncate text-[11.5px] text-slate-500">
                             {r.event_name ?? "—"}
                           </span>
-                          <span className="mt-1 inline-flex">
-                            <StatusCell
-                              owed={owed}
-                              commission={rowClawbackSplit(ps).commission}
-                              refund={rowClawbackSplit(ps).refund}
-                            />
+                          <span className="mt-[5px] inline-flex">
+                            <span
+                              className={`rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${MOVE_PILL[move.group]}`}
+                            >
+                              {move.label}
+                            </span>
                           </span>
                         </span>
                         <span className="flex-none whitespace-nowrap text-right">
                           <span className="block text-[13px] font-semibold tabular-nums">
-                            {owedLabel || "—"}
+                            {move.headline}
                           </span>
-                          <span className="block text-[10.5px] text-slate-400">to pay</span>
+                          <span className="block text-[10.5px] text-[#9CA3AF]">
+                            {move.headlineLabel}
+                          </span>
                           <span className="mt-1.5 block text-[10.5px] text-slate-400">
                             {fmtDate(r.start_date)}
                           </span>
