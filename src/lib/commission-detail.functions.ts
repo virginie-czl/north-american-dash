@@ -75,21 +75,43 @@ WITH keys AS (
   SELECT ref FROM UNNEST(JSON_VALUE_ARRAY(@refs)) AS ref
 ),
 -- The provider lines of the requested bookings, and the quote each one hangs off.
+--
+-- One provider on one booking can carry more than one current quote — 14 of the 520
+-- North American provider lines do, up to four. The quote, the commission excluding
+-- tax and the commission including tax therefore come off ONE row, chosen as the
+-- quote that carries the commission (largest first, then by id so it is stable).
+-- Independent ANY_VALUEs could take the lines of one quote and the commission of
+-- another: on C-S773 / H-B0850 the two quotes hold 8,652.00 CAD and 0.00, so which
+-- one BigQuery returned decided whether the email showed a breakdown at all.
+--
+-- Where a provider genuinely splits a booking across two commissioned quotes, this
+-- picks the larger and the reconciliation refuses the rest — which is the safe
+-- outcome, and no such case exists in the data today.
+-- ROW_NUMBER rather than an aggregate: every field then comes from one row by
+-- construction, and the CTEs below can still select quote_id out of this one (an
+-- ARRAY_AGG(… LIMIT 1) here cannot be de-correlated once they do).
 prov AS (
-  SELECT
-    rm.client_request_readable_id AS rid,
-    h.readable_id                 AS house_code,
-    ANY_VALUE(rm.quote_id)          AS quote_id,
-    ANY_VALUE(rm.client_request_id) AS crid,
-    ANY_VALUE(rm.house_mongo_id)    AS house_id,
-    ANY_VALUE(ROUND(CAST(rm.p_live_commission_ht_pcurrency AS FLOAT64), 2))  AS commission_ht,
-    ANY_VALUE(ROUND(CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64), 2)) AS commission_ttc
-  FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
-  JOIN keys k ON k.ref = rm.client_request_readable_id
-  JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = rm.house_mongo_id
-  WHERE rm.is_current_proposal_phase_quote = TRUE
-    AND rm.booking_status = 'ACCEPTED'
-  GROUP BY rid, house_code
+  SELECT rid, house_code, quote_id, crid, house_id, commission_ht, commission_ttc
+  FROM (
+    SELECT
+      rm.client_request_readable_id AS rid,
+      h.readable_id                 AS house_code,
+      rm.quote_id                   AS quote_id,
+      rm.client_request_id          AS crid,
+      rm.house_mongo_id             AS house_id,
+      ROUND(CAST(rm.p_live_commission_ht_pcurrency AS FLOAT64), 2)  AS commission_ht,
+      ROUND(CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64), 2) AS commission_ttc,
+      ROW_NUMBER() OVER (
+        PARTITION BY rm.client_request_readable_id, h.readable_id
+        ORDER BY CAST(rm.p_live_commission_ht_pcurrency AS FLOAT64) DESC, rm.quote_id
+      ) AS rn
+    FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
+    JOIN keys k ON k.ref = rm.client_request_readable_id
+    JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = rm.house_mongo_id
+    WHERE rm.is_current_proposal_phase_quote = TRUE
+      AND rm.booking_status = 'ACCEPTED'
+  )
+  WHERE rn = 1
 ),
 -- Every payment we made to a provider, for the recovery emails.
 --
@@ -121,10 +143,12 @@ disbursements AS (
       ) AS reference
     ) ORDER BY p.date) AS items
   FROM \`naboo-app-365515.raw_naboo_data.payments\` p
+  -- Joined rather than filtered by IN: a subquery reading prov cannot be
+  -- de-correlated, because prov holds a window function.
+  JOIN (SELECT DISTINCT crid FROM prov) pk ON pk.crid = p.client_request_id
   WHERE p.deleted = FALSE
     AND p.kind = 'HOST_PAYMENT'
     AND p.flow = 'OUTFLOW_PAYMENT'
-    AND p.client_request_id IN (SELECT crid FROM prov)
   GROUP BY crid, p.house_id
 ),
 -- Commissionable lines and their rate, one line per pricing option.
@@ -180,8 +204,8 @@ commissionable AS (
           CAST(cpi.price_option_fees_owner_fees_rate AS FLOAT64) AS rate_raw
         ) ORDER BY cpi.updated_at DESC, cpi.pricing_item_id DESC LIMIT 1)[OFFSET(0)] AS pick
       FROM \`naboo-app-365515.raw_naboo_data.client_pricing_items\` cpi
-      WHERE cpi.quote_id IN (SELECT quote_id FROM prov)
-        AND cpi.type != 'OWNER_FEES'
+      JOIN (SELECT DISTINCT quote_id FROM prov) pq ON pq.quote_id = cpi.quote_id
+      WHERE cpi.type != 'OWNER_FEES'
         AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
         AND cpi.object_data_label IS NOT NULL
         -- A line with no unit price or no quantity has no base: it cannot carry a

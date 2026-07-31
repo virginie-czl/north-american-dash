@@ -50,26 +50,47 @@ WITH ev AS (
 -- The provider line: which quote, and the commission finance holds for it.
 -- Both figures are taken as recorded rather than recomputed — on a US provider
 -- they are equal, on a European one they differ by the tax on the commission.
+--
+-- The quote and its two commission figures come off ONE row, chosen as the quote
+-- carrying the commission (largest first, then by id so it is stable). A provider can
+-- hold more than one current quote on a booking, and independent ANY_VALUEs could
+-- pair one quote's services with another's commission — a statement whose base
+-- cannot imply its own total. See the same CTE in commission-detail.functions.ts.
+--
+-- The documents below are scoped to the provider rather than to the picked quote,
+-- because that is what the provider holds. If a provider ever splits one booking
+-- across two commissioned quotes, the two sides will disagree and no statement will
+-- be issued — the safe outcome, and no such case exists in the data today.
+-- ROW_NUMBER rather than an aggregate: every field then comes from one row by
+-- construction, and svc below can still select quote_id out of this one.
 prov AS (
-  SELECT
-    ANY_VALUE(rm.quote_id) AS quote_id,
-    ANY_VALUE(COALESCE(NULLIF(o.company_name, ''), NULLIF(h.title, ''),
-                       NULLIF(rm.venue_name, ''), NULLIF(rm.partner_name, ''))) AS provider_name,
-    ANY_VALUE(o.readable_id) AS owner_code,
-    ANY_VALUE(rm.currency_partner) AS currency,
-    -- Rounded to the cent: the view keeps these unrounded (3513.505342 against a
-    -- 3513.51 incl. tax on Hyatt), and an unrounded ratio would put a one-cent
-    -- wobble in the per-line incl.-tax column.
-    ANY_VALUE(ROUND(CAST(rm.p_live_commission_ht_pcurrency AS FLOAT64), 2)) AS commission_ht,
-    ANY_VALUE(ROUND(CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64), 2)) AS commission_ttc,
-    h.readable_id AS house_code
-  FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
-  JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = rm.house_mongo_id
-  LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = rm.house_owner_id
-  WHERE rm.client_request_readable_id = @ref
-    AND h.readable_id = @house
-    AND rm.is_current_proposal_phase_quote = TRUE
-  GROUP BY house_code
+  SELECT house_code, quote_id, provider_name, owner_code, currency,
+         commission_ht, commission_ttc
+  FROM (
+    SELECT
+      h.readable_id AS house_code,
+      rm.quote_id   AS quote_id,
+      COALESCE(NULLIF(o.company_name, ''), NULLIF(h.title, ''),
+               NULLIF(rm.venue_name, ''), NULLIF(rm.partner_name, '')) AS provider_name,
+      o.readable_id AS owner_code,
+      rm.currency_partner AS currency,
+      -- Rounded to the cent: the view keeps these unrounded (3513.505342 against a
+      -- 3513.51 incl. tax on Hyatt), and an unrounded ratio would put a one-cent
+      -- wobble in the per-line incl.-tax column.
+      ROUND(CAST(rm.p_live_commission_ht_pcurrency AS FLOAT64), 2)  AS commission_ht,
+      ROUND(CAST(rm.p_live_commission_ttc_pcurrency AS FLOAT64), 2) AS commission_ttc,
+      ROW_NUMBER() OVER (
+        PARTITION BY h.readable_id
+        ORDER BY CAST(rm.p_live_commission_ht_pcurrency AS FLOAT64) DESC, rm.quote_id
+      ) AS rn
+    FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
+    JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = rm.house_mongo_id
+    LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = rm.house_owner_id
+    WHERE rm.client_request_readable_id = @ref
+      AND h.readable_id = @house
+      AND rm.is_current_proposal_phase_quote = TRUE
+  )
+  WHERE rn = 1
 ),
 -- Commission documents for this provider on this booking. NABCO-% only, every
 -- status, attached through the FEE_OWNER line items.
@@ -124,8 +145,10 @@ svc AS (
         CAST(cpi.price_option_fees_owner_fees_rate AS FLOAT64) AS rate_raw
       ) ORDER BY cpi.updated_at DESC, cpi.pricing_item_id DESC LIMIT 1)[OFFSET(0)] AS pick
       FROM \`naboo-app-365515.raw_naboo_data.client_pricing_items\` cpi
-      WHERE cpi.quote_id = (SELECT quote_id FROM prov)
-        AND cpi.type != 'OWNER_FEES'
+      -- Joined rather than filtered by a scalar subquery: a subquery reading prov
+      -- cannot be de-correlated, because prov holds a window function.
+      JOIN (SELECT DISTINCT quote_id FROM prov) pq ON pq.quote_id = cpi.quote_id
+      WHERE cpi.type != 'OWNER_FEES'
         AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
         AND cpi.object_data_label IS NOT NULL
         -- A line with no unit price or no quantity has no base: it cannot carry a
