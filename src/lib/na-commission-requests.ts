@@ -111,13 +111,12 @@ export function composeNaCommissionRequest(
   const client = row.company_name ?? "your group";
   const dateRange = fmtDateRange(row.start_date, row.end_date);
   const bookingId = row.readable_id ?? "—";
-  const greeting = to.name ?? "there";
   const ccy = partner.currency;
 
   const subject = `Commission due — ${client}${dateRange ? `, ${dateRange}` : ""} (Booking ${bookingId})`;
   const achEft = row.billing_entity === "NABOO_US" ? "ACH" : "EFT";
 
-  const body = `Hi ${greeting},
+  const body = `Hi team,
 
 Hope you're doing well!
 
@@ -152,20 +151,19 @@ export function composeNaRefundRequest(
   const client = row.company_name ?? "your group";
   const dateRange = fmtDateRange(row.start_date, row.end_date);
   const bookingId = row.readable_id ?? "—";
-  const greeting = to.name ?? "there";
   const ccy = partner.currency;
 
   const subject = `Overpayment on Booking ${bookingId} — ${client}${dateRange ? `, ${dateRange}` : ""}`;
 
-  const body = `Hi ${greeting},
+  const body = `Hi team,
 
 Hope you're doing well!
 
 I was closing out the file on the ${client} program and caught something on our side — it looks like we overpaid you, so I wanted to flag it and get it squared away.
 
 Here's what we're seeing:
-• Amount payable: ${fmtMoney(partner.payable, ccy)}
-• Amount we paid: ${fmtMoney(partner.paid, ccy)}
+• Total invoice due: ${fmtMoney((partner.payable ?? 0) + (partner.commission ?? 0), ccy)}
+• Total paid by Naboo: ${fmtMoney(partner.paid, ccy)}
 • Overpayment: ${fmtMoney(refund, ccy)}
 
 Could you take a look and confirm it matches your records? Once you do, we'd ask for a refund of ${fmtMoney(refund, ccy)} and I'll send over a credit note for your files.
@@ -191,24 +189,25 @@ export function composeNaCombinedRequest(
   const client = row.company_name ?? "your group";
   const dateRange = fmtDateRange(row.start_date, row.end_date);
   const bookingId = row.readable_id ?? "—";
-  const greeting = to.name ?? "there";
   const ccy = partner.currency;
   const subject = `${client} — commission + overpayment to settle (Booking ${bookingId})`;
   const achEft = row.billing_entity === "NABOO_US" ? "ACH" : "EFT";
 
-  const body = `Hi ${greeting},
+  const body = `Hi team,
 
 Hope you're doing well!
 
 I've just finished reconciling the ${client} program and wanted to send you everything in one place rather than in pieces. There are two items open on our side — the commission we're owed, and an overpayment on the invoice.
 
 1) Commission
-• Commission due: ${fmtMoney(commission, ccy)}
+• Commission due incl. tax: ${fmtMoney(commission, ccy)}
 
 2) Overpayment
-• Amount payable: ${fmtMoney(partner.payable, ccy)}
-• Amount we paid: ${fmtMoney(partner.paid, ccy)}
-• Overpaid: ${fmtMoney(refund, ccy)}
+• Total invoice due: ${fmtMoney((partner.payable ?? 0) + (partner.commission ?? 0), ccy)}
+• Total paid by Naboo: ${fmtMoney(partner.paid, ccy)}
+• Refund due to Naboo: ${fmtMoney(refund, ccy)}
+
+Total to be paid to Naboo (commission + overpayment): ${fmtMoney(commission + refund, ccy)}
 
 Could you confirm the figures match your records? Once you do, I'll issue our commission invoice and send over a credit note for the overpayment so both sides tie out cleanly in your books — payable by wire or ${achEft}, whichever is easiest on your side.
 
