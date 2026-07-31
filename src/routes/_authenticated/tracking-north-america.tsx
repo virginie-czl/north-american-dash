@@ -10,6 +10,7 @@ import {
 } from "@/components/na-commission-request-dialog";
 import {
   partnerClawback,
+  partnerRecoveryAsk,
   rowClawbackSplit,
   naContactFor,
   composeNaCommissionRequest,
@@ -2125,9 +2126,13 @@ function PartnerSectionCard({
               true,
               { taxTracked: false },
             );
-        const overpaid = (p.outstanding ?? 0) < -0.01;
         const claw = partnerClawback(p);
-        const hasCommissionToClaim = claw.commission > 0.01;
+        // Money to recover outranks every other verdict on this card — see
+        // partnerRecoveryAsk for why the action tree cannot be trusted alone here.
+        const ask = partnerRecoveryAsk(p);
+        const hasRefundToClaim = ask === "refund";
+        const hasCommissionToClaim = ask === "commission";
+        const hasRecoveryAsk = ask != null;
         // A card approved in #finance-paiement-by-card means the money is
         // already available to the provider: the next move is theirs, not ours,
         // and it is certainly not a bank-details chase.
@@ -2137,7 +2142,7 @@ function PartnerSectionCard({
         // emphasis: amber when it is money to claw back, muted when nothing is due.
         const outTone = prov
           ? "text-[#9CA3AF]"
-          : overpaid || hasCommissionToClaim
+          : hasRecoveryAsk
             ? "text-[#B45309]"
             : (p.outstanding ?? 0) > 0.01
               ? "text-[#101F34]"
@@ -2172,9 +2177,15 @@ function PartnerSectionCard({
               {!prov && action && (
                 <>
                   <div className="mt-2 text-xs text-[#374151]">
-                    {cardIssued
-                      ? "Carte émise et approuvée — au prestataire de la débiter."
-                      : action.detail}
+                    {/* Same precedence as the button: never tell someone the line is
+                        paid up while a refund or a commission is still to be asked for. */}
+                    {hasRefundToClaim
+                      ? `Overpaid by ${fmtAmount(claw.refund)} ${ccyLabel(p.currency)} beyond our commission — refund to ask.`
+                      : hasCommissionToClaim
+                        ? `Commission of ${fmtAmount(claw.commission)} ${ccyLabel(p.currency)} paid out with the provider's invoice — to recover.`
+                        : cardIssued
+                          ? "Carte émise et approuvée — au prestataire de la débiter."
+                          : action.detail}
                   </div>
                   {cardIssued && (
                     <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#E7F8F3] px-2 py-[2px] text-[10.5px] font-semibold text-[#00593C]">
@@ -2220,7 +2231,7 @@ function PartnerSectionCard({
               </span>
               <span>
                 <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
-                  {overpaid
+                  {hasRefundToClaim
                     ? "Refund to recover"
                     : hasCommissionToClaim
                       ? "Commission to recover"
@@ -2234,7 +2245,7 @@ function PartnerSectionCard({
                   ) : (
                     <Money
                       value={
-                        overpaid
+                        hasRefundToClaim
                           ? claw.refund
                           : hasCommissionToClaim
                             ? claw.commission
@@ -2253,13 +2264,12 @@ function PartnerSectionCard({
                 <button
                   type="button"
                   disabled={
-                    action?.code === "settled" ||
-                    // Card issued: waiting on the provider, nothing to open.
-                    (!overpaid && !hasCommissionToClaim && cardIssued) ||
-                    (!overpaid &&
-                      !hasCommissionToClaim &&
-                      p.payment_method === "CREDIT_CARD" &&
-                      action?.code === "ours_pay")
+                    !hasRecoveryAsk &&
+                    // Nothing owed either way, or waiting on the provider: the card
+                    // is issued, or it is theirs to debit. Nothing to open here.
+                    (action?.code === "settled" ||
+                      cardIssued ||
+                      (p.payment_method === "CREDIT_CARD" && action?.code === "ours_pay"))
                   }
                   onClick={() => onRequest(p)}
                   className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-navy bg-white px-3 text-xs font-semibold text-navy transition-colors hover:bg-[#FAFAF8] disabled:border-border disabled:text-[#9CA3AF]"
@@ -2268,12 +2278,12 @@ function PartnerSectionCard({
                       label here is either a payout state or a recovery ask. The
                       card is a state we act on elsewhere, not something we debit
                       from this screen. */}
-                  {action?.code === "settled"
-                    ? "Nothing to do"
-                    : overpaid
-                      ? "Ask for the refund"
-                      : hasCommissionToClaim
-                        ? "Ask for the commission"
+                  {hasRefundToClaim
+                    ? "Ask for the refund"
+                    : hasCommissionToClaim
+                      ? "Ask for the commission"
+                      : action?.code === "settled"
+                        ? "Nothing to do"
                         : cardIssued
                           ? "Card to debit"
                           : action?.code === "ours_pay"

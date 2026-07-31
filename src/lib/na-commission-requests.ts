@@ -34,6 +34,26 @@ export function partnerClawback(p: NaPartnerLine): NaClawback {
   return { commission: commPart, refund: refundPart };
 }
 
+/**
+ * What this provider can actually be asked for, and in which order.
+ *
+ * This is the rule a partner card's next move hangs on. It has to outrank the
+ * action tree's own verdict, because that tree only ever looks at what is still
+ * owed *to* the provider: an overpayment leaves nothing owed, so it comes back
+ * "settled" — which on its own printed "Nothing to do" beside a refund somebody
+ * still has to go and ask for.
+ *
+ * Keyed off the clawback rather than a negative outstanding: paying ahead of what
+ * has been invoiced to the client leaves a line overpaid *to date* with nothing to
+ * claw back, and asking for that money back would be wrong.
+ */
+export function partnerRecoveryAsk(p: NaPartnerLine): "refund" | "commission" | null {
+  const { commission, refund } = partnerClawback(p);
+  if (refund > 0.01) return "refund";
+  if (commission > 0.01) return "commission";
+  return null;
+}
+
 export type NaClawbackSplit = { commission: Map<string, number>; refund: Map<string, number> };
 
 /** Same split, summed by currency across every partner on the booking — used for the StatusCell display. */

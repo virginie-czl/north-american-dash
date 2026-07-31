@@ -1,5 +1,6 @@
 import {
   partnerClawback,
+  partnerRecoveryAsk,
   rowClawbackSplit,
   naContactFor,
   composeNaCommissionRequest,
@@ -91,6 +92,42 @@ t(
   "provision line → always zero/zero even if raw_outstanding negative",
   partnerClawback(partner({ raw_outstanding: -500, commission: 100, is_provision: true }))
     .commission === 0,
+);
+
+// ── partnerRecoveryAsk ──────────────────────────────────────────────────────
+console.log("\n[partnerRecoveryAsk]");
+
+t("nothing to claw back → no ask", partnerRecoveryAsk(partner({ raw_outstanding: 0 })) === null);
+
+t(
+  "overpaid within our commission → ask for the commission",
+  partnerRecoveryAsk(partner({ raw_outstanding: -50, commission: 100 })) === "commission",
+);
+
+t(
+  "overpaid beyond our commission → the refund is the ask",
+  partnerRecoveryAsk(partner({ raw_outstanding: -150, commission: 100 })) === "refund",
+);
+
+// The Double Tree case: paid 9 999,37 against 7 148,38 payable to date, leaving
+// 2 756,49 to recover beyond commission. Nothing more is owed to the provider, so
+// the action tree calls the line settled — the ask has to survive that.
+t(
+  "a line the action tree calls settled still carries its refund ask",
+  partnerRecoveryAsk(
+    partner({ raw_outstanding: -2756.49, commission: 0, outstanding: -2851, paid: 9999.37 }),
+  ) === "refund",
+);
+
+t(
+  "paid ahead of client invoicing is not an ask",
+  partnerRecoveryAsk(partner({ raw_outstanding: 500, outstanding: -1200 })) === null,
+);
+
+t(
+  "provision line is never an ask",
+  partnerRecoveryAsk(partner({ raw_outstanding: -500, commission: 100, is_provision: true })) ===
+    null,
 );
 
 // ── rowClawbackSplit (display roll-up only — emails no longer aggregate) ────
