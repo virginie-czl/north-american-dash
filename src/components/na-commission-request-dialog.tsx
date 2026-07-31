@@ -1,8 +1,8 @@
 /**
- * Commission / refund request dialog for Marketplace NA — same bulk
- * checklist pattern as RequestInfoDialog (deselect, preview/edit, draft or
- * send), but for the commission-to-recover / refund-to-ask targets instead
- * of missing bank/tax info.
+ * Recovery request dialog for Marketplace NA — same bulk checklist pattern as
+ * RequestInfoDialog (deselect, preview/edit, draft or send), but for the money
+ * this tracker chases instead of missing bank/tax info: a commission or refund
+ * from a provider, or a balance due from a client.
  */
 import { useMemo, useState } from "react";
 import { AlertCircle, Check, ChevronDown, ChevronUp, Send, FileText, X } from "lucide-react";
@@ -11,18 +11,27 @@ import { usePartnerRequests, type OutgoingMessage } from "@/lib/use-gmail";
 
 export type NaCommissionTarget = {
   eventRef: string;
+  /** Display name of the counterparty: the provider, or the client company. */
   partnerName: string | null;
   address: string;
   contactName: string | null;
   subject: string;
   body: string;
-  mode: "commission" | "refund" | "combined";
+  mode: "commission" | "refund" | "combined" | "client";
 };
 
 const MODE_LABEL: Record<NaCommissionTarget["mode"], string> = {
   commission: "commission",
   refund: "refund",
   combined: "commission + refund",
+  client: "balance due",
+};
+
+const MODE_PILL: Record<NaCommissionTarget["mode"], string> = {
+  commission: "bg-sky-100 text-sky-800",
+  refund: "bg-rose-100 text-rose-800",
+  combined: "bg-amber-100 text-amber-800",
+  client: "bg-indigo-100 text-indigo-800",
 };
 
 export function NaCommissionRequestDialog({
@@ -39,6 +48,9 @@ export function NaCommissionRequestDialog({
   const requests = usePartnerRequests();
 
   const key = (t: NaCommissionTarget) => `${t.address}::${t.eventRef}::${t.mode}`;
+  // The list is one audience or the other, never mixed: the two buttons that open
+  // this dialog each build their own targets.
+  const audience = targets.every((t) => t.mode === "client") ? "clients" : "partners";
 
   const composedMap = useMemo(() => {
     const map = new Map<string, OutgoingMessage>();
@@ -73,14 +85,16 @@ export function NaCommissionRequestDialog({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Request commission or refund"
+        aria-label={
+          audience === "clients" ? "Chase a client balance" : "Request commission or refund"
+        }
         className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
       >
         <header className="flex flex-none items-start gap-3 border-b border-border px-5 py-4">
           <span className="min-w-0">
             <h2 className="font-display text-lg font-bold leading-tight">Send selected</h2>
             <p className="mt-0.5 text-[12.5px] text-slate-600">
-              Deselect partners you don't want to contact. Each message will be sent from your
+              Deselect {audience} you don't want to contact. Each message will be sent from your
               Gmail. Your Gmail signature will be added automatically.
             </p>
           </span>
@@ -121,13 +135,7 @@ export function NaCommissionRequestDialog({
                         {t.eventRef}
                       </span>
                       <span
-                        className={`inline-flex items-center rounded-full px-2 py-[1px] text-[10px] font-medium ${
-                          t.mode === "refund"
-                            ? "bg-rose-100 text-rose-800"
-                            : t.mode === "combined"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-sky-100 text-sky-800"
-                        }`}
+                        className={`inline-flex items-center rounded-full px-2 py-[1px] text-[10px] font-medium ${MODE_PILL[t.mode]}`}
                       >
                         {MODE_LABEL[t.mode]}
                       </span>

@@ -48,14 +48,41 @@ export interface NaPartnerLine {
 }
 
 export interface NaInvoiceLine {
+  invoice_id: string | null;
   invoice_ref: string | null;
+  /** CLIENT for documents billed to the client, PARTNER for our commission notes. */
+  party: string | null;
+  /** INVOICE or CREDIT_NOTE. */
+  doc_kind: string | null;
   status: string | null;
   currency: string | null;
   amount_ttc: number | null;
   emission_date: string | null;
   due_date: string | null;
   is_sent: boolean | null;
+  /** The invoice this credit note reverses, when it reverses one. */
+  cancels_invoice_id: string | null;
+  pdf_url: string | null;
+  /** The Naboo entity that issued it, e.g. "NABOO US Inc." */
+  seller_name: string | null;
+  /** The address the invoice was addressed to, when recorded. */
+  buyer_email: string | null;
+  /** BANK_TRANSFER, CARD… — how this invoice asks to be settled. */
+  payment_means: string | null;
+  /** The receiving account as printed on this very invoice. */
+  bank_details: string | null;
 }
+
+/** One receipt of client cash on a booking, for the recovery email's ledger. */
+export type NaClientReceipt = {
+  amount: number | null;
+  currency: string | null;
+  /** ISO date. */
+  paid_on: string | null;
+  /** Derived from the provider — see the client_receipts CTE. */
+  method: string | null;
+  reference: string | null;
+};
 
 export interface NaRow {
   readable_id: string | null;
@@ -83,6 +110,11 @@ export interface NaRow {
   balance_ccy: number | null;
   partners_json: string | null;
   invoices_json: string | null;
+  /** Every euro/dollar of client cash received on the booking, itemised. */
+  client_receipts_json: string | null;
+  /** Who to write to about the money: the booking's client contact. */
+  client_contact_email: string | null;
+  client_contact_name: string | null;
 }
 
 const QUERY = `
@@ -147,16 +179,81 @@ client_invoices AS (
   SELECT
     inv.clientRequestId AS crid,
     ARRAY_AGG(STRUCT(
+      inv.invoice_id    AS invoice_id,
       inv.invoiceNumber AS invoice_ref,
+      -- CLIENT vs PARTNER: an INCOME document can also be our own commission note
+      -- to a provider. The client recovery email must never list one of those, so
+      -- the distinction travels with the row rather than being filtered away here.
+      inv.kind          AS party,
+      inv.invoiceKind   AS doc_kind,
       inv.status        AS status,
       inv.currency      AS currency,
       CAST(ROUND(inv.totals.totalamountincludingtaxes.amount / 100, 2) AS FLOAT64) AS amount_ttc,
       CAST(inv.issueDate AS STRING) AS emission_date,
       CAST(inv.dueDate   AS STRING) AS due_date,
-      (COALESCE(ARRAY_LENGTH(JSON_EXTRACT_ARRAY(inv.send_events)), 0) > 0) AS is_sent
+      (COALESCE(ARRAY_LENGTH(JSON_EXTRACT_ARRAY(inv.send_events)), 0) > 0) AS is_sent,
+      -- Credit notes point back at the invoice they reverse. That link is what
+      -- lets a document and its reversal be recognised as a pair that nets to
+      -- nothing, instead of being chased as two live figures.
+      inv.cancelledInvoiceId AS cancels_invoice_id,
+      inv.pdfUrl AS pdf_url,
+      inv.seller.legalName AS seller_name,
+      NULLIF(inv.buyer.email, '') AS buyer_email,
+      inv.payment.means AS payment_means,
+      -- The receiving account as printed on this very invoice: the one figure the
+      -- client can check against the document in their own hands. Entities hold
+      -- several accounts, so it is carried per invoice, never per entity.
+      NULLIF(ARRAY_TO_STRING([
+        NULLIF(TRIM(IFNULL(inv.payment.bankAccount.accountHolderName, '')), ''),
+        IF(inv.payment.bankAccount.iban IS NOT NULL,
+           CONCAT('IBAN ', inv.payment.bankAccount.iban), NULL),
+        IF(inv.payment.bankAccount.iban IS NULL AND inv.payment.bankAccount.bankAccountNumber IS NOT NULL,
+           CONCAT('account ', inv.payment.bankAccount.bankAccountNumber), NULL),
+        IF(inv.payment.bankAccount.bic IS NOT NULL,
+           CONCAT('BIC ', inv.payment.bankAccount.bic), NULL),
+        IF(inv.payment.bankAccount.iban IS NULL AND inv.payment.bankAccount.sortCode IS NOT NULL,
+           CONCAT('sort code ', inv.payment.bankAccount.sortCode), NULL)
+      ], ' · '), '') AS bank_details
     ) ORDER BY inv.issueDate) AS items
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
   WHERE inv.invoiceDirection = 'INCOME'
+  GROUP BY crid
+),
+-- Client cash received, itemised, for the recovery email's "Payments received".
+--
+-- COMPANY_PAYMENT and MANUAL_PAYMENT inflows together reproduce
+-- client_request_free_invoicing.collectedTotal to the cent on every booking
+-- checked (C-O621: 45 183,33 + 2 508,69 + 1 114,98 + 26 975,12 + 43 834,29 =
+-- 119 616,41), which is the figure the tracker already shows as Received — so the
+-- itemised list in the email always adds up to the total next to it.
+--
+-- Inflows only. Outflows on the same kinds are not client refunds netted out of
+-- that total (bookings exist with a zero collected total and a non-zero outflow),
+-- and counting them would make the listed payments disagree with the total.
+client_receipts AS (
+  SELECT
+    p.client_request_id AS crid,
+    ARRAY_AGG(STRUCT(
+      CAST(ROUND(p.amount / 10000, 2) AS FLOAT64) AS amount,
+      p.currency AS currency,
+      CAST(DATE(p.date) AS STRING) AS paid_on,
+      CASE p.provider_payload_kind
+        WHEN 'STRIPE' THEN 'card'
+        WHEN 'MANUAL' THEN 'recorded manually'
+        ELSE 'bank transfer'
+      END AS method,
+      -- Bank feeds put the useful part after "reference:", Stripe after "email :".
+      -- Labels carry embedded newlines, hence the whitespace squeeze.
+      NULLIF(TRIM(REGEXP_REPLACE(COALESCE(
+        REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*([^|;]+)'),
+        REGEXP_EXTRACT(p.provider_payload_label, r'email\\s*:\\s*(\\S+)'),
+        p.provider_payload_label
+      ), r'\\s+', ' ')), '') AS reference
+    ) ORDER BY p.date) AS items
+  FROM \`naboo-app-365515.raw_naboo_data.payments\` p
+  WHERE p.deleted = FALSE
+    AND p.kind IN ('COMPANY_PAYMENT', 'MANUAL_PAYMENT')
+    AND p.flow = 'INFLOW_PAYMENT'
   GROUP BY crid
 ),
 fi_base AS (
@@ -473,10 +570,22 @@ base AS (
     ) AS partners_json,
     TO_JSON_STRING(
       IFNULL(civ.items, CAST([] AS ARRAY<STRUCT<
-        invoice_ref STRING, status STRING, currency STRING, amount_ttc FLOAT64,
-        emission_date STRING, due_date STRING, is_sent BOOL
+        invoice_id STRING, invoice_ref STRING, party STRING, doc_kind STRING,
+        status STRING, currency STRING, amount_ttc FLOAT64,
+        emission_date STRING, due_date STRING, is_sent BOOL,
+        cancels_invoice_id STRING, pdf_url STRING, seller_name STRING,
+        buyer_email STRING, payment_means STRING, bank_details STRING
       >>))
-    ) AS invoices_json
+    ) AS invoices_json,
+    TO_JSON_STRING(
+      IFNULL(rcp.items, CAST([] AS ARRAY<STRUCT<
+        amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
+      >>))
+    ) AS client_receipts_json,
+    NULLIF(cr.contact_snapshot_email, '') AS client_contact_email,
+    NULLIF(TRIM(CONCAT(
+      IFNULL(cr.contact_snapshot_firstname, ''), ' ', IFNULL(cr.contact_snapshot_lastname, '')
+    )), '') AS client_contact_name
   FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
   LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
     ON ar.readable_id = e.client_request_readable_id
@@ -484,6 +593,9 @@ base AS (
   LEFT JOIN client_proposal_totals cpt ON cpt.rid = e.client_request_readable_id
   LEFT JOIN invoiced_client ic ON ic.rid = e.client_request_readable_id
   LEFT JOIN client_invoices civ ON civ.crid = e.clientRequestId
+  LEFT JOIN client_receipts rcp ON rcp.crid = e.clientRequestId
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.client_requests\` cr
+    ON cr.request_id = e.clientRequestId AND cr.deleted = false
   LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
   LEFT JOIN partners_fi_fallback pfb ON pfb.rid = e.client_request_readable_id
   WHERE e.bk_market = 'North America'
@@ -494,6 +606,7 @@ SELECT
   currency_client, event_name, start_date, end_date, event_type, transaction_kind, participants, billing_entity, booking_url,
   client_service_fees_ttc,
   gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy, invoices_json,
+  client_receipts_json, client_contact_email, client_contact_name,
   -- What is still to be collected from the client: invoiced less received.
   -- Not gmv - paid: the whole-event total includes amounts not yet invoiced, so
   -- that read as outstanding money the client does not owe us yet (C-U775 showed
@@ -580,6 +693,16 @@ export function parseNaInvoices(json: string | null): NaInvoiceLine[] {
   try {
     const v = JSON.parse(json);
     return Array.isArray(v) ? (v as NaInvoiceLine[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function parseNaClientReceipts(json: string | null): NaClientReceipt[] {
+  if (!json) return [];
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? (v as NaClientReceipt[]) : [];
   } catch {
     return [];
   }

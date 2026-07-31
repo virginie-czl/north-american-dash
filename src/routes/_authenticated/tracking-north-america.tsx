@@ -17,6 +17,13 @@ import {
   composeNaCombinedRequest,
 } from "@/lib/na-commission-requests";
 import {
+  RECOVERY_GRACE_DAYS,
+  naClientRecovery,
+  naClientContactFor,
+  composeNaClientRecovery,
+  type NaClientRecovery,
+} from "@/lib/na-client-recovery";
+import {
   fetchNaFinancialSummaries,
   generateNaFinancialSummary,
   type NaFinancialSummary,
@@ -40,6 +47,7 @@ import {
   sumPartners,
   type NaRow,
   type NaPartnerLine,
+  type NaClientReceipt,
 } from "@/lib/na.functions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -62,7 +70,7 @@ import {
 } from "@/components/ui/table";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { syncCardApprovals } from "@/lib/slack-cards.functions";
-import { parseNaInvoices } from "@/lib/na.functions";
+import { parseNaInvoices, parseNaClientReceipts } from "@/lib/na.functions";
 import {
   GROUP_META,
   GROUP_ORDER,
@@ -443,6 +451,55 @@ function exportRecoverCsv(
   downloadCsv(lines, `na-to-recover-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
+/** The client side of the same list: balances aged past both grace periods. */
+function exportClientRecoveryCsv(rows: Array<{ row: NaRow; recovery: NaClientRecovery }>) {
+  const headers = [
+    "Start date",
+    "Booking",
+    "Company",
+    "Billing entity",
+    "Event name",
+    "Sales",
+    "EM",
+    "Client contact",
+    "Currency",
+    "Invoiced",
+    "Received",
+    "Balance due",
+    "Last invoice issued",
+    "Days since event",
+    "Days since last invoice",
+    "Live documents",
+  ];
+  const lines: string[] = [headers.join(",")];
+  for (const { row, recovery } of rows) {
+    if (!recovery.eligible) continue;
+    lines.push(
+      [
+        row.start_date ?? "",
+        row.readable_id ?? "",
+        row.company_name ?? "",
+        row.billing_entity ?? "",
+        row.event_name ?? "",
+        row.sales_referent ?? "",
+        row.em_referent ?? "",
+        naClientContactFor(row, recovery.docs).address ?? "",
+        recovery.currency ?? "",
+        recovery.invoiced.toFixed(2),
+        recovery.paid.toFixed(2),
+        recovery.outstanding.toFixed(2),
+        recovery.lastInvoiceDay ?? "",
+        recovery.daysSinceEvent ?? "",
+        recovery.daysSinceInvoice ?? "",
+        recovery.docs.map((d) => d.invoice_ref ?? "").join(" | "),
+      ]
+        .map(csvEscape)
+        .join(","),
+    );
+  }
+  downloadCsv(lines, `na-client-recovery-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
 function NaPage() {
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["na-rows"],
@@ -462,20 +519,34 @@ function NaPage() {
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedRef, setSelectedRef] = useState<string>("");
-  const [scope, setScope] = useState<"move" | "commission" | "refund" | "client_refund" | "all">(
-    "move",
-  );
+  const [scope, setScope] = useState<
+    "move" | "commission" | "refund" | "client_refund" | "client_recovery" | "all"
+  >("move");
   const [detailTab, setDetailTab] = useState<
     "partners" | "invoices" | "emails" | "docs" | "comments"
   >("partners");
 
-  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const rows = useMemo<NaRow[]>(() => data?.rows ?? [], [data]);
   /** How stale the figures are, so the header can say so. */
   const cachedAge = data?.cachedAgeSeconds ?? null;
   const { data: commentSummaries } = useCommentSummaries();
 
+  // Client invoicing and receipts are decoded once per row alongside the partner
+  // lines: the recovery position, the list pill, the scope count and the email
+  // then all read the same numbers.
   const decorated = useMemo(
-    () => rows.map((r) => ({ row: r, partners: parseNaPartners(r.partners_json) })),
+    () =>
+      rows.map((r) => {
+        const invoices = parseNaInvoices(r.invoices_json);
+        const receipts = parseNaClientReceipts(r.client_receipts_json);
+        return {
+          row: r,
+          partners: parseNaPartners(r.partners_json),
+          invoices,
+          receipts,
+          recovery: naClientRecovery(r, invoices, receipts),
+        };
+      }),
     [rows],
   );
 
@@ -704,6 +775,34 @@ function NaPage() {
     return targets;
   }, [sorted]);
 
+  // Client recoveries: one email per booking, to the address its invoices were
+  // billed to. A booking with no contact on file is left out rather than sent to
+  // whoever happens to be on the brief.
+  const clientRecoveryTargets = useMemo<NaCommissionTarget[]>(() => {
+    const targets: NaCommissionTarget[] = [];
+    for (const { row: r, recovery } of sorted) {
+      if (!recovery.eligible) continue;
+      const contact = naClientContactFor(r, recovery.docs);
+      if (!contact.address) continue;
+      const composed = composeNaClientRecovery(r, recovery);
+      if (!composed) continue;
+      targets.push({
+        eventRef: r.readable_id ?? "",
+        partnerName: r.company_name,
+        address: contact.address,
+        contactName: contact.name,
+        ...composed,
+        mode: "client",
+      });
+    }
+    return targets;
+  }, [sorted]);
+
+  const clientRecoveryCount = useMemo(
+    () => sorted.filter(({ recovery }) => recovery.eligible).length,
+    [sorted],
+  );
+
   useRegisterTrackerActions(
     {
       // Refresh is the escape hatch from the cache: recompute in BigQuery and
@@ -723,9 +822,14 @@ function NaPage() {
           onClick: () => exportRecoverCsv(sorted),
           disabled: recoverCount === 0,
         },
+        {
+          label: "Export client recovery",
+          onClick: () => exportClientRecoveryCsv(sorted),
+          disabled: clientRecoveryCount === 0,
+        },
       ],
     },
-    [isFetching, sorted.length, recoverCount],
+    [isFetching, sorted.length, recoverCount, clientRecoveryCount],
   );
 
   // ── Split view ────────────────────────────────────────────────────────────
@@ -735,7 +839,7 @@ function NaPage() {
   // One move per booking, derived from the same helpers the partner cards use so
   // the pills, the scope counts and the dialog agree.
   const moveFor = useCallback(
-    (r: NaRow, ps: ReturnType<typeof parseNaPartners>): Move => {
+    (r: NaRow, ps: ReturnType<typeof parseNaPartners>, recovery: NaClientRecovery): Move => {
       const ccy = ps.find((p) => p.currency)?.currency ?? r.currency_client;
       const fmt = (v: number) => `${fmtAmount(v)} ${ccyLabel(ccy)}`;
       const live = ps.filter((p) => !p.is_provision);
@@ -852,10 +956,34 @@ function NaPage() {
         };
       }
 
-      if ((r.balance_ccy ?? 0) > 0.01) {
+      // A client balance that has aged past both grace periods is a recovery we
+      // act on, not a wait: the email exists, the figures are settled, someone
+      // has to send it. Before that it is just an invoice out in the world.
+      if (recovery.eligible) {
+        const rc = recovery.currency;
         return {
           group: "client",
-          label: "Client to pay",
+          label: `Recover ${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)} from the client`,
+          headline: `${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)}`,
+          headlineLabel: `client to recover ${ccyLabel(rc)}`,
+        };
+      }
+
+      if ((r.balance_ccy ?? 0) > 0.01) {
+        // Named as pending while the dust settles, so the list never reads as a
+        // chase that nobody is sending.
+        const waitLeft =
+          recovery.outstanding > 0.01 && recovery.daysSinceEvent != null
+            ? Math.max(
+                RECOVERY_GRACE_DAYS - recovery.daysSinceEvent,
+                recovery.daysSinceInvoice != null
+                  ? RECOVERY_GRACE_DAYS - recovery.daysSinceInvoice
+                  : 0,
+              )
+            : 0;
+        return {
+          group: "client",
+          label: waitLeft > 0 ? `Client to pay — chase in ${waitLeft}d` : "Client to pay",
           headline: `${fmtAmount(r.balance_ccy)} ${ccyLabel(r.currency_client)}`,
           headlineLabel: `client outstanding ${ccyLabel(r.currency_client)}`,
         };
@@ -894,7 +1022,11 @@ function NaPage() {
   );
 
   const withMove = useMemo(
-    () => filtered.map((item) => ({ ...item, move: moveFor(item.row, item.partners) })),
+    () =>
+      filtered.map((item) => ({
+        ...item,
+        move: moveFor(item.row, item.partners, item.recovery),
+      })),
     [filtered, moveFor],
   );
 
@@ -906,6 +1038,10 @@ function NaPage() {
       commission: (x) => x.move.headlineLabel.includes("commission"),
       refund: (x) => x.move.headlineLabel.includes("refund to recover"),
       client_refund: (x) => x.move.headlineLabel.includes("client to refund"),
+      // Keyed off the recovery itself, not the move label: a booking can owe us a
+      // client balance *and* carry a partner claim, and only one of those can be
+      // the headline. The chip has to agree with the Client recovery button.
+      client_recovery: (x) => x.recovery.eligible,
       all: () => true,
     }),
     [],
@@ -919,6 +1055,7 @@ function NaPage() {
       commission: withMove.filter(SCOPE_TEST.commission).length,
       refund: withMove.filter(SCOPE_TEST.refund).length,
       clientRefund: withMove.filter(SCOPE_TEST.client_refund).length,
+      clientRecovery: withMove.filter(SCOPE_TEST.client_recovery).length,
       all: withMove.length,
     }),
     [withMove, SCOPE_TEST],
@@ -948,7 +1085,14 @@ function NaPage() {
   const selPartners = selected?.partners ?? [];
   const selRef = sel?.readable_id ?? "";
   const selTotals = useMemo(() => sumPartners(selPartners), [selPartners]);
-  const selInvoices = useMemo(() => parseNaInvoices(sel?.invoices_json ?? null), [sel]);
+  const selInvoices = selected?.invoices ?? [];
+  const selRecovery = selected?.recovery ?? null;
+  // Which documents the recovery actually counts, so the invoicing tab can show
+  // what the email leaves out instead of quietly disagreeing with it.
+  const selLiveDocIds = useMemo(
+    () => new Set((selRecovery?.docs ?? []).map((d) => d.invoice_id ?? d.invoice_ref ?? "")),
+    [selRecovery],
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
@@ -1044,6 +1188,11 @@ function NaPage() {
                     label: "Client to refund",
                     count: scopeCounts.clientRefund,
                   },
+                  {
+                    key: "client_recovery" as const,
+                    label: "Client recovery",
+                    count: scopeCounts.clientRecovery,
+                  },
                   { key: "all" as const, label: "All", count: scopeCounts.all },
                 ] as const
               ).map((s) => {
@@ -1071,6 +1220,15 @@ function NaPage() {
                 >
                   Recover from {commissionRefundTargets.length} partner
                   {commissionRefundTargets.length > 1 ? "s" : ""}
+                </button>
+              )}
+              {gmailConnection?.connected && clientRecoveryTargets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => commissionRefundDialog.open(clientRecoveryTargets)}
+                  className="rounded-full bg-navy px-2.5 py-[3px] text-[11.5px] font-semibold text-white"
+                >
+                  Client recovery ({clientRecoveryTargets.length})
                 </button>
               )}
               {/* Say when the figures were computed, so a cached page never looks
@@ -1254,6 +1412,22 @@ function NaPage() {
                         </button>
                       );
                     })()}
+                    {/* Same targets as the list-level Client recovery button. */}
+                    {(() => {
+                      if (!gmailConnection?.connected) return null;
+                      const mine = clientRecoveryTargets.filter((t) => t.eventRef === selRef);
+                      if (mine.length === 0) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => commissionRefundDialog.open(mine)}
+                          className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-navy px-3 text-[12.5px] font-bold text-white"
+                        >
+                          <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                          Client recovery
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -1389,72 +1563,98 @@ function NaPage() {
                   />
                 )}
                 {detailTab === "invoices" && (
-                  <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
-                    <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
-                      <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
-                      Client invoicing
-                    </header>
-                    {selInvoices.length === 0 ? (
-                      <div className="px-9 py-9 text-center">
-                        <div className="font-display text-[15px] font-bold">
-                          No invoice issued yet
+                  <div className="flex flex-col gap-3">
+                    {selRecovery && <ClientRecoveryCard recovery={selRecovery} />}
+                    <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+                      <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
+                        <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
+                        Client invoicing
+                      </header>
+                      {selInvoices.length === 0 ? (
+                        <div className="px-9 py-9 text-center">
+                          <div className="font-display text-[15px] font-bold">
+                            No invoice issued yet
+                          </div>
+                          <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-slate-500">
+                            Nothing has been billed to the client on this booking so far.
+                          </p>
                         </div>
-                        <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-slate-500">
-                          Nothing has been billed to the client on this booking so far.
-                        </p>
-                      </div>
-                    ) : (
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr>
-                            {["Invoice", "Issued", "Due", "Amount", "Status"].map((h, i) => (
-                              <th
-                                key={h}
-                                className={`border-b border-slate-100 px-3.5 py-2 text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500 ${
-                                  i === 3 ? "text-right" : "text-left"
-                                }`}
-                              >
-                                {h}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selInvoices.map((iv, i) => (
-                            <tr key={`${iv.invoice_ref ?? i}`}>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
-                                {iv.invoice_ref ?? "—"}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
-                                {fmtDate(iv.emission_date)}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
-                                {fmtDate(iv.due_date)}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
-                                <Money value={iv.amount_ttc} currency={iv.currency} />
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5">
-                                <span
-                                  className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
-                                    iv.status === "CANCELLED"
-                                      ? "bg-slate-100 text-slate-600"
-                                      : iv.is_sent
-                                        ? "bg-emerald-100 text-emerald-800"
-                                        : "bg-amber-100 text-amber-800"
+                      ) : (
+                        <table className="w-full border-collapse">
+                          <thead>
+                            <tr>
+                              {["Invoice", "Issued", "Due", "Amount", "Status"].map((h, i) => (
+                                <th
+                                  key={h}
+                                  className={`border-b border-slate-100 px-3.5 py-2 text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500 ${
+                                    i === 3 ? "text-right" : "text-left"
                                   }`}
                                 >
-                                  {iv.status === "CANCELLED"
-                                    ? "Cancelled"
-                                    : iv.is_sent
-                                      ? "Sent"
-                                      : "Not sent"}
-                                </span>
-                              </td>
+                                  {h}
+                                </th>
+                              ))}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {selInvoices.map((iv, i) => (
+                              <tr key={`${iv.invoice_ref ?? i}`}>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
+                                  {iv.invoice_ref ?? "—"}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(iv.emission_date)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(iv.due_date)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
+                                  <Money value={iv.amount_ttc} currency={iv.currency} />
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5">
+                                  <span className="flex flex-wrap items-center gap-1">
+                                    <span
+                                      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+                                        iv.status === "CANCELLED"
+                                          ? "bg-slate-100 text-slate-600"
+                                          : iv.is_sent
+                                            ? "bg-emerald-100 text-emerald-800"
+                                            : "bg-amber-100 text-amber-800"
+                                      }`}
+                                    >
+                                      {iv.status === "CANCELLED"
+                                        ? "Cancelled"
+                                        : iv.is_sent
+                                          ? "Sent"
+                                          : "Not sent"}
+                                    </span>
+                                    {/* Why a document is absent from the recovery email. */}
+                                    {iv.party === "PARTNER" ? (
+                                      <span
+                                        title="Our commission note to a provider — not billed to the client"
+                                        className="inline-flex items-center whitespace-nowrap rounded-full bg-slate-100 px-2 py-[2px] text-[10.5px] font-semibold text-slate-600"
+                                      >
+                                        Provider
+                                      </span>
+                                    ) : (
+                                      !selLiveDocIds.has(iv.invoice_id ?? iv.invoice_ref ?? "") && (
+                                        <span
+                                          title="Cancelled out by a credit note — excluded from the balance due"
+                                          className="inline-flex items-center whitespace-nowrap rounded-full bg-slate-100 px-2 py-[2px] text-[10.5px] font-semibold text-slate-600"
+                                        >
+                                          Nets out
+                                        </span>
+                                      )
+                                    )}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                    {selRecovery && selRecovery.receipts.length > 0 && (
+                      <ClientReceiptsCard receipts={selRecovery.receipts} />
                     )}
                   </div>
                 )}
@@ -2126,6 +2326,115 @@ function PartnerSectionCard({
           <span className="w-[92px]" />
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The client recovery position, shown above the invoice table.
+ *
+ * It states the age of the balance on both clocks — the event and the last
+ * invoice — because that pair is the whole rule for whether the email goes out,
+ * and a figure without its age invites chasing a client who is not late yet.
+ */
+function ClientRecoveryCard({ recovery }: { recovery: NaClientRecovery }) {
+  const ccy = recovery.currency;
+  const owed = recovery.outstanding > 0.01;
+  const overpaid = !owed && recovery.paid - recovery.invoiced > 0.01;
+  const netted = recovery.docs.some((d) => d.doc_kind === "CREDIT_NOTE");
+
+  const wait = (days: number | null) => (days == null ? "no date on file" : `${days}d ago`);
+
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+      <header className="flex flex-wrap items-center gap-2 border-b border-border px-3.5 py-2.5">
+        <Banknote className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-slate-600">
+          Client recovery
+        </span>
+        <span
+          className={`ml-auto inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+            recovery.eligible
+              ? "bg-indigo-100 text-indigo-800"
+              : owed
+                ? "bg-amber-100 text-amber-800"
+                : "bg-slate-100 text-slate-600"
+          }`}
+        >
+          {recovery.eligible
+            ? "To chase"
+            : owed
+              ? `Pending — ${RECOVERY_GRACE_DAYS}d grace`
+              : overpaid
+                ? "Client in credit"
+                : "Settled"}
+        </span>
+      </header>
+      <div className="grid grid-cols-3 gap-px bg-border">
+        {[
+          { label: "Invoiced (live docs)", value: recovery.invoiced },
+          { label: "Received", value: recovery.paid },
+          { label: "Balance due", value: recovery.outstanding },
+        ].map((s, i) => (
+          <div key={s.label} className="bg-white px-3.5 py-2.5">
+            <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-[#0F766E]">
+              {s.label}
+            </div>
+            <div className="mt-0.5 text-[15px] font-semibold tabular-nums">
+              <Money
+                value={s.value}
+                currency={ccy}
+                align="left"
+                kind={i === 2 ? "danger" : "neutral"}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="border-t border-border px-3.5 py-2 text-[11.5px] leading-relaxed text-slate-600">
+        Event {wait(recovery.daysSinceEvent)} · last invoice {wait(recovery.daysSinceInvoice)}
+        {recovery.lastInvoiceDay ? ` (${recovery.lastInvoiceDay})` : ""} · {recovery.docs.length}{" "}
+        document{recovery.docs.length === 1 ? "" : "s"} counted
+        {netted ? ", credit notes netted off" : ""}.
+        {!recovery.eligible && owed
+          ? ` A balance is chased once it is ${RECOVERY_GRACE_DAYS} days past both the event and the most recent invoice.`
+          : ""}
+      </p>
+    </div>
+  );
+}
+
+/** Client cash received, itemised — the ledger the recovery email quotes. */
+function ClientReceiptsCard({ receipts }: { receipts: NaClientReceipt[] }) {
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+      <header className="flex items-center gap-2 border-b border-border px-3.5 py-2.5">
+        <Banknote className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-slate-600">
+          Payments received
+        </span>
+        <span className="text-[10.5px] text-slate-400">{receipts.length}</span>
+      </header>
+      <table className="w-full border-collapse">
+        <tbody>
+          {receipts.map((r, i) => (
+            <tr key={`receipt-${i}`}>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-700">
+                {fmtDate(r.paid_on)}
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-500">
+                {r.method ?? "—"}
+              </td>
+              <td className="max-w-[280px] truncate border-b border-slate-100 px-3.5 py-2 text-[12px] text-slate-500">
+                {r.reference ?? "—"}
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-right text-[12.5px] tabular-nums">
+                <Money value={r.amount} currency={r.currency} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
