@@ -63,6 +63,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
+import { parseNaInvoices } from "@/lib/na.functions";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -73,6 +74,7 @@ import {
   ExternalLink,
   Lock,
   MessageSquare,
+  ReceiptText,
   RefreshCw,
   Search,
   SearchX,
@@ -453,9 +455,9 @@ function NaPage() {
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedRef, setSelectedRef] = useState<string>("");
-  const [detailTab, setDetailTab] = useState<"partners" | "emails" | "docs" | "comments">(
-    "partners",
-  );
+  const [detailTab, setDetailTab] = useState<
+    "partners" | "invoices" | "emails" | "docs" | "comments"
+  >("partners");
 
   const rows = useMemo(() => data ?? [], [data]);
   const { data: commentSummaries } = useCommentSummaries();
@@ -782,6 +784,7 @@ function NaPage() {
   const selPartners = selected?.partners ?? [];
   const selRef = sel?.readable_id ?? "";
   const selTotals = useMemo(() => sumPartners(selPartners), [selPartners]);
+  const selInvoices = useMemo(() => parseNaInvoices(sel?.invoices_json ?? null), [sel]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
@@ -1091,6 +1094,11 @@ function NaPage() {
                       count: selPartners.filter((p) => !p.is_provision).length,
                     },
                     {
+                      key: "invoices" as const,
+                      label: "Client invoicing",
+                      count: selInvoices.length,
+                    },
+                    {
                       key: "emails" as const,
                       label: "Emails",
                       count: selPartners.filter((p) => !p.is_provision && p.email).length,
@@ -1137,6 +1145,76 @@ function NaPage() {
                     onSummarize={(input) => summarize.mutate(input)}
                     summarizing={summarize.isPending ? (summarize.variables ?? null) : null}
                   />
+                )}
+                {detailTab === "invoices" && (
+                  <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+                    <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
+                      <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
+                      Client invoicing
+                    </header>
+                    {selInvoices.length === 0 ? (
+                      <div className="px-9 py-9 text-center">
+                        <div className="font-display text-[15px] font-bold">
+                          No invoice issued yet
+                        </div>
+                        <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-slate-500">
+                          Nothing has been billed to the client on this booking so far.
+                        </p>
+                      </div>
+                    ) : (
+                      <table className="w-full border-collapse">
+                        <thead>
+                          <tr>
+                            {["Invoice", "Issued", "Due", "Amount", "Status"].map((h, i) => (
+                              <th
+                                key={h}
+                                className={`border-b border-slate-100 px-3.5 py-2 text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500 ${
+                                  i === 3 ? "text-right" : "text-left"
+                                }`}
+                              >
+                                {h}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selInvoices.map((iv, i) => (
+                            <tr key={`${iv.invoice_ref ?? i}`}>
+                              <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
+                                {iv.invoice_ref ?? "—"}
+                              </td>
+                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                {fmtDate(iv.emission_date)}
+                              </td>
+                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                {fmtDate(iv.due_date)}
+                              </td>
+                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
+                                <Money value={iv.amount_ttc} currency={iv.currency} />
+                              </td>
+                              <td className="border-b border-slate-100 px-3.5 py-2.5">
+                                <span
+                                  className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+                                    iv.status === "CANCELLED"
+                                      ? "bg-slate-100 text-slate-600"
+                                      : iv.is_sent
+                                        ? "bg-emerald-100 text-emerald-800"
+                                        : "bg-amber-100 text-amber-800"
+                                  }`}
+                                >
+                                  {iv.status === "CANCELLED"
+                                    ? "Cancelled"
+                                    : iv.is_sent
+                                      ? "Sent"
+                                      : "Not sent"}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
                 )}
                 {detailTab === "emails" &&
                   (gmailConnection?.connected ? (

@@ -22,6 +22,16 @@ export interface NaPartnerLine {
   payment_method: string | null;
 }
 
+export interface NaInvoiceLine {
+  invoice_ref: string | null;
+  status: string | null;
+  currency: string | null;
+  amount_ttc: number | null;
+  emission_date: string | null;
+  due_date: string | null;
+  is_sent: boolean | null;
+}
+
 export interface NaRow {
   readable_id: string | null;
   client_request_id: string | null;
@@ -45,10 +55,27 @@ export interface NaRow {
   paid_ccy: number | null;
   balance_ccy: number | null;
   partners_json: string | null;
+  invoices_json: string | null;
 }
 
 const QUERY = `
 WITH
+client_invoices AS (
+  SELECT
+    inv.clientRequestId AS crid,
+    ARRAY_AGG(STRUCT(
+      inv.invoiceNumber AS invoice_ref,
+      inv.status        AS status,
+      inv.currency      AS currency,
+      CAST(ROUND(inv.totals.totalamountincludingtaxes.amount / 100, 2) AS FLOAT64) AS amount_ttc,
+      CAST(inv.issueDate AS STRING) AS emission_date,
+      CAST(inv.dueDate   AS STRING) AS due_date,
+      (COALESCE(ARRAY_LENGTH(JSON_EXTRACT_ARRAY(inv.send_events)), 0) > 0) AS is_sent
+    ) ORDER BY inv.issueDate) AS items
+  FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
+  WHERE inv.invoiceDirection = 'INCOME'
+  GROUP BY crid
+),
 fi_base AS (
   SELECT
     fi.clientRequestId AS crid,
@@ -118,6 +145,8 @@ client_proposal_totals AS (
 -- SERVICE + FEE_CLIENT only. FEE_OWNER lines are our commission invoiced to the
 -- partner, not to the client, and would otherwise inflate the client total.
 -- All statuses, so a cancelled invoice and its credit note cancel each other.
+-- Client invoices for the detail pane's invoicing tab. Income direction only:
+-- partner invoices and commission notes belong elsewhere.
 invoiced_client AS (
   SELECT
     i.clientRequestReadableId AS rid,
@@ -329,13 +358,20 @@ base AS (
         locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
         is_provision BOOL, payment_method STRING, vat_raw STRING, tax_identifier STRING, country STRING
       >>)))
-    ) AS partners_json
+    ) AS partners_json,
+    TO_JSON_STRING(
+      IFNULL(civ.items, CAST([] AS ARRAY<STRUCT<
+        invoice_ref STRING, status STRING, currency STRING, amount_ttc FLOAT64,
+        emission_date STRING, due_date STRING, is_sent BOOL
+      >>))
+    ) AS invoices_json
   FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
   LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
     ON ar.readable_id = e.client_request_readable_id
   LEFT JOIN fi_base fi ON fi.crid = e.clientRequestId
   LEFT JOIN client_proposal_totals cpt ON cpt.rid = e.client_request_readable_id
   LEFT JOIN invoiced_client ic ON ic.rid = e.client_request_readable_id
+  LEFT JOIN client_invoices civ ON civ.crid = e.clientRequestId
   LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
   LEFT JOIN partners_fi_fallback pfb ON pfb.rid = e.client_request_readable_id
   WHERE e.bk_market = 'North America'
@@ -344,7 +380,7 @@ base AS (
 SELECT
   readable_id, client_request_id, company_name, sales_referent, em_referent, days_before_start,
   currency_client, event_name, start_date, end_date, event_type, transaction_kind, participants, billing_entity, booking_url,
-  gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy,
+  gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy, invoices_json,
   -- What is still to be collected from the client: invoiced less received.
   -- Not gmv - paid: the whole-event total includes amounts not yet invoiced, so
   -- that read as outstanding money the client does not owe us yet (C-U775 showed
@@ -383,13 +419,25 @@ export function parseNaPartners(json: string | null): NaPartnerLine[] {
 export function sumPartners(partners: NaPartnerLine[]) {
   const byCcy = new Map<
     string,
-    { gmv: number; paid: number; outstanding: number; payable: number; payableToDate: number; commission: number }
+    {
+      gmv: number;
+      paid: number;
+      outstanding: number;
+      payable: number;
+      payableToDate: number;
+      commission: number;
+    }
   >();
   for (const p of partners) {
     if (p.is_provision) continue;
     const c = p.currency ?? "—";
     const cur = byCcy.get(c) ?? {
-      gmv: 0, paid: 0, outstanding: 0, payable: 0, payableToDate: 0, commission: 0,
+      gmv: 0,
+      paid: 0,
+      outstanding: 0,
+      payable: 0,
+      payableToDate: 0,
+      commission: 0,
     };
     cur.gmv += p.gmv_ttc ?? 0;
     cur.paid += p.paid ?? 0;
@@ -400,4 +448,14 @@ export function sumPartners(partners: NaPartnerLine[]) {
     byCcy.set(c, cur);
   }
   return byCcy;
+}
+
+export function parseNaInvoices(json: string | null): NaInvoiceLine[] {
+  if (!json) return [];
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? (v as NaInvoiceLine[]) : [];
+  } catch {
+    return [];
+  }
 }
