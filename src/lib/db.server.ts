@@ -160,6 +160,31 @@ const SCHEMA_STATEMENTS = [
   // ever stores derived yes/no verdicts, never content — this table stores an
   // LLM's paraphrase of the thread, shared with the whole team on purpose so
   // a colleague without Gmail access still sees why a booking is flagged.
+  // Recovery emails already sent, so two people never chase the same
+  // counterparty for the same booking twice.
+  //
+  // The primary key *is* the rule: one recovery email per booking per recipient
+  // per side of the marketplace. A sender claims the row before Gmail is called
+  // and the claim is released only if the send itself fails, so two people
+  // clicking at the same moment cannot both get through — a check the UI could
+  // only ever make optimistically.
+  //
+  // Scope, not mode, is the lock: a provider's commission, a refund and the
+  // combined ask are one conversation with that provider, so any of them closes
+  // the door on the others. Mode stays recorded for the audit trail.
+  `CREATE TABLE IF NOT EXISTS recovery_emails (
+     event_ref text NOT NULL,
+     recipient text NOT NULL,
+     scope text NOT NULL,
+     mode text NOT NULL,
+     recipient_name text,
+     subject text,
+     sent_at timestamptz NOT NULL DEFAULT now(),
+     sent_by text NOT NULL,
+     sent_by_name text,
+     PRIMARY KEY (event_ref, recipient, scope)
+   )`,
+  `CREATE INDEX IF NOT EXISTS recovery_emails_event_ref_idx ON recovery_emails (event_ref)`,
   `CREATE TABLE IF NOT EXISTS na_financial_summary (
      event_ref text NOT NULL,
      partner_key text NOT NULL,

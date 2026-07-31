@@ -282,14 +282,27 @@ export const scanEventsForFacts = createServerFn({ method: "POST" })
 // difference between a usable tool and one you cannot trust with a chase round.
 // ---------------------------------------------------------------------------
 
-export type OutgoingMessage = { to: string; subject: string; body: string };
+export type OutgoingMessage = {
+  to: string;
+  subject: string;
+  body: string;
+  /**
+   * Set on recovery asks. It is what lets a send be recorded in the shared
+   * ledger — and refused when that ask has already gone out.
+   */
+  recovery?: { event_ref: string; mode: string; recipient_name?: string | null };
+};
 
 export type BatchResult = {
   to: string;
+  /** Echoed back for recovery asks: the same address can be chased on two bookings. */
+  event_ref?: string;
   ok: boolean;
   /** Present on success when drafting. */
   link?: string;
   error?: string;
+  /** Set when the ledger refused the send because this ask already went out. */
+  already_sent?: { sent_at: string; sent_by: string; sent_by_name: string | null };
 };
 
 function validateBatch(input: { messages: OutgoingMessage[]; mode: "draft" | "send" }) {
@@ -297,16 +310,30 @@ function validateBatch(input: { messages: OutgoingMessage[]; mode: "draft" | "se
   if (input.mode !== "draft" && input.mode !== "send") throw new Error("Invalid mode");
   const seen = new Set<string>();
   const messages = input.messages
-    .map((m) => ({
-      to: typeof m?.to === "string" ? m.to.trim() : "",
-      subject: typeof m?.subject === "string" ? m.subject.trim() : "",
-      body: typeof m?.body === "string" ? m.body.trim() : "",
-    }))
+    .map((m) => {
+      const rec = m?.recovery;
+      const recovery =
+        rec && typeof rec.event_ref === "string" && typeof rec.mode === "string"
+          ? {
+              event_ref: rec.event_ref.trim(),
+              mode: rec.mode.trim(),
+              recipient_name: typeof rec.recipient_name === "string" ? rec.recipient_name : null,
+            }
+          : undefined;
+      return {
+        to: typeof m?.to === "string" ? m.to.trim() : "",
+        subject: typeof m?.subject === "string" ? m.subject.trim() : "",
+        body: typeof m?.body === "string" ? m.body.trim() : "",
+        ...(recovery?.event_ref ? { recovery } : {}),
+      };
+    })
     .filter((m) => {
       if (!m.to.includes("@") || /[,;]/.test(m.to)) return false;
       if (!m.subject || !m.body || m.body.length > 20_000) return false;
-      // One message per address per run, whatever the caller sent.
-      const key = m.to.toLowerCase();
+      // One message per address per run — but per booking when the ask names one.
+      // The same provider can genuinely be chased on two different bookings, and
+      // collapsing those would silently drop one of them.
+      const key = `${m.to.toLowerCase()}::${m.recovery?.event_ref ?? ""}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -323,19 +350,93 @@ export const sendPartnerRequests = createServerFn({ method: "POST" })
     const session = await requireSession();
     const { createDraft, sendMessage } = await import("./gmail.server");
 
+    // Recovery asks are claimed in the shared ledger before Gmail is called, so a
+    // colleague who clicked a moment earlier wins and this round is told so
+    // instead of sending a second copy. Drafts never claim: a draft sits in the
+    // author's own mailbox and reaches nobody.
+    const claiming = data.mode === "send";
+    const { claimRecoveryEmail, releaseRecoveryEmail } = await import("./recovery-log.server");
+
     const results: BatchResult[] = [];
     for (const message of data.messages) {
+      const recovery = message.recovery;
+      const eventRef = recovery ? { event_ref: recovery.event_ref } : {};
+
+      if (claiming && recovery) {
+        let claim;
+        try {
+          claim = await claimRecoveryEmail({
+            event_ref: recovery.event_ref,
+            recipient: message.to,
+            mode: recovery.mode,
+            recipient_name: recovery.recipient_name ?? null,
+            subject: message.subject,
+            sent_by: session.email,
+            sent_by_name: session.name,
+          });
+        } catch (error) {
+          // Fail closed, and only for this message. Without the ledger there is no
+          // way to know whether a colleague has already written, and sending a
+          // second copy to a client cannot be taken back — whereas a draft can
+          // still be saved, and the send retried once the store is back.
+          console.error("recovery claim failed:", error);
+          results.push({
+            to: message.to,
+            ...eventRef,
+            ok: false,
+            error:
+              "Registre des envois indisponible — envoi bloqué pour éviter un doublon. Réessayez.",
+          });
+          continue;
+        }
+        if (!claim.ok) {
+          results.push({
+            to: message.to,
+            ...eventRef,
+            ok: false,
+            error: `Déjà envoyé le ${claim.existing.sent_at.slice(0, 10)} par ${
+              claim.existing.sent_by_name || claim.existing.sent_by
+            }`,
+            already_sent: {
+              sent_at: claim.existing.sent_at,
+              sent_by: claim.existing.sent_by,
+              sent_by_name: claim.existing.sent_by_name,
+            },
+          });
+          continue;
+        }
+      }
+
       try {
         if (data.mode === "draft") {
           const draft = await createDraft(session.email, message.to, message.subject, message.body);
-          results.push({ to: message.to, ok: true, link: draft.link });
+          results.push({ to: message.to, ...eventRef, ok: true, link: draft.link });
         } else {
           await sendMessage(session.email, message.to, message.subject, message.body);
-          results.push({ to: message.to, ok: true });
+          results.push({ to: message.to, ...eventRef, ok: true });
         }
       } catch (error) {
-        // Keep going: one bad address should not abort the rest of the round.
-        results.push({ to: message.to, ok: false, error: String((error as Error).message) });
+        // Keep going: one bad address should not abort the rest of the round. The
+        // claim goes back so the ask can be retried — an unsent email must never
+        // leave a row saying it went out.
+        if (claiming && recovery) {
+          try {
+            await releaseRecoveryEmail({
+              event_ref: recovery.event_ref,
+              recipient: message.to,
+              mode: recovery.mode,
+              sent_by: session.email,
+            });
+          } catch (releaseError) {
+            console.error("recovery claim release failed:", releaseError);
+          }
+        }
+        results.push({
+          to: message.to,
+          ...eventRef,
+          ok: false,
+          error: String((error as Error).message),
+        });
       }
     }
     return results;

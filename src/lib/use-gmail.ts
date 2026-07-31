@@ -227,6 +227,8 @@ export function usePartnerRequests() {
       } finally {
         // A sent request changes what the next scan will find.
         qc.invalidateQueries({ queryKey: ["partner-emails"] });
+        // …and what everyone else is still allowed to send.
+        qc.invalidateQueries({ queryKey: ["recovery-emails"] });
       }
       return all;
     },
@@ -239,4 +241,26 @@ export function usePartnerRequests() {
   );
 
   return { ...state, run, reset };
+}
+
+// --- Recovery ledger ---------------------------------------------------------
+
+import { fetchRecoveryEmails } from "@/lib/recovery-log.functions";
+import { recoveryIndex, type RecoverySend } from "@/lib/recovery-log";
+
+export type { RecoverySend };
+
+/**
+ * Every recovery email the team has already sent, keyed by booking + recipient +
+ * side. Kept on a short leash and refetched when the tab regains focus: the whole
+ * value of this index is that it reflects what a colleague did minutes ago.
+ */
+export function useRecoveryLog() {
+  return useQuery({
+    queryKey: ["recovery-emails"],
+    queryFn: async () =>
+      recoveryIndex(expectArray<RecoverySend>(await fetchRecoveryEmails(), "Envois déjà faits")),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
 }

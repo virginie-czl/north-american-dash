@@ -31,7 +31,8 @@ import {
 } from "@/lib/na-financial-summary.functions";
 import { partnerKey } from "@/lib/annotations.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
-import { useGmailConnection, useFactScan } from "@/lib/use-gmail";
+import { useGmailConnection, useFactScan, useRecoveryLog } from "@/lib/use-gmail";
+import { recoveryKey, recoverySentLabel, type RecoverySend } from "@/lib/recovery-log";
 import {
   useAddComment,
   useCommentSummaries,
@@ -85,6 +86,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   ArrowUpDown,
   Banknote,
+  Check,
   ChevronDown,
   ChevronRight,
   ExternalLink,
@@ -676,6 +678,9 @@ function NaPage() {
 
   const { factsMap, actionFor, eventNeedsScan, cardApprovedCodes } = useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
+  // What the team has already sent. Every button that opens an email checks it, so
+  // nobody is offered a chase a colleague has already made.
+  const { data: recoveryLog } = useRecoveryLog();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const commissionRefundDialog = useNaCommissionRequestDialog();
   const queryClient = useQueryClient();
@@ -802,6 +807,23 @@ function NaPage() {
   const clientRecoveryCount = useMemo(
     () => sorted.filter(({ recovery }) => recovery.eligible).length,
     [sorted],
+  );
+
+  // Already sent, by whoever got there first. The targets themselves are kept so
+  // the dialog can show the send as evidence; only the buttons count what is left
+  // to do, and a target with nothing left turns into a "Sent on … by …" label.
+  const sentFor = useCallback(
+    (t: NaCommissionTarget): RecoverySend | undefined =>
+      recoveryLog?.get(recoveryKey(t.eventRef, t.address, t.mode)),
+    [recoveryLog],
+  );
+  const unsentPartnerTargets = useMemo(
+    () => commissionRefundTargets.filter((t) => !sentFor(t)),
+    [commissionRefundTargets, sentFor],
+  );
+  const unsentClientTargets = useMemo(
+    () => clientRecoveryTargets.filter((t) => !sentFor(t)),
+    [clientRecoveryTargets, sentFor],
   );
 
   useRegisterTrackerActions(
@@ -1213,23 +1235,25 @@ function NaPage() {
                   </button>
                 );
               })}
-              {gmailConnection?.connected && commissionRefundTargets.length > 0 && (
+              {/* Counts what is left to send, not what exists: an ask a colleague has
+                  already sent is shown inside the dialog but never offered again. */}
+              {gmailConnection?.connected && unsentPartnerTargets.length > 0 && (
                 <button
                   type="button"
                   onClick={() => commissionRefundDialog.open(commissionRefundTargets)}
                   className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
                 >
-                  Recover from {commissionRefundTargets.length} partner
-                  {commissionRefundTargets.length > 1 ? "s" : ""}
+                  Recover from {unsentPartnerTargets.length} partner
+                  {unsentPartnerTargets.length > 1 ? "s" : ""}
                 </button>
               )}
-              {gmailConnection?.connected && clientRecoveryTargets.length > 0 && (
+              {gmailConnection?.connected && unsentClientTargets.length > 0 && (
                 <button
                   type="button"
                   onClick={() => commissionRefundDialog.open(clientRecoveryTargets)}
                   className="rounded-full bg-navy px-2.5 py-[3px] text-[11.5px] font-semibold text-white"
                 >
-                  Client recovery ({clientRecoveryTargets.length})
+                  Client recovery ({unsentClientTargets.length})
                 </button>
               )}
               {/* Say when the figures were computed, so a cached page never looks
@@ -1399,7 +1423,13 @@ function NaPage() {
                       // bank details and tax numbers are a L'Oreal concern.
                       const mine = commissionRefundTargets.filter((t) => t.eventRef === selRef);
                       if (mine.length === 0) return null;
-                      const anyRefund = mine.some((t) => t.mode !== "commission");
+                      const left = mine.filter((t) => !sentFor(t));
+                      // Every provider on this booking has already been written to:
+                      // say who did it rather than offering the round again.
+                      if (left.length === 0) {
+                        return <SentButton send={latestSend(mine.map(sentFor))} />;
+                      }
+                      const anyRefund = left.some((t) => t.mode !== "commission");
                       return (
                         <button
                           type="button"
@@ -1408,8 +1438,8 @@ function NaPage() {
                         >
                           <Send className="h-3.5 w-3.5" aria-hidden="true" />
                           {anyRefund
-                            ? `Recover from ${mine.length} partner${mine.length > 1 ? "s" : ""}`
-                            : `Ask ${mine.length} partner${mine.length > 1 ? "s" : ""} for the commission`}
+                            ? `Recover from ${left.length} partner${left.length > 1 ? "s" : ""}`
+                            : `Ask ${left.length} partner${left.length > 1 ? "s" : ""} for the commission`}
                         </button>
                       );
                     })()}
@@ -1418,6 +1448,10 @@ function NaPage() {
                       if (!gmailConnection?.connected) return null;
                       const mine = clientRecoveryTargets.filter((t) => t.eventRef === selRef);
                       if (mine.length === 0) return null;
+                      const left = mine.filter((t) => !sentFor(t));
+                      if (left.length === 0) {
+                        return <SentButton send={latestSend(mine.map(sentFor))} />;
+                      }
                       return (
                         <button
                           type="button"
@@ -1561,11 +1595,30 @@ function NaPage() {
                       if (mine.length > 0) commissionRefundDialog.open(mine);
                       else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
                     }}
+                    // Whoever already wrote to this provider about this booking.
+                    sentFor={(p) =>
+                      latestSend(
+                        commissionRefundTargets
+                          .filter(
+                            (t) =>
+                              t.eventRef === selRef &&
+                              t.address.toLowerCase() === (p.email ?? "").toLowerCase(),
+                          )
+                          .map(sentFor),
+                      )
+                    }
                   />
                 )}
                 {detailTab === "invoices" && (
                   <div className="flex flex-col gap-3">
-                    {selRecovery && <ClientRecoveryCard recovery={selRecovery} />}
+                    {selRecovery && (
+                      <ClientRecoveryCard
+                        recovery={selRecovery}
+                        sent={latestSend(
+                          clientRecoveryTargets.filter((t) => t.eventRef === selRef).map(sentFor),
+                        )}
+                      />
+                    )}
                     <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
                       <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
                         <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
@@ -2081,6 +2134,7 @@ function PartnerSectionCard({
   factsMap,
   cardApprovedCodes,
   onRequest,
+  sentFor,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
@@ -2089,6 +2143,8 @@ function PartnerSectionCard({
   factsMap: ReturnType<typeof useActionIndex>["factsMap"];
   cardApprovedCodes: ReturnType<typeof useActionIndex>["cardApprovedCodes"];
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
+  /** The recovery email already sent to this provider on this booking, if any. */
+  sentFor: (partner: ReturnType<typeof parseNaPartners>[number]) => RecoverySend | undefined;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
@@ -2133,6 +2189,9 @@ function PartnerSectionCard({
         const hasRefundToClaim = ask === "refund";
         const hasCommissionToClaim = ask === "commission";
         const hasRecoveryAsk = ask != null;
+        // Only a real ask can have been sent, so this is looked up for those lines
+        // alone: nothing else on the card ever opened an email.
+        const alreadyAsked = hasRecoveryAsk ? sentFor(p) : undefined;
         // A card approved in #finance-paiement-by-card means the money is
         // already available to the provider: the next move is theirs, not ours,
         // and it is certainly not a bank-details chase.
@@ -2260,6 +2319,16 @@ function PartnerSectionCard({
                 <span className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-semibold text-[#9CA3AF]">
                   Excluded
                 </span>
+              ) : alreadyAsked ? (
+                // Someone has written to this provider about this booking. Nobody
+                // writes again — the ledger says who and when.
+                <span
+                  title={`${alreadyAsked.sent_by}${alreadyAsked.subject ? ` — ${alreadyAsked.subject}` : ""}`}
+                  className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-[#F3F4F6] px-3 text-xs font-semibold text-[#6B7280]"
+                >
+                  <Check className="h-3 w-3" aria-hidden="true" />
+                  {recoverySentLabel(alreadyAsked)}
+                </span>
               ) : (
                 <button
                   type="button"
@@ -2340,6 +2409,34 @@ function PartnerSectionCard({
   );
 }
 
+/** The most recent of a set of sends, ignoring the asks that never went out. */
+function latestSend(sends: Array<RecoverySend | undefined>): RecoverySend | undefined {
+  return sends
+    .filter((s): s is RecoverySend => !!s)
+    .sort((a, b) => a.sent_at.localeCompare(b.sent_at))
+    .pop();
+}
+
+/**
+ * Where a send button used to be, once the email has gone out.
+ *
+ * Deliberately a disabled button rather than a hidden one: the shape stays where
+ * the eye expects it, and it answers the question the absence of a button would
+ * raise — who already did this, and when.
+ */
+function SentButton({ send }: { send: RecoverySend | undefined }) {
+  if (!send) return null;
+  return (
+    <span
+      title={`${send.sent_by}${send.subject ? ` — ${send.subject}` : ""}`}
+      className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-[#F3F4F6] px-3 text-[12.5px] font-semibold text-[#6B7280]"
+    >
+      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+      {recoverySentLabel(send)}
+    </span>
+  );
+}
+
 /**
  * The client recovery position, shown above the invoice table.
  *
@@ -2347,7 +2444,13 @@ function PartnerSectionCard({
  * invoice — because that pair is the whole rule for whether the email goes out,
  * and a figure without its age invites chasing a client who is not late yet.
  */
-function ClientRecoveryCard({ recovery }: { recovery: NaClientRecovery }) {
+function ClientRecoveryCard({
+  recovery,
+  sent,
+}: {
+  recovery: NaClientRecovery;
+  sent: RecoverySend | undefined;
+}) {
   const ccy = recovery.currency;
   const owed = recovery.outstanding > 0.01;
   const overpaid = !owed && recovery.paid - recovery.invoiced > 0.01;
@@ -2363,21 +2466,32 @@ function ClientRecoveryCard({ recovery }: { recovery: NaClientRecovery }) {
           Client recovery
         </span>
         <span
-          className={`ml-auto inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
-            recovery.eligible
-              ? "bg-indigo-100 text-indigo-800"
-              : owed
-                ? "bg-amber-100 text-amber-800"
-                : "bg-slate-100 text-slate-600"
+          title={sent ? `${sent.sent_by}${sent.subject ? ` — ${sent.subject}` : ""}` : undefined}
+          className={`ml-auto inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+            sent
+              ? "bg-slate-100 text-slate-600"
+              : recovery.eligible
+                ? "bg-indigo-100 text-indigo-800"
+                : owed
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-slate-100 text-slate-600"
           }`}
         >
-          {recovery.eligible
-            ? "To chase"
-            : owed
-              ? `Pending — ${RECOVERY_GRACE_DAYS}d grace`
-              : overpaid
-                ? "Client in credit"
-                : "Settled"}
+          {/* Chased already outranks "to chase": the work is done, whoever did it. */}
+          {sent ? (
+            <>
+              <Check className="h-2.5 w-2.5" aria-hidden="true" />
+              {recoverySentLabel(sent)}
+            </>
+          ) : recovery.eligible ? (
+            "To chase"
+          ) : owed ? (
+            `Pending — ${RECOVERY_GRACE_DAYS}d grace`
+          ) : overpaid ? (
+            "Client in credit"
+          ) : (
+            "Settled"
+          )}
         </span>
       </header>
       <div className="grid grid-cols-3 gap-px bg-border">
