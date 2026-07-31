@@ -5,8 +5,8 @@
  * The caller's Gmail signature is injected by Gmail itself (insertSignature flag),
  * so it does not appear in the composed body.
  */
-import type { PartnerAction } from "./partner-actions";
-import { taxComplete } from "./partner-actions";
+import type { PartnerAction } from "./partner-actions.ts";
+import { taxComplete } from "./partner-actions.ts";
 
 export type Needs = {
   bank: boolean;

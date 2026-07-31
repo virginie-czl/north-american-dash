@@ -75,6 +75,14 @@ export function emptyTerms(ownerCode: string): CardTerms {
 export type CardEvidence = {
   slackApproved: boolean;
   emailVerdict: "accepted" | "refused" | "unknown";
+  /**
+   * How many approved cards the provider has, and when the most recent one was.
+   * Display only — one approval and forty both mean "they take card", but the reader
+   * deciding whether to pay by card wants to know which of the two it is.
+   */
+  approvalCount?: number;
+  /** ISO day. */
+  lastApprovedAt?: string | null;
 };
 
 export const NO_EVIDENCE: CardEvidence = { slackApproved: false, emailVerdict: "unknown" };
@@ -97,6 +105,10 @@ export type CardVerdict = {
   /** True when a human set accepts_card and it is what decided the status. */
   overridden: boolean;
 };
+
+function pluralise(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
 
 /** A fee is recorded when either part of it is non-zero. */
 export function hasFee(terms: Pick<CardTerms, "fee_percent" | "fee_fixed">): boolean {
@@ -134,6 +146,19 @@ export function cardStatus(evidence: CardEvidence, terms: CardTerms | null): Car
   }
   // The honest default. Most providers have never been asked.
   return { status: "unknown", source: "none", overridden: false };
+}
+
+/**
+ * "4 approvals, last 31 Jul 2026" — the strength of the evidence, in a phrase.
+ *
+ * Null when there is nothing to say, so a caller can render it or not without
+ * inspecting the shape.
+ */
+export function approvalNote(evidence: CardEvidence | null | undefined): string | null {
+  const count = evidence?.approvalCount ?? 0;
+  if (!evidence?.slackApproved || count < 1) return null;
+  const when = evidence.lastApprovedAt ? `, last ${fmtDay(evidence.lastApprovedAt)}` : "";
+  return `${pluralise(count, "approval")}${when}`;
 }
 
 export function accepts(status: CardStatus): boolean {

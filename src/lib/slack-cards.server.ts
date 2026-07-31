@@ -108,6 +108,61 @@ async function fetchFromSlack(): Promise<CardApproval[]> {
   return approvals;
 }
 
+/** One provider's approvals, collapsed — the shape the mirror stores. */
+export type ProviderApprovals = {
+  ownerCode: string;
+  /** How many approved cards this provider has in the channel. */
+  count: number;
+  /** ISO of the earliest, and of the most recent. Null when none carried a date. */
+  firstAt: string | null;
+  lastAt: string | null;
+  /** From the most recent approval: who approved it, and for which booking. */
+  approvedBy: string | null;
+  eventRef: string | null;
+};
+
+/**
+ * Collapses the channel's approvals onto one row per provider.
+ *
+ * A hotel gets one approved card per booking, so 559 approvals cover 287 providers. The
+ * mirror is keyed on the owner code, and feeding it the raw list made Postgres refuse
+ * the whole write: ON CONFLICT DO UPDATE cannot touch the same row twice in one
+ * statement (21000). Reducing here is what makes the batch legal — and the count and
+ * the dates are worth more than the single most recent row anyway.
+ *
+ * Approvals with no timestamp still count; they simply cannot win "most recent".
+ */
+export function aggregateApprovals(approvals: CardApproval[]): ProviderApprovals[] {
+  const byOwner = new Map<string, ProviderApprovals>();
+  for (const a of approvals) {
+    const code = (a.ownerCode ?? "").trim().toUpperCase();
+    if (!code) continue;
+    const at = (a.at ?? "").trim() || null;
+    const current = byOwner.get(code);
+    if (!current) {
+      byOwner.set(code, {
+        ownerCode: code,
+        count: 1,
+        firstAt: at,
+        lastAt: at,
+        approvedBy: a.approvedBy ?? null,
+        eventRef: a.eventRef ?? null,
+      });
+      continue;
+    }
+    current.count += 1;
+    if (at && (current.firstAt == null || at < current.firstAt)) current.firstAt = at;
+    if (at && (current.lastAt == null || at > current.lastAt)) {
+      current.lastAt = at;
+      // The approver and the booking travel with the most recent approval, so the row
+      // reads as one coherent fact rather than fields from different messages.
+      current.approvedBy = a.approvedBy ?? null;
+      current.eventRef = a.eventRef ?? null;
+    }
+  }
+  return [...byOwner.values()].sort((a, b) => a.ownerCode.localeCompare(b.ownerCode));
+}
+
 /**
  * Reads the channel live. The only path in the app that calls Slack.
  *

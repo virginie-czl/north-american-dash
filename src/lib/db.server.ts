@@ -89,6 +89,12 @@ const SCHEMA_STATEMENTS = [
   // Credit-card approvals mirrored out of #finance-paiement-by-card, so a cold
   // serverless instance does not have to page through the Slack API before the
   // partner cards can render.
+  //
+  // One row per provider, deliberately: this answers "what do we know about this
+  // provider", not "list every card ever issued". A provider has one approved card per
+  // booking — 559 approvals across 287 providers today — so the channel's messages are
+  // aggregated onto the owner code rather than stored one by one. Per-booking history,
+  // if it is ever wanted, belongs in its own table keyed on the Pliant card id.
   `CREATE TABLE IF NOT EXISTS slack_card_approvals (
      owner_code text PRIMARY KEY,
      event_ref text,
@@ -96,6 +102,12 @@ const SCHEMA_STATEMENTS = [
      approved_at timestamptz,
      synced_at timestamptz NOT NULL DEFAULT now()
    )`,
+  // The aggregate. "Card OK · 4 approvals, last 31 Jul 2026" is a far better basis for
+  // deciding to pay by card than a bare "Card OK": it says whether the evidence is one
+  // stale approval or a standing habit. Existing deployments predate both columns.
+  `ALTER TABLE slack_card_approvals
+     ADD COLUMN IF NOT EXISTS approval_count integer NOT NULL DEFAULT 1,
+     ADD COLUMN IF NOT EXISTS first_approved_at timestamptz`,
   // What each provider will accept, and what Naboo has decided to do about it —
   // two separate questions, kept in two separate columns on purpose. accepts_card
   // is an override of the derived status (null falls back to the evidence);

@@ -105,10 +105,20 @@ export const fetchCardEvidence = createServerFn({ method: "POST" })
       const { db } = await import("./db.server");
       const sql = await db();
 
-      const approvals = await sql<{ owner_code: string }[]>`
-        SELECT owner_code FROM slack_card_approvals
+      const approvals = await sql<
+        { owner_code: string; approval_count: number | null; approved_at: Date | null }[]
+      >`
+        SELECT owner_code, approval_count, approved_at FROM slack_card_approvals
       `;
-      const approved = new Set(approvals.map((a) => a.owner_code.trim().toUpperCase()));
+      const approved = new Map(
+        approvals.map((a) => [
+          a.owner_code.trim().toUpperCase(),
+          {
+            count: Number(a.approval_count ?? 1),
+            lastAt: a.approved_at ? a.approved_at.toISOString().slice(0, 10) : null,
+          },
+        ]),
+      );
 
       const ageRows = await sql<{ age: number | null }[]>`
         SELECT EXTRACT(EPOCH FROM (now() - MAX(synced_at)))::int AS age FROM slack_card_approvals
@@ -133,9 +143,12 @@ export const fetchCardEvidence = createServerFn({ method: "POST" })
           if (!key) continue;
           for (const v of verdictByKey.get(key) ?? []) verdicts.add(v);
         }
+        const cards = approved.get(p.owner_code);
         return {
           owner_code: p.owner_code,
-          slackApproved: approved.has(p.owner_code),
+          slackApproved: cards != null,
+          approvalCount: cards?.count,
+          lastApprovedAt: cards?.lastAt ?? null,
           emailVerdict: verdicts.has("accepted")
             ? ("accepted" as const)
             : verdicts.has("refused")

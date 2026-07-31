@@ -21,6 +21,7 @@ import {
   CARD_STATUS_LABEL,
   CSV_HEADER,
   accepts,
+  approvalNote,
   cardStatus,
   csvRows,
   buildRows,
@@ -282,7 +283,8 @@ function CardTrackingPage() {
           </Button>
           {syncCards.isSuccess && !syncCards.isPending && (
             <span className="text-[11.5px] text-slate-500">
-              {syncCards.data.synced} approval{syncCards.data.synced === 1 ? "" : "s"} mirrored
+              {syncCards.data.synced} approval{syncCards.data.synced === 1 ? "" : "s"} across{" "}
+              {syncCards.data.providers} provider{syncCards.data.providers === 1 ? "" : "s"}
             </span>
           )}
           {syncCards.isError && (
@@ -439,6 +441,11 @@ function StatusPill({ row }: { row: CardRow }) {
       >
         {CARD_STATUS_LABEL[row.verdict.status]}
       </span>
+      {/* How strong the evidence is, not just that it exists: one approval two years
+          ago and four this quarter both read "Card OK" without this. */}
+      {approvalNote(row.evidence) && (
+        <span className="text-[11px] text-slate-500">{approvalNote(row.evidence)}</span>
+      )}
       {/* An override has to look like one, or the next reader wonders why the
           derived status disagrees with the evidence beside it. */}
       {row.verdict.overridden && (

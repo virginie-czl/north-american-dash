@@ -121,23 +121,40 @@ console.log("\n[the mirror's plumbing]");
   const code = stripComments(src);
 
   const refresh = body("async function refreshMirror");
+  const write = body("export async function writeMirror");
   const read = body("export const fetchCardApprovals");
   const sync = body("export const syncCardApprovals");
 
+  // The module-level import is types and the pure reducer, so the count that matters is
+  // of the live read itself rather than of the module name.
   t(
-    "only refreshMirror reaches the Slack module",
-    (src.match(/slack-cards\.server/g) ?? []).length === 1,
+    "one function reaches the Slack reader, and only one",
+    (code.match(/await import\("\.\/slack-cards\.server"\)/g) ?? []).length === 1,
   );
-  t("and it is refreshMirror that does", /slack-cards\.server/.test(refresh));
-  t("the read path never imports it", !/slack-cards\.server/.test(read));
+  t("and it is refreshMirror that makes it", /fetchCardApprovalsLive/.test(refresh));
+  const staticImport = /^import \{([^}]*)\} from "\.\/slack-cards\.server\.ts";$/m.exec(code);
+  t("the module-level import is the reducer and types only", staticImport != null);
+  t(
+    "it does not pull the live reader in at module scope",
+    staticImport != null && !/fetchCardApprovalsLive/.test(staticImport[1]),
+    staticImport?.[1],
+  );
+  t("the read path never reaches Slack", !/fetchCardApprovalsLive/.test(read));
   t("the read path never refreshes", !/refreshMirror/.test(read));
   // A refresh that cannot refresh is a failed call: the button's path must not catch.
   t("syncCardApprovals does not catch", !/\bcatch\b/.test(sync), sync);
   // The insert: no manual serialisation, no jsonb round-trip.
-  t("the insert does not stringify its rows", !/JSON\.stringify/.test(stripComments(refresh)));
+  t("the insert does not stringify its rows", !/JSON\.stringify/.test(stripComments(write)));
   t("nor go through jsonb_to_recordset", !/jsonb_to_recordset/.test(code));
-  t("it uses the driver's bulk insert", /INSERT INTO slack_card_approvals \$\{sql\(/.test(refresh));
-  t("and still upserts on the owner code", /ON CONFLICT \(owner_code\) DO UPDATE/.test(refresh));
+  t("it uses the driver's bulk insert", /INSERT INTO slack_card_approvals \$\{sql\(/.test(write));
+  t("and still upserts on the owner code", /ON CONFLICT \(owner_code\) DO UPDATE/.test(write));
+  // ON CONFLICT DO UPDATE cannot touch a row twice, so a repeated key must be refused
+  // here by name rather than surfacing as a Postgres 21000.
+  t("a batch with repeated keys is refused before the insert", /duplicate owner codes/.test(write));
+  t(
+    "the refusal is checked ahead of the statement",
+    write.indexOf("duplicate owner codes") < write.indexOf("INSERT INTO"),
+  );
   // Both failure modes are named, because the difference is the diagnosis.
   t("a Slack failure says the mirror was untouched", /The mirror was left as it was/.test(refresh));
   t("a write failure says nothing was saved", /Nothing was saved/.test(refresh));
