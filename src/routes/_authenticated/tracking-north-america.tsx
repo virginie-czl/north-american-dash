@@ -66,7 +66,6 @@ import {
   GROUP_META,
   GROUP_ORDER,
   MOVE_PILL,
-  isRecover,
   needsAMove,
   type Move,
   type MoveGroup,
@@ -462,7 +461,7 @@ function NaPage() {
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedRef, setSelectedRef] = useState<string>("");
-  const [scope, setScope] = useState<"move" | "recover" | "all">("move");
+  const [scope, setScope] = useState<"move" | "commission" | "refund" | "all">("move");
   const [detailTab, setDetailTab] = useState<
     "partners" | "invoices" | "emails" | "docs" | "comments"
   >("partners");
@@ -732,16 +731,30 @@ function NaPage() {
         };
       }
 
+      // Commission and refund are two different claims: one is revenue we never
+      // collected, the other is cash we paid out by mistake. They go out as
+      // different emails to different counterparties, so they are never merged
+      // into a single "to recover" figure.
       const claw = rowClawbackSplit(ps);
-      const clawTotal =
-        [...claw.commission.values()].reduce((a, b) => a + b, 0) +
-        [...claw.refund.values()].reduce((a, b) => a + b, 0);
-      if (clawTotal > 0.01) {
+      const commissionDue = [...claw.commission.values()].reduce((a, b) => a + b, 0);
+      const refundDue = [...claw.refund.values()].reduce((a, b) => a + b, 0);
+      if (commissionDue > 0.01 || refundDue > 0.01) {
+        const both = commissionDue > 0.01 && refundDue > 0.01;
         return {
           group: "ours",
-          label: `Recover ${fmt(clawTotal)}`,
-          headline: fmt(clawTotal),
-          headlineLabel: `to recover ${ccyLabel(ccy)}`,
+          label: both
+            ? `Recover ${fmt(commissionDue)} commission + ${fmt(refundDue)} refund`
+            : commissionDue > 0.01
+              ? `Recover ${fmt(commissionDue)} commission`
+              : `Recover ${fmt(refundDue)} refund`,
+          headline: both
+            ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
+            : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
+          headlineLabel: both
+            ? `commission + refund ${ccyLabel(ccy)}`
+            : commissionDue > 0.01
+              ? `commission to recover ${ccyLabel(ccy)}`
+              : `refund to recover ${ccyLabel(ccy)}`,
         };
       }
 
@@ -816,7 +829,9 @@ function NaPage() {
   );
 
   const scoped = useMemo(() => {
-    if (scope === "recover") return withMove.filter((x) => isRecover(x.move));
+    if (scope === "commission")
+      return withMove.filter((x) => x.move.headlineLabel.includes("commission"));
+    if (scope === "refund") return withMove.filter((x) => x.move.headlineLabel.includes("refund"));
     if (scope === "move") return withMove.filter((x) => needsAMove(x.move.group));
     return withMove;
   }, [withMove, scope]);
@@ -824,7 +839,8 @@ function NaPage() {
   const scopeCounts = useMemo(
     () => ({
       move: withMove.filter((x) => needsAMove(x.move.group)).length,
-      recover: withMove.filter((x) => isRecover(x.move)).length,
+      commission: withMove.filter((x) => x.move.headlineLabel.includes("commission")).length,
+      refund: withMove.filter((x) => x.move.headlineLabel.includes("refund")).length,
       all: withMove.length,
     }),
     [withMove],
@@ -939,7 +955,12 @@ function NaPage() {
               {(
                 [
                   { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
-                  { key: "recover" as const, label: "To recover", count: scopeCounts.recover },
+                  {
+                    key: "commission" as const,
+                    label: "Commission",
+                    count: scopeCounts.commission,
+                  },
+                  { key: "refund" as const, label: "Refund", count: scopeCounts.refund },
                   { key: "all" as const, label: "All", count: scopeCounts.all },
                 ] as const
               ).map((s) => {
@@ -1791,7 +1812,7 @@ function PartnerSectionCard({
         // emphasis: amber when it is money to claw back, muted when nothing is due.
         const outTone = prov
           ? "text-[#9CA3AF]"
-          : overpaid
+          : overpaid || hasCommissionToClaim
             ? "text-[#B45309]"
             : (p.outstanding ?? 0) > 0.01
               ? "text-[#101F34]"
@@ -1874,7 +1895,11 @@ function PartnerSectionCard({
               </span>
               <span>
                 <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
-                  {overpaid ? "To recover" : "Outstanding"}
+                  {overpaid
+                    ? "Refund to recover"
+                    : hasCommissionToClaim
+                      ? "Commission to recover"
+                      : "Outstanding"}
                 </span>
                 <span
                   className={`mt-0.5 block whitespace-nowrap text-[15px] font-bold tabular-nums ${outTone}`}
@@ -1883,7 +1908,13 @@ function PartnerSectionCard({
                     "—"
                   ) : (
                     <Money
-                      value={overpaid ? -(p.outstanding ?? 0) : p.outstanding}
+                      value={
+                        overpaid
+                          ? claw.refund
+                          : hasCommissionToClaim
+                            ? claw.commission
+                            : p.outstanding
+                      }
                       currency={p.currency}
                     />
                   )}
