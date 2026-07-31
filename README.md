@@ -245,6 +245,41 @@ Naboo BO or from the tech team). Without it the panel shows an error but
 everything else keeps working.
 
 
+### Statements are pages, printed by the browser
+
+Marketplace NA issues two documents — a client statement of account per booking
+(`/statement/:ref`) and a per-provider commission statement
+(`/commission/:ref/:houseCode`). Both are ordinary authenticated routes: the loader
+reads BigQuery at request time (never the tracker's 5-minute cache), dates the
+document server-side, and the page prints itself once the webfonts have settled.
+
+There is deliberately **no PDF engine in this project**, and adding one is not the
+fix for anything:
+
+- Vercel runs this app on the **Node** runtime. A Python renderer (WeasyPrint) has no
+  interpreter to run in — committing the script only moves the failure from
+  *renderer not found* to *python3 not found*.
+- A bundled headless Chrome (`puppeteer-core` + `@sparticuz/chromium`) does work, at
+  the cost of a heavy function, a cold start, and a second rendering engine that has
+  to be kept in agreement with the browser the design was authored for.
+
+So the browser renders it. Flex, grid, `break-inside` and Google Fonts all behave as
+specified, which is why the stylesheet needs none of the workarounds a print engine
+forces. The `<title>` is the intended file name without its extension — browsers
+offer it as the default PDF name and append `.pdf` themselves.
+
+The document declares `@page { margin: 0 }` and no paper size: size belongs to the
+print dialog, and the screen-only toolbar (`.no-print`) says to choose Letter. The
+same stylesheet unwinds the tracker's own full-height shell at print time
+(`[data-app-shell]`, `.doc-viewport`) — left alone, a flex column with a scrolling
+main crops the document to one screen. Every rule is scoped under `.naboo-doc` so the
+document cannot restyle the app it renders inside.
+
+Verified by printing: one page, 612 × 792 pts, with C-P222 at
+300,909.90 / 277,577.51 / 23,332.39 and C-P222 / H-A9319 at 50,193.00 × 7% =
+3,513.51.
+
+
 ### Card acceptance: two sources, both explicit
 
 A card verdict decides whether a partner is ever asked for an IBAN, so it has to be

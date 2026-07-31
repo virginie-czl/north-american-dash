@@ -354,46 +354,38 @@ function esc(value: string | null | undefined): string {
     .replace(/"/g, "&quot;");
 }
 
-const FONT_FACES = (base: string) => `
-@font-face { font-family: 'Bricolage Grotesque'; font-weight: 600;
-  src: url('${base}BricolageGrotesque-SemiBold.ttf') format('truetype') }
-@font-face { font-family: 'Bricolage Grotesque'; font-weight: 700;
-  src: url('${base}BricolageGrotesque-Bold.ttf') format('truetype') }
-@font-face { font-family: 'Bricolage Grotesque'; font-weight: 800;
-  src: url('${base}BricolageGrotesque-ExtraBold.ttf') format('truetype') }
-@font-face { font-family: 'Roboto'; font-weight: 400;
-  src: url('${base}Roboto-Regular.ttf') format('truetype') }
-@font-face { font-family: 'Roboto'; font-weight: 500;
-  src: url('${base}Roboto-Medium.ttf') format('truetype') }`;
-
 /**
  * The stylesheet.
  *
- * Two WeasyPrint quirks are pinned here rather than discovered again:
+ * The document is printed by the browser, from a real page — so nothing here works
+ * around a print engine. Flex, grid and `break-inside` behave as specified, and the
+ * two fonts are the ones the app already loads from Google Fonts (see styles.css),
+ * so there is no `@font-face` and no font file to keep in sync.
  *
- *  - Flex is partial. A section heading in a `space-between` row gets shrunk
- *    below its own content width and wraps mid-phrase, so headings are
- *    `white-space: nowrap; flex: none`.
- *  - `@page` carries nothing but `margin: 0`. The paper size is passed as a
- *    renderer stylesheet, which keeps the fixed header and footer flush with the
- *    sheet edge — page margins would push them inside the page area instead.
+ * `@page` carries nothing but `margin: 0`, as the design spec requires: the running
+ * header and footer sit flush to the sheet, which a page margin would push inside
+ * the page area. The paper size is deliberately not declared — it comes from the
+ * print dialog, and the on-screen toolbar reminds the reader to pick Letter.
+ *
+ * Every rule is scoped to `.naboo-doc`. The statement renders inside the tracker's
+ * own page, so an unscoped `main` or `table` rule would restyle the app around it.
  */
-const CSS_TEXT = `
+export const DOCUMENT_CSS = `
 @page { margin: 0 }
-* { box-sizing: border-box }
-html, body { margin: 0; padding: 0 }
-body {
+.naboo-doc * { box-sizing: border-box }
+.naboo-doc {
   font-family: 'Roboto', sans-serif;
   font-size: 13px;
   line-height: 1.5;
   color: #101F34;
   orphans: 3;
   widows: 3;
+  background: #FFFFFF;
 }
-.num { font-family: 'Bricolage Grotesque', sans-serif; font-variant-numeric: tabular-nums }
+.naboo-doc .num { font-family: 'Bricolage Grotesque', sans-serif; font-variant-numeric: tabular-nums }
 
 /* Running header — repeats on every page, flush to the sheet. */
-.running-header {
+.naboo-doc .running-header {
   position: fixed;
   top: 0; left: 0; right: 0;
   display: flex;
@@ -403,15 +395,15 @@ body {
   background: #FAFAF8;
   border-bottom: 1px solid #E5E7EB;
 }
-.logo {
+.naboo-doc .logo {
   font-family: 'Bricolage Grotesque', sans-serif;
   font-weight: 800;
   font-size: 21px;
   letter-spacing: -0.03em;
   color: #101F34;
 }
-.hdr-right { text-align: right }
-.hdr-title {
+.naboo-doc .hdr-right { text-align: right }
+.naboo-doc .hdr-title {
   display: block;
   font-size: 13px;
   font-weight: 500;
@@ -419,10 +411,10 @@ body {
   letter-spacing: 0.08em;
   color: #101F34;
 }
-.hdr-meta { display: block; margin-top: 2px; font-size: 12px; color: #6B7280 }
+.naboo-doc .hdr-meta { display: block; margin-top: 2px; font-size: 12px; color: #6B7280 }
 
 /* Running footer — repeats on every page. */
-.running-footer {
+.naboo-doc .running-footer {
   position: fixed;
   bottom: 0; left: 0; right: 0;
   display: flex;
@@ -434,9 +426,9 @@ body {
 }
 
 /* Content is inset so it never runs under either band. */
-main { padding: 94px 44px 48px }
+.naboo-doc main { padding: 94px 44px 48px }
 
-h1 {
+.naboo-doc h1 {
   margin: 0;
   font-family: 'Bricolage Grotesque', sans-serif;
   font-weight: 800;
@@ -444,9 +436,9 @@ h1 {
   letter-spacing: -0.02em;
   line-height: 1.15;
 }
-h1 .ref { color: #9CA3AF; font-weight: 600 }
+.naboo-doc h1 .ref { color: #9CA3AF; font-weight: 600 }
 
-.meta {
+.naboo-doc .meta {
   display: grid;
   grid-template-columns: 1.4fr 1fr .8fr 1fr;
   gap: 24px;
@@ -456,15 +448,15 @@ h1 .ref { color: #9CA3AF; font-weight: 600 }
   border-bottom: 1px solid #E5E7EB;
   break-inside: avoid;
 }
-.meta-label {
+.naboo-doc .meta-label {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: #9CA3AF;
 }
-.meta-value { margin-top: 3px; font-size: 14px; font-weight: 500 }
+.naboo-doc .meta-value { margin-top: 3px; font-size: 14px; font-weight: 500 }
 
-.tiles {
+.naboo-doc .tiles {
   display: grid;
   grid-template-columns: 1fr 1fr 1.15fr;
   gap: 10px;
@@ -474,22 +466,22 @@ h1 .ref { color: #9CA3AF; font-weight: 600 }
 /* Two tiles rather than three: the commission statement carries only a base and a
    net, and the three-column grid would squeeze both into the left two thirds and
    wrap their labels. */
-.tiles-2 { grid-template-columns: 1fr 1.15fr }
-.tile {
+.naboo-doc .tiles-2 { grid-template-columns: 1fr 1.15fr }
+.naboo-doc .tile {
   padding: 13px 16px 14px;
   border: 1px solid #E5E7EB;
   border-radius: 12px;
   background: #FFFFFF;
 }
-.tile-due { background: #FBFDE7 }
-.tile-head { display: flex; justify-content: space-between; align-items: center; gap: 8px }
-.tile-label {
+.naboo-doc .tile-due { background: #FBFDE7 }
+.naboo-doc .tile-head { display: flex; justify-content: space-between; align-items: center; gap: 8px }
+.naboo-doc .tile-label {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: #9CA3AF;
 }
-.pill {
+.naboo-doc .pill {
   flex: none;
   padding: 2px 8px;
   border-radius: 9999px;
@@ -499,32 +491,29 @@ h1 .ref { color: #9CA3AF; font-weight: 600 }
   color: #101F34;
   white-space: nowrap;
 }
-.tile-figure { margin-top: 5px; font-size: 23px; font-weight: 700; line-height: 1.1 }
-.tile-figure-received { color: #00B67A }
-.tile-figure-due { font-weight: 800 }
-.tile-caption { margin-top: 3px; font-size: 10px; color: #9CA3AF }
+.naboo-doc .tile-figure { margin-top: 5px; font-size: 23px; font-weight: 700; line-height: 1.1 }
+.naboo-doc .tile-figure-received { color: #00B67A }
+.naboo-doc .tile-figure-due { font-weight: 800 }
+.naboo-doc .tile-caption { margin-top: 3px; font-size: 10px; color: #9CA3AF }
 
-section { margin-top: 22px }
-.section-head {
+.naboo-doc section { margin-top: 22px }
+.naboo-doc .section-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
 }
-/* Flex is partial in WeasyPrint: without these the heading wraps mid-phrase. */
-.section-head h2 {
-  white-space: nowrap;
-  flex: none;
+.naboo-doc .section-head h2 {
   margin: 0;
   font-family: 'Bricolage Grotesque', sans-serif;
   font-weight: 700;
   font-size: 17px;
   letter-spacing: -0.01em;
 }
-.section-qualifier { font-size: 11px; color: #6B7280; text-align: right }
+.naboo-doc .section-qualifier { font-size: 11px; color: #6B7280; text-align: right }
 
-table { width: 100%; border-collapse: collapse; margin-top: 8px }
-thead th {
+.naboo-doc table { width: 100%; border-collapse: collapse; margin-top: 8px }
+.naboo-doc thead th {
   padding: 0 0 5px;
   border-bottom: 1px solid #101F34;
   font-size: 10px;
@@ -534,21 +523,21 @@ thead th {
   color: #9CA3AF;
   text-align: left;
 }
-tbody td { padding: 7px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px }
+.naboo-doc tbody td { padding: 7px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px }
 /* Columns need their own gutter: the reference column is long enough to squeeze
    the dates until they touch the next cell. */
-thead th, tbody td { padding-right: 16px }
-th.amount, td.amount {
+.naboo-doc thead th, .naboo-doc tbody td { padding-right: 16px }
+.naboo-doc th.amount, .naboo-doc td.amount {
   text-align: right;
   white-space: nowrap;
   padding-right: 0;
   padding-left: 12px;
 }
-td.amount { font-weight: 500 }
-td.ref { font-weight: 500; white-space: nowrap }
-td.day, td.method { white-space: nowrap }
-td.reference { color: #374151; font-size: 12px }
-.chip {
+.naboo-doc td.amount { font-weight: 500 }
+.naboo-doc td.ref { font-weight: 500; white-space: nowrap }
+.naboo-doc td.day, .naboo-doc td.method { white-space: nowrap }
+.naboo-doc td.reference { color: #374151; font-size: 12px }
+.naboo-doc .chip {
   display: inline-block;
   padding: 1px 6px;
   border-radius: 4px;
@@ -556,8 +545,8 @@ td.reference { color: #374151; font-size: 12px }
   font-size: 11px;
   color: #374151;
 }
-.credit { color: #DC2626 }
-tbody tr.total td {
+.naboo-doc .credit { color: #DC2626 }
+.naboo-doc tbody tr.total td {
   border-bottom: none;
   padding-top: 9px;
   font-size: 11px;
@@ -565,7 +554,7 @@ tbody tr.total td {
   letter-spacing: 0.1em;
   color: #6B7280;
 }
-tbody tr.total td.amount {
+.naboo-doc tbody tr.total td.amount {
   font-size: 16px;
   font-weight: 700;
   text-transform: none;
@@ -573,7 +562,7 @@ tbody tr.total td.amount {
   color: #101F34;
 }
 
-.closing {
+.naboo-doc .closing {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -585,23 +574,59 @@ tbody tr.total td.amount {
   border-radius: 12px;
   break-inside: avoid;
 }
-.closing-title {
+.naboo-doc .closing-title {
   font-family: 'Bricolage Grotesque', sans-serif;
   font-weight: 700;
   font-size: 17px;
 }
-.closing-sub { margin-top: 2px; font-size: 11px; color: #374151 }
-.closing-figure { text-align: right; white-space: nowrap }
-.closing-amount { font-size: 28px; font-weight: 800; line-height: 1.1 }
-.closing-ccy {
+.naboo-doc .closing-sub { margin-top: 2px; font-size: 11px; color: #374151 }
+.naboo-doc .closing-figure { text-align: right; white-space: nowrap }
+.naboo-doc .closing-amount { font-size: 28px; font-weight: 800; line-height: 1.1 }
+.naboo-doc .closing-ccy {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: #374151;
 }
 
-.footnote { margin-top: 18px; font-size: 10px; line-height: 1.6; color: #9CA3AF }
-.footnote a { color: #101F34; text-decoration: underline; text-underline-offset: 2px }
+.naboo-doc .footnote { margin-top: 18px; font-size: 10px; line-height: 1.6; color: #9CA3AF }
+.naboo-doc .footnote a { color: #101F34; text-decoration: underline; text-underline-offset: 2px }
+
+/* On screen the document is a sheet, and the two bands belong to it rather than to
+   the viewport — position: fixed here would pin them over the tracker's own chrome.
+   Print does not see this block, so they go back to being page furniture. */
+@media screen {
+  .doc-viewport { background: #F3F4F6; padding: 24px 0 }
+  .naboo-doc {
+    position: relative;
+    width: 8.5in;
+    max-width: 100%;
+    min-height: 11in;
+    margin: 0 auto;
+    box-shadow: 0 1px 3px rgba(16, 31, 52, 0.14);
+  }
+  .naboo-doc .running-header, .naboo-doc .running-footer { position: absolute }
+  .naboo-doc .running-footer { bottom: 0 }
+}
+
+@media print {
+  .no-print { display: none !important }
+  /* The tracker's shell is a full-height flex column with its own scroll box. Left
+     alone it crops the document to one viewport height on the first page. */
+  html, body { height: auto !important; overflow: visible !important; background: #FFFFFF }
+  [data-app-shell], [data-app-shell] > main, .doc-viewport {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    flex: none !important;
+    /* The screen framing is a sheet on a grey field. On paper the sheet is the page,
+       and 24px of padding is enough to push the footnote onto a second one. */
+    padding: 0 !important;
+    background: #FFFFFF !important;
+  }
+  .naboo-doc { width: auto; margin: 0; box-shadow: none }
+}
 `;
 
 function docRow(d: StatementDoc): string {
@@ -719,11 +744,6 @@ function currencyBlock(
 }
 
 export type StatementHtmlOptions = {
-  /**
-   * Where the font files are, as a URL prefix ending in `/`. Empty in tests,
-   * a `file://` directory when rendering.
-   */
-  fontBaseUrl?: string;
   /** Contact for the footnote, derived from the event manager by the caller. */
   contact: { email: string; name: string | null };
 };
@@ -799,7 +819,6 @@ export function buildStatementHtml(input: StatementInput, options: StatementHtml
       name ? ` (${esc(name)}, event manager)` : ""
     }.`,
     contactEmail: email,
-    fontBaseUrl: options.fontBaseUrl,
   });
 }
 
@@ -820,12 +839,15 @@ export type DocumentShellOptions = {
   /** Already escaped, and may contain the contact's mailto link. */
   footnoteHtml: string;
   contactEmail: string;
-  fontBaseUrl?: string;
 };
 
 /**
- * The page itself: fonts, stylesheet, the two running bands, the H1, the meta
- * strip and the footnote.
+ * The document's own markup: the two running bands, the H1, the meta strip and the
+ * footnote, around whatever tables the caller built.
+ *
+ * Markup only — no `<html>`, no `<style>`. It is injected into a route inside the
+ * tracker, and the stylesheet (DOCUMENT_CSS) is served alongside it, so the same
+ * page a reviewer looks at on screen is the one the browser prints.
  *
  * Shared by every document this tracker issues so they cannot drift apart — the
  * client statement of account and the per-provider commission statement differ in
@@ -834,14 +856,7 @@ export type DocumentShellOptions = {
 export function documentShell(options: DocumentShellOptions): string {
   const generated = fmtLongDay(options.generatedOn);
   const ref = esc(options.reference);
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>${esc(`${options.kind} ${options.reference}`)}</title>
-<style>${FONT_FACES(options.fontBaseUrl ?? "")}${CSS_TEXT}</style>
-</head>
-<body>
+  return `<div class="naboo-doc">
 <header class="running-header">
   <span class="logo">naboo</span>
   <span class="hdr-right">
@@ -875,8 +890,16 @@ ${options.bodyHtml}
     ${options.footnoteHtml}
   </p>
 </main>
-</body>
-</html>`;
+</div>`;
+}
+
+/**
+ * The `<title>`, which browsers offer as the default file name when the reader
+ * saves the page as a PDF — so it is the intended file name without its extension,
+ * because Chrome appends `.pdf` itself.
+ */
+export function printTitle(filename: string): string {
+  return filename.replace(/\.pdf$/i, "");
 }
 
 export { esc as escapeHtml, pluralise };

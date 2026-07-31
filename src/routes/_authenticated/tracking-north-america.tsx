@@ -29,8 +29,6 @@ import {
   generateNaFinancialSummary,
   type NaFinancialSummary,
 } from "@/lib/na-financial-summary.functions";
-import { generateNaStatement } from "@/lib/statement.functions";
-import { generateNaCommissionStatement } from "@/lib/commission-statement.functions";
 import {
   getCommissionDetail,
   indexCommissionDetail,
@@ -96,11 +94,11 @@ import {
   Banknote,
   Check,
   ChevronDown,
-  Download,
   ChevronRight,
   ExternalLink,
   Lock,
   MessageSquare,
+  Printer,
   ReceiptText,
   RefreshCw,
   Search,
@@ -401,26 +399,6 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     }
   }
   downloadCsv(lines, `tracking-north-america-${new Date().toISOString().slice(0, 10)}.csv`);
-}
-
-/**
- * Hands the generated statement to the browser.
- *
- * The PDF arrives base64-encoded from the server function — it is built per
- * request and never stored, so there is no URL to link to.
- */
-function saveStatementPdf(filename: string, base64: string) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 function downloadCsv(lines: string[], filename: string) {
@@ -728,22 +706,6 @@ function NaPage() {
       return map;
     },
     staleTime: 60_000,
-  });
-
-  // The statement is generated on click, from a fresh BigQuery read, and dated the
-  // day it is downloaded — never served from the tracker's cached payload.
-  const statement = useMutation({
-    mutationFn: (readableId: string) => generateNaStatement({ data: { readable_id: readableId } }),
-    onSuccess: (file) => saveStatementPdf(file.filename, file.pdf_base64),
-  });
-
-  // Per-provider commission recap. The server refuses to render when the
-  // commissionable base does not lead to the commission actually invoiced, so the
-  // error it returns is worth showing in full rather than truncating.
-  const commissionStatement = useMutation({
-    mutationFn: (input: { readable_id: string; house_code: string }) =>
-      generateNaCommissionStatement({ data: input }),
-    onSuccess: (file) => saveStatementPdf(file.filename, file.pdf_base64),
   });
 
   const summarize = useMutation({
@@ -1521,12 +1483,7 @@ function NaPage() {
                         Back office
                       </a>
                     )}
-                    <StatementButton
-                      eventRef={selRef}
-                      pending={statement.isPending && statement.variables === selRef}
-                      error={statement.isError ? String(statement.error) : null}
-                      onDownload={() => statement.mutate(selRef)}
-                    />
+                    <StatementButton eventRef={selRef} />
                     {/* Same targets as the list-level button, narrowed to this booking. */}
                     {(() => {
                       if (!gmailConnection?.connected) return null;
@@ -1706,22 +1663,6 @@ function NaPage() {
                       if (mine.length > 0) void openRecoveryDialog(mine);
                       else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
                     }}
-                    commissionStatement={{
-                      request: (p) =>
-                        p.house_code &&
-                        commissionStatement.mutate({
-                          readable_id: selRef,
-                          house_code: p.house_code,
-                        }),
-                      pendingFor: (p) =>
-                        commissionStatement.isPending &&
-                        commissionStatement.variables?.house_code === p.house_code,
-                      errorFor: (p) =>
-                        commissionStatement.isError &&
-                        commissionStatement.variables?.house_code === p.house_code
-                          ? String(commissionStatement.error)
-                          : null,
-                    }}
                     // Whoever already wrote to this provider about this booking.
                     sentFor={(p) =>
                       latestSend(
@@ -1752,13 +1693,7 @@ function NaPage() {
                         Client invoicing
                         {/* The statement is the client-facing view of this very table. */}
                         <span className="ml-auto">
-                          <StatementButton
-                            eventRef={selRef}
-                            pending={statement.isPending && statement.variables === selRef}
-                            error={statement.isError ? String(statement.error) : null}
-                            onDownload={() => statement.mutate(selRef)}
-                            tone="primary"
-                          />
+                          <StatementButton eventRef={selRef} tone="primary" />
                         </span>
                       </header>
                       {selInvoices.length === 0 ? (
@@ -2272,7 +2207,6 @@ function PartnerSectionCard({
   cardApprovedCodes,
   onRequest,
   sentFor,
-  commissionStatement,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
@@ -2283,12 +2217,6 @@ function PartnerSectionCard({
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
   /** The recovery email already sent to this provider on this booking, if any. */
   sentFor: (partner: ReturnType<typeof parseNaPartners>[number]) => RecoverySend | undefined;
-  /** Downloads the provider's commission recap, when it has commission documents. */
-  commissionStatement: {
-    request: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
-    pendingFor: (partner: ReturnType<typeof parseNaPartners>[number]) => boolean;
-    errorFor: (partner: ReturnType<typeof parseNaPartners>[number]) => string | null;
-  };
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
@@ -2508,25 +2436,20 @@ function PartnerSectionCard({
                   </button>
                 )}
                 {/* Only where there is something to consolidate: a provider with no
-                  commission document would download an empty page. */}
+                  commission document would open an empty page. */}
                 {!prov && (p.commission_doc_count ?? 0) > 0 && p.house_code && (
-                  <button
-                    type="button"
-                    disabled={commissionStatement.pendingFor(p)}
-                    onClick={() => commissionStatement.request(p)}
-                    className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium text-[#4B5563] underline-offset-2 hover:text-navy hover:underline disabled:text-[#9CA3AF] disabled:no-underline"
+                  <a
+                    href={`/commission/${encodeURIComponent(id)}/${encodeURIComponent(p.house_code)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium text-[#4B5563] no-underline underline-offset-2 hover:text-navy hover:underline"
                   >
-                    <Download className="h-3 w-3" aria-hidden="true" />
-                    {commissionStatement.pendingFor(p) ? "Preparing…" : "Commission statement"}
-                  </button>
+                    <Printer className="h-3 w-3" aria-hidden="true" />
+                    Commission statement
+                  </a>
                 )}
               </span>
             </div>
-            {commissionStatement.errorFor(p) && (
-              <p role="alert" className="basis-full text-[11px] leading-relaxed text-rose-800">
-                {commissionStatement.errorFor(p)}
-              </p>
-            )}
           </div>
         );
       })}
@@ -2574,46 +2497,35 @@ function PartnerSectionCard({
 }
 
 /**
- * Downloads the client statement of account for one booking.
+ * Opens the client statement of account for one booking.
  *
- * Generated on click rather than linked: the document is dated the day it is
- * downloaded and read from BigQuery at that moment, so there is nothing to cache
- * and no stale copy to hand out.
+ * A link rather than a download: the statement is a page, printed by the browser,
+ * and it reads BigQuery when it loads — so there is nothing cached to hand out and
+ * no stale copy to guard against. The tab it opens carries the intended file name
+ * as its title, which is what the print dialog offers to save it as.
  */
 function StatementButton({
   eventRef,
-  pending,
-  error,
-  onDownload,
   tone = "secondary",
 }: {
   eventRef: string;
-  pending: boolean;
-  error: string | null;
-  onDownload: () => void;
   tone?: "secondary" | "primary";
 }) {
   if (!eventRef) return null;
   const className =
     tone === "primary"
-      ? "inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-[#9ed4de] bg-white px-2.5 text-[11px] font-semibold normal-case tracking-normal text-teal-800 disabled:opacity-60"
-      : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 disabled:opacity-60";
+      ? "inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-[#9ed4de] bg-white px-2.5 text-[11px] font-semibold normal-case tracking-normal text-teal-800 no-underline"
+      : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 no-underline";
   return (
-    <span className="inline-flex items-center gap-2">
-      <button type="button" onClick={onDownload} disabled={pending} className={className}>
-        <Download className={`h-3.5 w-3.5 ${pending ? "animate-pulse" : ""}`} aria-hidden="true" />
-        {pending ? "Preparing…" : "Download statement"}
-      </button>
-      {error && (
-        <span
-          role="alert"
-          title={error}
-          className="max-w-[220px] truncate text-[11px] font-normal normal-case tracking-normal text-rose-800"
-        >
-          {error}
-        </span>
-      )}
-    </span>
+    <a
+      href={`/statement/${encodeURIComponent(eventRef)}`}
+      target="_blank"
+      rel="noreferrer"
+      className={className}
+    >
+      <Printer className="h-3.5 w-3.5" aria-hidden="true" />
+      Download statement
+    </a>
   );
 }
 

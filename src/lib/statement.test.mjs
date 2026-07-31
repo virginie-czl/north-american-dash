@@ -9,6 +9,8 @@ import {
   paymentMethodFromLabel,
   paymentReferenceFromLabel,
   buildStatementHtml,
+  DOCUMENT_CSS,
+  printTitle,
 } from "./statement.ts";
 
 let pass = 0,
@@ -182,6 +184,14 @@ t(
   "filename carries the booking and the day of download",
   statementFilename("C-P222", "2026-07-31") === "Naboo_statement_C-P222_2026-07-31.pdf",
 );
+// The <title> is the file name the print dialog offers, and Chrome appends `.pdf`
+// itself — leaving it on produces Naboo_statement_C-P222_2026-07-31.pdf.pdf.
+t(
+  "the page title is the filename without its extension",
+  printTitle(statementFilename("C-P222", "2026-07-31")) === "Naboo_statement_C-P222_2026-07-31",
+  printTitle(statementFilename("C-P222", "2026-07-31")),
+);
+t("a title with no extension is left alone", printTitle("Naboo_statement") === "Naboo_statement");
 
 console.log("\n[generationDay]");
 {
@@ -257,15 +267,53 @@ console.log("\n[buildStatementHtml]");
   t("balance due appears", html.includes("23,332.39"));
   t("contact is the event manager", html.includes("christian.bonadio@naboo.app"));
   t("names the manager beside the address", html.includes("(Christian Bonadio, event manager)"));
-  t("headings cannot wrap", html.includes("white-space: nowrap"));
+  t("the markup is injectable, not a whole document", !/<(html|head|body|style)[\s>]/i.test(html));
   t(
-    "page box carries margin only",
-    html.includes("@page { margin: 0 }") && !html.includes("size: Letter"),
+    "it is one scoped root the stylesheet can hang off",
+    html.startsWith('<div class="naboo-doc">'),
   );
   t("no netted-out document is listed", !html.includes("NABI-FR26-02120"));
   t("the re-issued invoice is listed", html.includes("NABI-FR26-02497"));
   t("no commission note could be listed", !html.includes("NABCO"));
   t("escapes the values it interpolates", !html.includes("<script"));
+}
+
+// ── The stylesheet ──────────────────────────────────────────────────────────
+// It is served with the markup by the same server function, so the page a reviewer
+// looks at and the sheet the browser prints are the one document.
+console.log("\n[DOCUMENT_CSS]");
+{
+  t(
+    "the page box carries a zero margin and nothing else",
+    /@page \{ margin: 0 \}/.test(DOCUMENT_CSS) && !/@page[^}]*size/i.test(DOCUMENT_CSS),
+  );
+  t("the paper size is the print dialog's to choose", !/\bsize:\s*(letter|a4)/i.test(DOCUMENT_CSS));
+  t("no font file is embedded — the app loads both faces", !/@font-face/.test(DOCUMENT_CSS));
+  t(
+    "the WeasyPrint heading workaround is gone",
+    !/\.section-head h2 \{[^}]*white-space:\s*nowrap/.test(DOCUMENT_CSS),
+  );
+  t("screen chrome is hidden in print", /@media print \{[\s\S]*\.no-print/.test(DOCUMENT_CSS));
+  t(
+    "the app shell is unwound so the document is not cropped to one screen",
+    /\[data-app-shell\]/.test(DOCUMENT_CSS),
+  );
+  t(
+    "the running bands repeat as page furniture",
+    /\.naboo-doc \.running-header \{[\s\S]*?position: fixed/.test(DOCUMENT_CSS),
+  );
+  // An unscoped `main` or `table` rule would restyle the tracker around the page.
+  const selectors = DOCUMENT_CSS.split("\n")
+    .filter((l) => /\{\s*$|\{.*\}\s*$/.test(l) && !l.trim().startsWith("@") && !l.includes(":root"))
+    .map((l) => l.split("{")[0].trim())
+    .flatMap((s) => s.split(","))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // The only rules allowed to reach outside the document are the print-time ones
+  // that unwind the tracker's shell, and they are named — not element selectors.
+  const allowed = /^(\.naboo-doc|\.no-print|\.doc-viewport|html$|body$|\[data-app-shell\])/;
+  const unscoped = selectors.filter((s) => !allowed.test(s));
+  t("no rule can restyle the tracker around it", unscoped.length === 0, unscoped.join(" | "));
 }
 {
   const html = buildStatementHtml(

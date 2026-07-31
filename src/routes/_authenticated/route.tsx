@@ -65,7 +65,10 @@ function NabooMark({ className }: { className?: string }) {
 function AuthedLayout() {
   return (
     <TrackerChromeProvider>
-      <div className="flex h-screen min-h-0 flex-col bg-white">
+      {/* data-app-shell: the printable statement routes live under this layout, and
+          its full-height flex column would crop a printed document to one viewport.
+          The document's own print stylesheet unwinds it by that attribute. */}
+      <div data-app-shell className="flex h-screen min-h-0 flex-col bg-white">
         <a
           href="#tracker-main"
           className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-navy focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-white"
@@ -98,7 +101,7 @@ function TopBar() {
   const exports = actions.exports ?? [];
 
   return (
-    <header className="flex h-14 flex-none items-center gap-4 border-b border-border bg-white px-5">
+    <header className="no-print flex h-14 flex-none items-center gap-4 border-b border-border bg-white px-5">
       <span className="flex items-center gap-1.5 text-navy">
         <NabooMark className="h-[17px] w-auto" />
         <span className="font-display text-[19px] font-extrabold leading-none tracking-tight">

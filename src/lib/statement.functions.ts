@@ -24,11 +24,22 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 
-export type NaStatementFile = {
+/**
+ * The statement as a page, not a file.
+ *
+ * The route renders this markup and asks the browser to print it. Nothing here is
+ * a PDF: the design was authored as HTML for a browser, and the browser is the
+ * only engine that renders it exactly as specified — a Node serverless function
+ * cannot host a second one.
+ */
+export type NaStatementDocument = {
   readable_id: string;
-  filename: string;
-  /** The PDF itself, base64 — the browser turns it back into a download. */
-  pdf_base64: string;
+  /** The `<title>`, which browsers use as the default PDF name. */
+  title: string;
+  /** The document's markup — a `.naboo-doc` element, ready to inject. */
+  body_html: string;
+  /** Its stylesheet, served with it so the page and the print match. */
+  css: string;
   /** ISO day the document was generated, for the caller's own display. */
   generated_on: string;
 };
@@ -134,7 +145,7 @@ function parseJsonArray<T>(json: unknown): T[] {
   }
 }
 
-export const generateNaStatement = createServerFn({ method: "POST" })
+export const getNaStatementDocument = createServerFn({ method: "POST" })
   .validator((input: { readable_id: string }) => {
     const ref = (input?.readable_id ?? "").trim().toUpperCase();
     // Interpolation-free anyway (the query is parameterised), but a booking ref has
@@ -142,7 +153,7 @@ export const generateNaStatement = createServerFn({ method: "POST" })
     if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(ref)) throw new Error("Invalid booking reference");
     return { readable_id: ref };
   })
-  .handler(async ({ data }): Promise<NaStatementFile> => {
+  .handler(async ({ data }): Promise<NaStatementDocument> => {
     // Financial data: same gate as every other query on this tracker.
     const { requireTracker } = await import("./session.server");
     await requireTracker("na");
@@ -161,6 +172,8 @@ export const generateNaStatement = createServerFn({ method: "POST" })
       paymentReferenceFromLabel,
       eventLabel,
       generationDay,
+      printTitle,
+      DOCUMENT_CSS,
     } = await import("./statement");
     const { emContact } = await import("./em-email");
 
@@ -212,13 +225,11 @@ export const generateNaStatement = createServerFn({ method: "POST" })
       { contact: { email: contact.email, name: contact.name } },
     );
 
-    const { renderStatementPdf } = await import("./statement.server");
-    const pdf = await renderStatementPdf(html);
-
     return {
       readable_id: readableId,
-      filename: statementFilename(readableId, generatedOn),
-      pdf_base64: pdf.toString("base64"),
+      title: printTitle(statementFilename(readableId, generatedOn)),
+      body_html: html,
+      css: DOCUMENT_CSS,
       generated_on: generatedOn,
     };
   });

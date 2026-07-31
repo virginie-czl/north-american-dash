@@ -333,7 +333,6 @@ export function clientEventLabel(client: string, event: string): string {
 }
 
 export type CommissionHtmlOptions = {
-  fontBaseUrl?: string;
   contact: { email: string; name: string | null };
 };
 
@@ -481,6 +480,5 @@ export function buildCommissionStatementHtml(
       name ? ` (${esc(name)}, event manager)` : ""
     }.`,
     contactEmail: email,
-    fontBaseUrl: options.fontBaseUrl,
   });
 }

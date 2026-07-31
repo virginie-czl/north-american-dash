@@ -20,12 +20,16 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 
-export type NaCommissionStatementFile = {
+/** Same shape as the client statement: a page to print, not a file. */
+export type NaCommissionStatementDocument = {
   readable_id: string;
   house_code: string;
-  filename: string;
-  /** The PDF itself, base64. */
-  pdf_base64: string;
+  /** The `<title>`, which browsers use as the default PDF name. */
+  title: string;
+  /** The document's markup — a `.naboo-doc` element, ready to inject. */
+  body_html: string;
+  /** Its stylesheet, served with it so the page and the print match. */
+  css: string;
   generated_on: string;
 };
 
@@ -163,7 +167,7 @@ function parseJsonArray<T>(json: unknown): T[] {
   }
 }
 
-export const generateNaCommissionStatement = createServerFn({ method: "POST" })
+export const getNaCommissionDocument = createServerFn({ method: "POST" })
   .validator((input: { readable_id: string; house_code: string }) => {
     const ref = (input?.readable_id ?? "").trim().toUpperCase();
     const house = (input?.house_code ?? "").trim().toUpperCase();
@@ -171,7 +175,7 @@ export const generateNaCommissionStatement = createServerFn({ method: "POST" })
     if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(house)) throw new Error("Invalid provider code");
     return { readable_id: ref, house_code: house };
   })
-  .handler(async ({ data }): Promise<NaCommissionStatementFile> => {
+  .handler(async ({ data }): Promise<NaCommissionStatementDocument> => {
     const { requireTracker } = await import("./session.server");
     await requireTracker("na");
 
@@ -191,7 +195,7 @@ export const generateNaCommissionStatement = createServerFn({ method: "POST" })
       buildCommissionStatementHtml,
       commissionStatementFilename,
     } = await import("./commission-statement.ts");
-    const { generationDay, eventLabel } = await import("./statement");
+    const { generationDay, eventLabel, printTitle, DOCUMENT_CSS } = await import("./statement");
     const { emContact } = await import("./em-email");
 
     const generatedOn = generationDay(new Date());
@@ -258,14 +262,12 @@ export const generateNaCommissionStatement = createServerFn({ method: "POST" })
       { contact: { email: contact.email, name: contact.name } },
     );
 
-    const { renderStatementPdf } = await import("./statement.server");
-    const pdf = await renderStatementPdf(html);
-
     return {
       readable_id: readableId,
       house_code: String(row.house_code ?? data.house_code),
-      filename: commissionStatementFilename(readableId, data.house_code, generatedOn),
-      pdf_base64: pdf.toString("base64"),
+      title: printTitle(commissionStatementFilename(readableId, data.house_code, generatedOn)),
+      body_html: html,
+      css: DOCUMENT_CSS,
       generated_on: generatedOn,
     };
   });
