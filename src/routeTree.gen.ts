@@ -15,6 +15,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedVeoliaRouteImport } from './routes/_authenticated/veolia'
 import { Route as AuthenticatedTrackingNorthAmericaRouteImport } from './routes/_authenticated/tracking-north-america'
 import { Route as AuthenticatedNaCommissionsRouteImport } from './routes/_authenticated/na-commissions'
+import { Route as AuthenticatedCardTrackingNaRouteImport } from './routes/_authenticated/card-tracking-na'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
 import { Route as AuthenticatedStatementRefRouteImport } from './routes/_authenticated/statement.$ref'
 import { Route as AuthenticatedCommissionRefHouseCodeRouteImport } from './routes/_authenticated/commission.$ref.$houseCode'
@@ -50,6 +51,12 @@ const AuthenticatedNaCommissionsRoute =
     path: '/na-commissions',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedCardTrackingNaRoute =
+  AuthenticatedCardTrackingNaRouteImport.update({
+    id: '/card-tracking-na',
+    path: '/card-tracking-na',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -72,6 +79,7 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/auth': typeof AuthRoute
   '/admin': typeof AuthenticatedAdminRoute
+  '/card-tracking-na': typeof AuthenticatedCardTrackingNaRoute
   '/na-commissions': typeof AuthenticatedNaCommissionsRoute
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
@@ -81,6 +89,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/admin': typeof AuthenticatedAdminRoute
+  '/card-tracking-na': typeof AuthenticatedCardTrackingNaRoute
   '/na-commissions': typeof AuthenticatedNaCommissionsRoute
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
@@ -93,6 +102,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
   '/_authenticated/admin': typeof AuthenticatedAdminRoute
+  '/_authenticated/card-tracking-na': typeof AuthenticatedCardTrackingNaRoute
   '/_authenticated/na-commissions': typeof AuthenticatedNaCommissionsRoute
   '/_authenticated/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/_authenticated/veolia': typeof AuthenticatedVeoliaRoute
@@ -106,6 +116,7 @@ export interface FileRouteTypes {
     | '/'
     | '/auth'
     | '/admin'
+    | '/card-tracking-na'
     | '/na-commissions'
     | '/tracking-north-america'
     | '/veolia'
@@ -115,6 +126,7 @@ export interface FileRouteTypes {
   to:
     | '/auth'
     | '/admin'
+    | '/card-tracking-na'
     | '/na-commissions'
     | '/tracking-north-america'
     | '/veolia'
@@ -126,6 +138,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/auth'
     | '/_authenticated/admin'
+    | '/_authenticated/card-tracking-na'
     | '/_authenticated/na-commissions'
     | '/_authenticated/tracking-north-america'
     | '/_authenticated/veolia'
@@ -183,6 +196,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedNaCommissionsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/card-tracking-na': {
+      id: '/_authenticated/card-tracking-na'
+      path: '/card-tracking-na'
+      fullPath: '/card-tracking-na'
+      preLoaderRoute: typeof AuthenticatedCardTrackingNaRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/admin': {
       id: '/_authenticated/admin'
       path: '/admin'
@@ -209,6 +229,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAdminRoute: typeof AuthenticatedAdminRoute
+  AuthenticatedCardTrackingNaRoute: typeof AuthenticatedCardTrackingNaRoute
   AuthenticatedNaCommissionsRoute: typeof AuthenticatedNaCommissionsRoute
   AuthenticatedTrackingNorthAmericaRoute: typeof AuthenticatedTrackingNorthAmericaRoute
   AuthenticatedVeoliaRoute: typeof AuthenticatedVeoliaRoute
@@ -219,6 +240,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAdminRoute: AuthenticatedAdminRoute,
+  AuthenticatedCardTrackingNaRoute: AuthenticatedCardTrackingNaRoute,
   AuthenticatedNaCommissionsRoute: AuthenticatedNaCommissionsRoute,
   AuthenticatedTrackingNorthAmericaRoute:
     AuthenticatedTrackingNorthAmericaRoute,

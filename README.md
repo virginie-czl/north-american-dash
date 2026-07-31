@@ -245,6 +245,48 @@ Naboo BO or from the tech team). Without it the panel shows an error but
 everything else keeps working.
 
 
+### Card tracking NA: two questions, two columns
+
+`/card-tracking-na` (tracker key `na-cards`) lists every service provider we have an
+accepted North American booking with — 447 of them — and records whether they take
+card. Two columns that look like one:
+
+- **Provider takes card** is about them, derived from evidence: an approved card in
+  `#finance-paiement-by-card` matched on the `O-` owner code, or an explicit
+  acceptance in the Gmail scan. `Card OK if fee` is a *display* of `Card OK` plus a
+  recorded fee, not a stored fourth state, so the status and the fee cannot
+  contradict each other.
+- **Naboo pays by card** is about us, and is always a human decision. We may decline a
+  provider who happily takes card — the fee is not worth it, the amount is over the
+  card limit, Pliant refused them before. When they accept and we decline, the reason
+  is **mandatory**: it is the only thing that will answer "why is this one being
+  wired?" later. When the provider refuses, no justification is asked for.
+
+Two fields say the opposite of the truth if read as acceptance, and both are enforced
+against in `src/lib/card-tracking.ts` (92 tests):
+
+1. **`partner_payment_method` is not acceptance.** 435 of the 447 providers carry
+   `CREDIT_CARD`; it is the method *we* intend to use. Nothing in the derivation reads
+   it — it is carried for display only.
+2. **A Slack refusal is Naboo refusing.** `Credit Card Request Refused / Refused by:
+   <approver>` is our own approver declining to issue a card. `CardEvidence` therefore
+   has no field for it: only `Approved` is evidence, and only positively.
+
+Reading the approvals mirror **never calls Slack** — it used to refresh itself when
+stale, which made an unlucky page load pay for the whole Slack walk. Only the
+`Refresh card approvals` button syncs, and both this page and Marketplace NA show the
+mirror's age (`synced 3 h ago`) so the staleness is visible rather than assumed. The
+existing 15-minute cron keeps `slack_card_approvals_cache` warm, so a sync usually
+copies that cache into the mirror without touching Slack at all.
+
+The amounts are aggregated in TypeScript, not SQL, and per currency: this data mixes
+USD, CAD, EUR and IDR — BizAway carries 281,000,000 IDR on one booking — so a single
+`SUM` across them would be meaningless. The grain is the **quote**, not the row and
+not the booking: the reconciliation master repeats a quote (847 raw rows for 609
+owner/quote pairs) and one booking can carry two quotes from the same provider with
+two real payables (Pknik on F-B333 is −500.00 and −6,239.65 CAD).
+
+
 ### Statements are pages, printed by the browser
 
 Marketplace NA issues two documents — a client statement of account per booking

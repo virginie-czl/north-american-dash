@@ -1,5 +1,6 @@
 import { createFileRoute, Link, Outlet, redirect, useRouter } from "@tanstack/react-router";
 import {
+  CreditCard,
   Download,
   Droplets,
   DollarSign,
@@ -137,6 +138,14 @@ function TopBar() {
             icon={<DollarSign className="h-4 w-4" aria-hidden="true" />}
           >
             Commissions NA
+          </TrackerTab>
+        )}
+        {allowed.includes("na-cards") && (
+          <TrackerTab
+            to="/card-tracking-na"
+            icon={<CreditCard className="h-4 w-4" aria-hidden="true" />}
+          >
+            Card tracking NA
           </TrackerTab>
         )}
       </nav>

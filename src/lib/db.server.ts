@@ -86,6 +86,23 @@ const SCHEMA_STATEMENTS = [
      approved_at timestamptz,
      synced_at timestamptz NOT NULL DEFAULT now()
    )`,
+  // What each provider will accept, and what Naboo has decided to do about it —
+  // two separate questions, kept in two separate columns on purpose. accepts_card
+  // is an override of the derived status (null falls back to the evidence);
+  // naboo_pays_card is always a human decision, and naboo_reason is mandatory in
+  // the one case that needs explaining: they take card and we still say no.
+  `CREATE TABLE IF NOT EXISTS provider_card_terms (
+     owner_code       text PRIMARY KEY,
+     accepts_card     text,
+     fee_percent      numeric(6,3),
+     fee_fixed        numeric(12,2),
+     fee_currency     text,
+     refusal_reason   text,
+     naboo_pays_card  text,
+     naboo_reason     text,
+     updated_by       text NOT NULL,
+     updated_at       timestamptz NOT NULL DEFAULT now()
+   )`,
   `CREATE TABLE IF NOT EXISTS app_users (
      email text PRIMARY KEY,
      name text,

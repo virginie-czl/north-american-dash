@@ -17,6 +17,7 @@ import {
   composeNaRefundRequest,
   composeNaCombinedRequest,
 } from "@/lib/na-commission-requests";
+import { fmtAge } from "@/lib/card-tracking";
 import {
   RECOVERY_GRACE_DAYS,
   naClientRecovery,
@@ -683,7 +684,8 @@ function NaPage() {
     [sorted],
   );
 
-  const { factsMap, actionFor, eventNeedsScan, cardApprovedCodes } = useActionIndex();
+  const { factsMap, actionFor, eventNeedsScan, cardApprovedCodes, cardsSyncedAgeSeconds } =
+    useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
   // What the team has already sent. Every button that opens an email checks it, so
   // nobody is offered a chase a colleague has already made.
@@ -1333,6 +1335,15 @@ function NaPage() {
                   il y a {cachedAge < 90 ? `${cachedAge} s` : `${Math.round(cachedAge / 60)} min`}
                 </span>
               )}
+              {/* The approved cards come from a mirror that only the Refresh button
+                  syncs, so its age has to be visible here too — otherwise a card
+                  approved this morning looks like a provider who never had one. */}
+              <span
+                className="rounded-full px-2 py-[3px] text-[11.5px] text-slate-400"
+                title="Cartes approuvées dans #finance-paiement-by-card, lues depuis le miroir Postgres. Rafraîchir resynchronise."
+              >
+                cartes {fmtAge(cardsSyncedAgeSeconds)}
+              </span>
             </div>
           </div>
 
