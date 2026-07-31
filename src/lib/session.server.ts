@@ -94,15 +94,16 @@ export class AuthError extends Error {
  * For use inside TanStack server functions: reads the current request's session
  * cookie and throws when the caller is not an approved user.
  */
-export async function requireSession(): Promise<SessionUser> {
-  const { getRequest } = await import("@tanstack/react-start/server");
-  const request = getRequest();
-  const session = request ? await getSessionFromRequest(request) : null;
+/**
+ * The approval rule itself, shared by both entry points below.
+ *
+ * A valid cookie is not enough: access can have been revoked since it was issued, and
+ * cookies live for a week.
+ */
+async function requireApproved(session: SessionUser | null): Promise<SessionUser> {
   if (!session) {
     throw new AuthError("Session expirée — reconnectez-vous.", 401);
   }
-  // A valid cookie is not enough: access can have been revoked since it was
-  // issued, and cookies live for a week.
   const { getAccess } = await import("./access.server");
   const { status } = await getAccess(session.email);
   if (status !== "approved") {
@@ -116,13 +117,38 @@ export async function requireSession(): Promise<SessionUser> {
   return session;
 }
 
+export async function requireSession(): Promise<SessionUser> {
+  const { getRequest } = await import("@tanstack/react-start/server");
+  const request = getRequest();
+  return requireApproved(request ? await getSessionFromRequest(request) : null);
+}
+
+/**
+ * Same, for a handler holding the Request itself.
+ *
+ * The document endpoints run in the fetch handler, ahead of the framework, so there is
+ * no ambient request context to read — they must be able to apply the identical rule
+ * rather than a second, looser copy of it.
+ */
+export async function requireSessionFor(request: Request): Promise<SessionUser> {
+  return requireApproved(await getSessionFromRequest(request));
+}
+
 /**
  * Requires an approved session that is allowed to open a given tracker. Every
  * tracker's data query goes through this: hiding a tab in the nav is presentation,
  * not access control — the endpoint has to refuse.
  */
 export async function requireTracker(tracker: string): Promise<SessionUser> {
-  const session = await requireSession();
+  return allowedOnTracker(await requireSession(), tracker);
+}
+
+/** Same, for a handler holding the Request itself. */
+export async function requireTrackerFor(request: Request, tracker: string): Promise<SessionUser> {
+  return allowedOnTracker(await requireSessionFor(request), tracker);
+}
+
+async function allowedOnTracker(session: SessionUser, tracker: string): Promise<SessionUser> {
   const { getAccess } = await import("./access.server");
   const { trackers } = await getAccess(session.email);
   if (!trackers.includes(tracker as never)) {

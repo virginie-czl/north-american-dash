@@ -357,18 +357,19 @@ function esc(value: string | null | undefined): string {
 /**
  * The stylesheet.
  *
- * The document is printed by the browser, from a real page — so nothing here works
- * around a print engine. Flex, grid and `break-inside` behave as specified, and the
- * two fonts are the ones the app already loads from Google Fonts (see styles.css),
- * so there is no `@font-face` and no font file to keep in sync.
+ * The renderer is Chromium (see pdf.server.ts), the engine the document was drawn in,
+ * so nothing here works around a print engine: flex, grid and `break-inside` behave as
+ * specified, and the two fonts are loaded from Google Fonts exactly as the app loads
+ * them — no `@font-face`, no font file to keep in sync.
  *
  * `@page` carries nothing but `margin: 0`, as the design spec requires: the running
- * header and footer sit flush to the sheet, which a page margin would push inside
- * the page area. The paper size is deliberately not declared — it comes from the
- * print dialog, and the on-screen toolbar reminds the reader to pick Letter.
+ * header and footer sit flush to the sheet, which a page margin would push inside the
+ * page area. The paper size is not declared here either — the renderer asks for Letter,
+ * which is the one place it cannot depend on someone's print dialog.
  *
- * Every rule is scoped to `.naboo-doc`. The statement renders inside the tracker's
- * own page, so an unscoped `main` or `table` rule would restyle the app around it.
+ * Every rule stays scoped to `.naboo-doc` even though the document is now rendered
+ * alone: it costs nothing, and it is what let the same markup be embedded in a page
+ * without restyling the app around it.
  */
 export const DOCUMENT_CSS = `
 @page { margin: 0 }
@@ -592,41 +593,6 @@ export const DOCUMENT_CSS = `
 .naboo-doc .footnote { margin-top: 18px; font-size: 10px; line-height: 1.6; color: #9CA3AF }
 .naboo-doc .footnote a { color: #101F34; text-decoration: underline; text-underline-offset: 2px }
 
-/* On screen the document is a sheet, and the two bands belong to it rather than to
-   the viewport — position: fixed here would pin them over the tracker's own chrome.
-   Print does not see this block, so they go back to being page furniture. */
-@media screen {
-  .doc-viewport { background: #F3F4F6; padding: 24px 0 }
-  .naboo-doc {
-    position: relative;
-    width: 8.5in;
-    max-width: 100%;
-    min-height: 11in;
-    margin: 0 auto;
-    box-shadow: 0 1px 3px rgba(16, 31, 52, 0.14);
-  }
-  .naboo-doc .running-header, .naboo-doc .running-footer { position: absolute }
-  .naboo-doc .running-footer { bottom: 0 }
-}
-
-@media print {
-  .no-print { display: none !important }
-  /* The tracker's shell is a full-height flex column with its own scroll box. Left
-     alone it crops the document to one viewport height on the first page. */
-  html, body { height: auto !important; overflow: visible !important; background: #FFFFFF }
-  [data-app-shell], [data-app-shell] > main, .doc-viewport {
-    display: block !important;
-    height: auto !important;
-    min-height: 0 !important;
-    overflow: visible !important;
-    flex: none !important;
-    /* The screen framing is a sheet on a grey field. On paper the sheet is the page,
-       and 24px of padding is enough to push the footnote onto a second one. */
-    padding: 0 !important;
-    background: #FFFFFF !important;
-  }
-  .naboo-doc { width: auto; margin: 0; box-shadow: none }
-}
 `;
 
 function docRow(d: StatementDoc): string {
@@ -900,6 +866,44 @@ ${options.bodyHtml}
  */
 export function printTitle(filename: string): string {
   return filename.replace(/\.pdf$/i, "");
+}
+
+/**
+ * The two typefaces the design is drawn in, loaded the way the app itself loads them
+ * (see styles.css). Declared here rather than embedded as font files: the renderer is
+ * a browser, so it fetches them, and a committed copy is one more thing to keep in
+ * sync with the app's own stylesheet.
+ */
+export const FONT_STYLESHEET_URL =
+  "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800" +
+  "&family=Roboto:wght@400;500&display=swap";
+
+/**
+ * A complete document, for the renderer: the markup, its stylesheet and the fonts.
+ *
+ * The same body and CSS the page route served, wrapped so Chromium can be handed one
+ * string. `html, body { margin: 0 }` is the browser default reset the printable page
+ * got from the app's own stylesheet; the document's own rules stay as the design spec
+ * requires them — `@page { margin: 0 }` and nothing else.
+ */
+export function standaloneDocument(input: {
+  title: string;
+  bodyHtml: string;
+  css: string;
+}): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${esc(input.title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="${esc(FONT_STYLESHEET_URL)}">
+<style>html, body { margin: 0; padding: 0 }</style>
+<style>${input.css}</style>
+</head>
+<body>${input.bodyHtml}</body>
+</html>`;
 }
 
 export { esc as escapeHtml, pluralise };

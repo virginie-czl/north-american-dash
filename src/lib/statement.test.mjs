@@ -293,10 +293,12 @@ console.log("\n[DOCUMENT_CSS]");
     "the WeasyPrint heading workaround is gone",
     !/\.section-head h2 \{[^}]*white-space:\s*nowrap/.test(DOCUMENT_CSS),
   );
-  t("screen chrome is hidden in print", /@media print \{[\s\S]*\.no-print/.test(DOCUMENT_CSS));
+  // The document is rendered alone by Chromium now, not embedded in the tracker, so
+  // the rules that framed it on screen and unwound the app shell for printing are gone.
+  t("no leftover framing for a page it no longer lives in", !/@media/.test(DOCUMENT_CSS));
   t(
-    "the app shell is unwound so the document is not cropped to one screen",
-    /\[data-app-shell\]/.test(DOCUMENT_CSS),
+    "nothing addresses the tracker's shell",
+    !/\[data-app-shell\]|\.doc-viewport|\.no-print/.test(DOCUMENT_CSS),
   );
   t(
     "the running bands repeat as page furniture",
@@ -309,9 +311,8 @@ console.log("\n[DOCUMENT_CSS]");
     .flatMap((s) => s.split(","))
     .map((s) => s.trim())
     .filter(Boolean);
-  // The only rules allowed to reach outside the document are the print-time ones
-  // that unwind the tracker's shell, and they are named — not element selectors.
-  const allowed = /^(\.naboo-doc|\.no-print|\.doc-viewport|html$|body$|\[data-app-shell\])/;
+  // Every rule belongs to the document; none reaches outside it.
+  const allowed = /^\.naboo-doc/;
   const unscoped = selectors.filter((s) => !allowed.test(s));
   t("no rule can restyle the tracker around it", unscoped.length === 0, unscoped.join(" | "));
 }

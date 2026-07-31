@@ -44,6 +44,11 @@ export default {
       const authResponse = await handleAuthRequest(request);
       if (authResponse) return authResponse;
 
+      // The PDF endpoints: a file response, so they need the headers themselves.
+      const { handleDocumentRequest } = await import("./lib/document-routes.server");
+      const documentResponse = await handleDocumentRequest(request);
+      if (documentResponse) return documentResponse;
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);

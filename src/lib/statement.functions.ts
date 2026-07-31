@@ -22,19 +22,18 @@
  *    back from providers — on C-P222, three lines worth 213,472 USD. Counting them
  *    as client money turns a 23,332.39 receivable into a six-figure credit.
  */
-import { createServerFn } from "@tanstack/react-start";
-
 /**
- * The statement as a page, not a file.
+ * Markup and stylesheet, which the endpoint hands to Chromium and returns as a PDF.
  *
- * The route renders this markup and asks the browser to print it. Nothing here is
- * a PDF: the design was authored as HTML for a browser, and the browser is the
- * only engine that renders it exactly as specified — a Node serverless function
- * cannot host a second one.
+ * Still HTML at this level on purpose: the design was authored for a browser, and
+ * keeping the document as markup is what lets the renderer be the same engine it was
+ * drawn in. See pdf.server.ts for the two engines this replaced.
  */
 export type NaStatementDocument = {
   readable_id: string;
-  /** The `<title>`, which browsers use as the default PDF name. */
+  /** The document's own name, which the endpoint puts in Content-Disposition. */
+  filename: string;
+  /** The `<title>`, so the PDF carries one too. */
   title: string;
   /** The document's markup — a `.naboo-doc` element, ready to inject. */
   body_html: string;
@@ -145,18 +144,21 @@ function parseJsonArray<T>(json: unknown): T[] {
   }
 }
 
-export const getNaStatementDocument = createServerFn({ method: "POST" })
-  .validator((input: { readable_id: string }) => {
-    const ref = (input?.readable_id ?? "").trim().toUpperCase();
+/**
+ * Builds the statement for one booking.
+ *
+ * Called only by GET /api/statement/{ref}, which applies the tracker gate before any
+ * of this runs — the access check belongs at the endpoint, in front of the work, and
+ * this is deliberately not exported as a server function so there is one way in.
+ */
+export async function buildNaStatement(readableId: string): Promise<NaStatementDocument> {
+  {
+    const data = { readable_id: readableId.trim().toUpperCase() };
     // Interpolation-free anyway (the query is parameterised), but a booking ref has
     // one shape and anything else is a mistake worth naming.
-    if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(ref)) throw new Error("Invalid booking reference");
-    return { readable_id: ref };
-  })
-  .handler(async ({ data }): Promise<NaStatementDocument> => {
-    // Financial data: same gate as every other query on this tracker.
-    const { requireTracker } = await import("./session.server");
-    await requireTracker("na");
+    if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(data.readable_id)) {
+      throw new Error("Invalid booking reference");
+    }
 
     const { runBigQuery } = await import("./bigquery.server");
     const rows = (await runBigQuery(QUERY, { ref: data.readable_id })) as unknown as Array<
@@ -201,16 +203,16 @@ export const getNaStatementDocument = createServerFn({ method: "POST" })
         reference: paymentReferenceFromLabel(p.label),
       }));
 
-    const readableId = data.readable_id;
     const contact = emContact(row.em_referent == null ? null : String(row.em_referent));
 
+    const ref = data.readable_id;
     const html = buildStatementHtml(
       {
         booking: {
-          readable_id: readableId,
+          readable_id: ref,
           billed_to: String(row.billed_to ?? row.company_name ?? "—"),
           event: eventLabel(
-            readableId,
+            ref,
             row.event_name == null ? null : String(row.event_name),
             row.start_date == null ? null : String(row.start_date),
             row.end_date == null ? null : String(row.end_date),
@@ -226,10 +228,12 @@ export const getNaStatementDocument = createServerFn({ method: "POST" })
     );
 
     return {
-      readable_id: readableId,
-      title: printTitle(statementFilename(readableId, generatedOn)),
+      readable_id: ref,
+      filename: statementFilename(ref, generatedOn),
+      title: printTitle(statementFilename(ref, generatedOn)),
       body_html: html,
       css: DOCUMENT_CSS,
       generated_on: generatedOn,
     };
-  });
+  }
+}

@@ -18,13 +18,13 @@
  * Every status is kept, cancelled included: each cancelled document has a credit
  * note reversing it, and dropping either half moves the total.
  */
-import { createServerFn } from "@tanstack/react-start";
-
-/** Same shape as the client statement: a page to print, not a file. */
+/** Same shape as the client statement: markup the endpoint renders to a PDF. */
 export type NaCommissionStatementDocument = {
   readable_id: string;
   house_code: string;
-  /** The `<title>`, which browsers use as the default PDF name. */
+  /** The document's own name, which the endpoint puts in Content-Disposition. */
+  filename: string;
+  /** The `<title>`, so the PDF carries one too. */
   title: string;
   /** The document's markup — a `.naboo-doc` element, ready to inject. */
   body_html: string;
@@ -205,17 +205,28 @@ function parseJsonArray<T>(json: unknown): T[] {
   }
 }
 
-export const getNaCommissionDocument = createServerFn({ method: "POST" })
-  .validator((input: { readable_id: string; house_code: string }) => {
-    const ref = (input?.readable_id ?? "").trim().toUpperCase();
-    const house = (input?.house_code ?? "").trim().toUpperCase();
-    if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(ref)) throw new Error("Invalid booking reference");
-    if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(house)) throw new Error("Invalid provider code");
-    return { readable_id: ref, house_code: house };
-  })
-  .handler(async ({ data }): Promise<NaCommissionStatementDocument> => {
-    const { requireTracker } = await import("./session.server");
-    await requireTracker("na");
+/**
+ * Builds the commission statement for one provider on one booking.
+ *
+ * Called only by GET /api/commission/{ref}/{houseCode}, which applies the tracker gate
+ * before any of this runs. It throws rather than returning a document when the
+ * reconciliation fails, and that sentence is what the button shows.
+ */
+export async function buildNaCommissionStatement(
+  readableId: string,
+  houseCode: string,
+): Promise<NaCommissionStatementDocument> {
+  {
+    const data = {
+      readable_id: readableId.trim().toUpperCase(),
+      house_code: houseCode.trim().toUpperCase(),
+    };
+    if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(data.readable_id)) {
+      throw new Error("Invalid booking reference");
+    }
+    if (!/^[A-Z]-[A-Z0-9]{2,12}$/.test(data.house_code)) {
+      throw new Error("Invalid provider code");
+    }
 
     const { runBigQuery } = await import("./bigquery.server");
     const rows = (await runBigQuery(QUERY, {
@@ -269,15 +280,15 @@ export const getNaCommissionDocument = createServerFn({ method: "POST" })
     if (!rec.ok) throw new Error(rec.reason ?? "The commission figures do not reconcile.");
 
     const contact = emContact(row.em_referent == null ? null : String(row.em_referent));
-    const readableId = data.readable_id;
+    const ref = data.readable_id;
 
     const html = buildCommissionStatementHtml(
       {
         booking: {
-          readable_id: readableId,
+          readable_id: ref,
           client_name: String(row.company_name ?? "—"),
           event: eventLabel(
-            readableId,
+            ref,
             row.event_name == null ? null : String(row.event_name),
             row.start_date == null ? null : String(row.start_date),
             row.end_date == null ? null : String(row.end_date),
@@ -300,12 +311,15 @@ export const getNaCommissionDocument = createServerFn({ method: "POST" })
       { contact: { email: contact.email, name: contact.name } },
     );
 
+    const filename = commissionStatementFilename(ref, data.house_code, generatedOn);
     return {
-      readable_id: readableId,
+      readable_id: ref,
       house_code: String(row.house_code ?? data.house_code),
-      title: printTitle(commissionStatementFilename(readableId, data.house_code, generatedOn)),
+      filename,
+      title: printTitle(filename),
       body_html: html,
       css: DOCUMENT_CSS,
       generated_on: generatedOn,
     };
-  });
+  }
+}

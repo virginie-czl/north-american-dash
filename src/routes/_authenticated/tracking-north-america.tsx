@@ -19,6 +19,12 @@ import {
 } from "@/lib/na-commission-requests";
 import { fmtAge } from "@/lib/card-tracking";
 import {
+  commissionStatementUrl,
+  statementUrl,
+  useDocumentDownload,
+  type DocumentDownload,
+} from "@/lib/use-document-download";
+import {
   RECOVERY_GRACE_DAYS,
   naClientRecovery,
   naClientContactFor,
@@ -96,10 +102,11 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
   ExternalLink,
+  Loader2,
   Lock,
   MessageSquare,
-  Printer,
   ReceiptText,
   RefreshCw,
   Search,
@@ -689,6 +696,7 @@ function NaPage() {
   const { data: gmailConnection } = useGmailConnection();
   // What the team has already sent. Every button that opens an email checks it, so
   // nobody is offered a chase a colleague has already made.
+  const download = useDocumentDownload();
   const { data: recoveryLog } = useRecoveryLog();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const commissionRefundDialog = useNaCommissionRequestDialog();
@@ -1500,7 +1508,7 @@ function NaPage() {
                         Back office
                       </a>
                     )}
-                    <StatementButton eventRef={selRef} />
+                    <StatementButton eventRef={selRef} download={download} />
                     {/* Same targets as the list-level button, narrowed to this booking. */}
                     {(() => {
                       if (!gmailConnection?.connected) return null;
@@ -1664,6 +1672,7 @@ function NaPage() {
                 {detailTab === "partners" && (
                   <PartnerSectionCard
                     id={selRef}
+                    download={download}
                     partners={selPartners}
                     totals={selTotals}
                     actionFor={actionFor}
@@ -1710,7 +1719,7 @@ function NaPage() {
                         Client invoicing
                         {/* The statement is the client-facing view of this very table. */}
                         <span className="ml-auto">
-                          <StatementButton eventRef={selRef} tone="primary" />
+                          <StatementButton eventRef={selRef} download={download} tone="primary" />
                         </span>
                       </header>
                       {selInvoices.length === 0 ? (
@@ -2224,6 +2233,7 @@ function PartnerSectionCard({
   cardApprovedCodes,
   onRequest,
   sentFor,
+  download,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
@@ -2234,6 +2244,8 @@ function PartnerSectionCard({
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
   /** The recovery email already sent to this provider on this booking, if any. */
   sentFor: (partner: ReturnType<typeof parseNaPartners>[number]) => RecoverySend | undefined;
+  /** Shared with the page so only the card being downloaded shows a spinner. */
+  download: DocumentDownload;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
@@ -2453,20 +2465,22 @@ function PartnerSectionCard({
                   </button>
                 )}
                 {/* Only where there is something to consolidate: a provider with no
-                  commission document would open an empty page. */}
+                  commission document would produce an empty page. Keyed by provider, so
+                  one card's spinner never lights up another's. */}
                 {!prov && (p.commission_doc_count ?? 0) > 0 && p.house_code && (
-                  <a
-                    href={`/commission/${encodeURIComponent(id)}/${encodeURIComponent(p.house_code)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium text-[#4B5563] no-underline underline-offset-2 hover:text-navy hover:underline"
-                  >
-                    <Printer className="h-3 w-3" aria-hidden="true" />
-                    Commission statement
-                  </a>
+                  <CommissionStatementButton
+                    eventRef={id}
+                    houseCode={p.house_code}
+                    download={download}
+                  />
                 )}
               </span>
             </div>
+            {p.house_code && download.stateFor(`${id}::${p.house_code}`) === "error" && (
+              <p role="alert" className="basis-full text-[11px] leading-relaxed text-rose-800">
+                Download failed: {download.error?.message}
+              </p>
+            )}
           </div>
         );
       })}
@@ -2514,35 +2528,109 @@ function PartnerSectionCard({
 }
 
 /**
- * Opens the client statement of account for one booking.
+ * Downloads the client statement of account for one booking.
  *
- * A link rather than a download: the statement is a page, printed by the browser,
- * and it reads BigQuery when it loads — so there is nothing cached to hand out and
- * no stale copy to guard against. The tab it opens carries the intended file name
- * as its title, which is what the print dialog offers to save it as.
+ * The server renders it in Chromium and answers with the file, so the whole wait
+ * belongs to this button: disabled and spinning while it runs, saying "Rendering the
+ * document…" once the wait is long enough to look like a hang, confirming when the file
+ * has landed, and showing the reason in full when it has not.
  */
 function StatementButton({
   eventRef,
+  download,
   tone = "secondary",
 }: {
   eventRef: string;
+  download: DocumentDownload;
   tone?: "secondary" | "primary";
 }) {
   if (!eventRef) return null;
+  const state = download.stateFor(eventRef);
+  const pending = state === "pending";
   const className =
     tone === "primary"
-      ? "inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-[#9ed4de] bg-white px-2.5 text-[11px] font-semibold normal-case tracking-normal text-teal-800 no-underline"
-      : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 no-underline";
+      ? "inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-[#9ed4de] bg-white px-2.5 text-[11px] font-semibold normal-case tracking-normal text-teal-800 disabled:opacity-70"
+      : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 disabled:opacity-70";
   return (
-    <a
-      href={`/statement/${encodeURIComponent(eventRef)}`}
-      target="_blank"
-      rel="noreferrer"
-      className={className}
-    >
-      <Printer className="h-3.5 w-3.5" aria-hidden="true" />
-      Download statement
-    </a>
+    <span className="inline-flex flex-col gap-1">
+      <span className="inline-flex items-center gap-2">
+        <button
+          type="button"
+          // Disabled while it runs: a second click is a second Chromium page for a file
+          // that is already on its way.
+          disabled={pending}
+          onClick={() => download.start(eventRef, statementUrl(eventRef))}
+          className={className}
+        >
+          {pending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          ) : state === "done" ? (
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          {pending ? "Preparing…" : state === "done" ? "Downloaded" : "Download statement"}
+        </button>
+        {state === "error" && (
+          <span
+            role="alert"
+            title={download.error?.message}
+            className="max-w-[280px] truncate text-[11px] font-normal normal-case tracking-normal text-rose-800"
+          >
+            Download failed: {download.error?.message}
+          </span>
+        )}
+      </span>
+      {pending && download.slow && (
+        <span className="text-[11px] font-normal normal-case tracking-normal text-slate-500">
+          Rendering the document…
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Downloads one provider's commission statement.
+ *
+ * Same states as the client statement, keyed on the booking and the provider together:
+ * a partner card must spin only for its own download. The server refuses to render when
+ * the commissionable services do not add up to the commission claimed, and that
+ * sentence is what lands here — never a file containing an error page.
+ */
+function CommissionStatementButton({
+  eventRef,
+  houseCode,
+  download,
+}: {
+  eventRef: string;
+  houseCode: string;
+  download: DocumentDownload;
+}) {
+  const key = `${eventRef}::${houseCode}`;
+  const state = download.stateFor(key);
+  const pending = state === "pending";
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => download.start(key, commissionStatementUrl(eventRef, houseCode))}
+        className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium text-[#4B5563] underline-offset-2 hover:text-navy hover:underline disabled:text-[#9CA3AF] disabled:no-underline"
+      >
+        {pending ? (
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+        ) : state === "done" ? (
+          <Check className="h-3 w-3" aria-hidden="true" />
+        ) : (
+          <Download className="h-3 w-3" aria-hidden="true" />
+        )}
+        {pending ? "Preparing…" : state === "done" ? "Downloaded" : "Commission statement"}
+      </button>
+      {pending && download.slow && (
+        <span className="text-[11px] text-slate-500">Rendering the document…</span>
+      )}
+    </span>
   );
 }
 

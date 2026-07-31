@@ -17,8 +17,6 @@ import { Route as AuthenticatedTrackingNorthAmericaRouteImport } from './routes/
 import { Route as AuthenticatedNaCommissionsRouteImport } from './routes/_authenticated/na-commissions'
 import { Route as AuthenticatedCardTrackingNaRouteImport } from './routes/_authenticated/card-tracking-na'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
-import { Route as AuthenticatedStatementRefRouteImport } from './routes/_authenticated/statement.$ref'
-import { Route as AuthenticatedCommissionRefHouseCodeRouteImport } from './routes/_authenticated/commission.$ref.$houseCode'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -62,18 +60,6 @@ const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedStatementRefRoute =
-  AuthenticatedStatementRefRouteImport.update({
-    id: '/statement/$ref',
-    path: '/statement/$ref',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
-const AuthenticatedCommissionRefHouseCodeRoute =
-  AuthenticatedCommissionRefHouseCodeRouteImport.update({
-    id: '/commission/$ref/$houseCode',
-    path: '/commission/$ref/$houseCode',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
@@ -83,8 +69,6 @@ export interface FileRoutesByFullPath {
   '/na-commissions': typeof AuthenticatedNaCommissionsRoute
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
-  '/statement/$ref': typeof AuthenticatedStatementRefRoute
-  '/commission/$ref/$houseCode': typeof AuthenticatedCommissionRefHouseCodeRoute
 }
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
@@ -94,8 +78,6 @@ export interface FileRoutesByTo {
   '/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/veolia': typeof AuthenticatedVeoliaRoute
   '/': typeof AuthenticatedIndexRoute
-  '/statement/$ref': typeof AuthenticatedStatementRefRoute
-  '/commission/$ref/$houseCode': typeof AuthenticatedCommissionRefHouseCodeRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -107,8 +89,6 @@ export interface FileRoutesById {
   '/_authenticated/tracking-north-america': typeof AuthenticatedTrackingNorthAmericaRoute
   '/_authenticated/veolia': typeof AuthenticatedVeoliaRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
-  '/_authenticated/statement/$ref': typeof AuthenticatedStatementRefRoute
-  '/_authenticated/commission/$ref/$houseCode': typeof AuthenticatedCommissionRefHouseCodeRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -120,8 +100,6 @@ export interface FileRouteTypes {
     | '/na-commissions'
     | '/tracking-north-america'
     | '/veolia'
-    | '/statement/$ref'
-    | '/commission/$ref/$houseCode'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/auth'
@@ -131,8 +109,6 @@ export interface FileRouteTypes {
     | '/tracking-north-america'
     | '/veolia'
     | '/'
-    | '/statement/$ref'
-    | '/commission/$ref/$houseCode'
   id:
     | '__root__'
     | '/_authenticated'
@@ -143,8 +119,6 @@ export interface FileRouteTypes {
     | '/_authenticated/tracking-north-america'
     | '/_authenticated/veolia'
     | '/_authenticated/'
-    | '/_authenticated/statement/$ref'
-    | '/_authenticated/commission/$ref/$houseCode'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -210,20 +184,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/statement/$ref': {
-      id: '/_authenticated/statement/$ref'
-      path: '/statement/$ref'
-      fullPath: '/statement/$ref'
-      preLoaderRoute: typeof AuthenticatedStatementRefRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/commission/$ref/$houseCode': {
-      id: '/_authenticated/commission/$ref/$houseCode'
-      path: '/commission/$ref/$houseCode'
-      fullPath: '/commission/$ref/$houseCode'
-      preLoaderRoute: typeof AuthenticatedCommissionRefHouseCodeRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
   }
 }
 
@@ -234,8 +194,6 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedTrackingNorthAmericaRoute: typeof AuthenticatedTrackingNorthAmericaRoute
   AuthenticatedVeoliaRoute: typeof AuthenticatedVeoliaRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
-  AuthenticatedStatementRefRoute: typeof AuthenticatedStatementRefRoute
-  AuthenticatedCommissionRefHouseCodeRoute: typeof AuthenticatedCommissionRefHouseCodeRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -246,9 +204,6 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
     AuthenticatedTrackingNorthAmericaRoute,
   AuthenticatedVeoliaRoute: AuthenticatedVeoliaRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
-  AuthenticatedStatementRefRoute: AuthenticatedStatementRefRoute,
-  AuthenticatedCommissionRefHouseCodeRoute:
-    AuthenticatedCommissionRefHouseCodeRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
