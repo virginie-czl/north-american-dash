@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState, useEffect, Fragment } from "react";
+import { useCallback, useMemo, useState, useEffect, Fragment } from "react";
 import {
   getSlaRows,
   parsePartners,
@@ -35,6 +35,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TagFilterSelect } from "@/components/tag-filter-select";
+import {
+  GROUP_META,
+  GROUP_ORDER,
+  MOVE_PILL,
+  isRecover,
+  needsAMove,
+  type Move,
+  type MoveGroup,
+} from "@/lib/tracker-move";
 import {
   Table,
   TableBody,
@@ -453,6 +462,7 @@ function SlaPage() {
   const [kindFilter, setKindFilter] = useState<string>("no_turnkey");
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
+  const [scope, setScope] = useState<"move" | "breached" | "all">("move");
   const [sortKey, setSortKey] = useState<string>("booking_created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -932,49 +942,128 @@ function SlaPage() {
   // Presentation only: every figure, tag and email action below comes from the
   // same hooks and helpers as before. The list groups rows by the outreach state
   // that partnerOutreach already computes; nothing is recomputed here.
-  const selected = useMemo(() => {
-    if (filtered.length === 0) return null;
-    const hit = filtered.find(
-      (x) => (x.row.client_request_id ?? x.row.readable_id ?? "") === selectedId,
-    );
-    return hit ?? filtered[0];
-  }, [filtered, selectedId]);
+  // The shared move model, L'Oreal flavour. Same precedence as Marketplace NA —
+  // blocked → ours → partner → waiting → client → done — expressed against this
+  // page's own signals (PO presence, the two SLAs, the outreach state).
+  const moveFor = useCallback(
+    (r: SlaRow, ps: PartnerLine[], iv: InvoiceLine[]): Move => {
+      const ref = r.readable_id ?? r.client_request_id ?? "";
+      const owed = r.partner_reste_a_decaisser_ttc ?? 0;
+      const clientOut = r.client_reste_a_encaisser_ttc ?? 0;
+      const money = (v: number) => fmtCurrency(v, r.currency);
+
+      if (!r.purchase_order_number) {
+        return {
+          group: "blocked",
+          label: "Blocked — no PO",
+          headline: owed > 0.01 ? money(owed) : "—",
+          headlineLabel: "not invoiced",
+        };
+      }
+
+      const out = partnerOutreach(ps, ref, true);
+      const label = out?.label ?? "";
+
+      if (owed > 0.01 && label.includes("Payout")) {
+        return {
+          group: "ours",
+          label: "Pay the partner",
+          headline: money(owed),
+          headlineLabel: "partner to pay",
+        };
+      }
+      if (label.includes("Contact TBD")) {
+        return {
+          group: "partner",
+          label: "Ask for details",
+          headline: owed > 0.01 ? money(owed) : "—",
+          headlineLabel: "partner to pay",
+        };
+      }
+      if (label.includes("Contact")) {
+        return {
+          group: "waiting",
+          label: "Waiting on a reply",
+          headline: owed > 0.01 ? money(owed) : "—",
+          headlineLabel: "partner to pay",
+        };
+      }
+      if (clientOut > 0.01) {
+        return {
+          group: "client",
+          label: "Client to pay",
+          headline: money(clientOut),
+          headlineLabel: "client outstanding",
+        };
+      }
+      return {
+        group: "done",
+        label: "Nothing to do",
+        headline: "—",
+        headlineLabel: "settled",
+      };
+    },
+    [statusMap, factsMap],
+  );
+
+  /** Either SLA breached — drives the scope chip and the extra list pill. */
+  const breachOf = useCallback((r: SlaRow, ps: PartnerLine[], iv: InvoiceLine[]): string | null => {
+    const inv = invoicingSla(r, iv);
+    if (inv.variant === "overdue") return inv.label;
+    const po = payoutSla(r, ps);
+    if (po.variant === "overdue") return po.label;
+    const pay = paymentStatus(r, iv);
+    if (pay.variant === "overdue") return pay.label;
+    return null;
+  }, []);
+
+  const withMove = useMemo(
+    () =>
+      filtered.map((item) => ({
+        ...item,
+        move: moveFor(item.row, item.partners, item.invoices),
+        breach: breachOf(item.row, item.partners, item.invoices),
+      })),
+    [filtered, moveFor, breachOf],
+  );
+
+  const scoped = useMemo(() => {
+    if (scope === "breached") return withMove.filter((x) => x.breach != null);
+    if (scope === "move") return withMove.filter((x) => needsAMove(x.move.group));
+    return withMove;
+  }, [withMove, scope]);
+
+  const scopeCounts = useMemo(
+    () => ({
+      move: withMove.filter((x) => needsAMove(x.move.group)).length,
+      breached: withMove.filter((x) => x.breach != null).length,
+      all: withMove.length,
+    }),
+    [withMove],
+  );
 
   const groups = useMemo(() => {
-    const buckets: Array<{
-      key: string;
-      title: string;
-      dot: string;
-      rows: typeof filtered;
-    }> = [
-      { key: "breached", title: "Breached", dot: "#dc2626", rows: [] },
-      { key: "todo", title: "Contact to do", dot: "#f59e0b", rows: [] },
-      { key: "waiting", title: "Waiting on partner", dot: "#0ea5e9", rows: [] },
-      { key: "ours", title: "Ours to close", dot: "#6366f1", rows: [] },
-      { key: "done", title: "Nothing to do", dot: "#9ca3af", rows: [] },
-    ];
-    const put = (k: string, item: (typeof filtered)[number]) =>
-      buckets.find((b) => b.key === k)!.rows.push(item);
-
-    for (const item of filtered) {
-      const { row: r, partners: ps, invoices: iv } = item;
-      const isBreached =
-        paymentStatus(r, iv).variant === "overdue" ||
-        payoutSla(r, ps).variant === "overdue" ||
-        invoicingSla(r, iv).variant === "overdue";
-      if (isBreached) {
-        put("breached", item);
-        continue;
-      }
-      const ref = r.readable_id ?? r.client_request_id ?? "";
-      const out = partnerOutreach(ps, ref, Boolean(r.purchase_order_number));
-      if (out?.label.includes("Contact TBD")) put("todo", item);
-      else if (out?.label.includes("Contact")) put("waiting", item);
-      else if (out?.label.includes("Payout")) put("ours", item);
-      else put("done", item);
+    const byGroup = new Map<MoveGroup, typeof scoped>();
+    for (const item of scoped) {
+      const list = byGroup.get(item.move.group) ?? [];
+      list.push(item);
+      byGroup.set(item.move.group, list);
     }
-    return buckets.filter((b) => b.rows.length > 0);
-  }, [filtered, statusMap, factsMap]);
+    return GROUP_ORDER.filter((g) => (byGroup.get(g)?.length ?? 0) > 0).map((g) => ({
+      key: g,
+      title: g === "blocked" ? "Blocked — no PO" : GROUP_META[g].title,
+      dot: GROUP_META[g].dot,
+      rows: byGroup.get(g)!,
+    }));
+  }, [scoped]);
+
+  const selected = useMemo(() => {
+    if (scoped.length === 0) return null;
+    const hit = scoped.find(
+      (x) => (x.row.client_request_id ?? x.row.readable_id ?? "") === selectedId,
+    );
+    return hit ?? scoped[0];
+  }, [scoped, selectedId]);
 
   const sel = selected?.row ?? null;
   const selPartners = selected?.partners ?? [];
@@ -1071,14 +1160,29 @@ function SlaPage() {
             </div>
 
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              <span className="rounded-full bg-slate-100 px-2.5 py-[3px] text-[11.5px] text-slate-600">
-                {filtered.length} / {rows.length} events
-              </span>
-              {breached.length > 0 && (
-                <span className="rounded-full bg-rose-100 px-2.5 py-[3px] text-[11.5px] font-semibold text-rose-800">
-                  {breached.length} breached
-                </span>
-              )}
+              {(
+                [
+                  { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
+                  { key: "breached" as const, label: "Breached", count: scopeCounts.breached },
+                  { key: "all" as const, label: "All", count: scopeCounts.all },
+                ] as const
+              ).map((s) => {
+                const active = scope === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    onClick={() => setScope(s.key)}
+                    className={`inline-flex h-[26px] items-center rounded-full px-2.5 text-[11.5px] ${
+                      active
+                        ? "bg-navy font-semibold text-white"
+                        : "bg-[#F3F4F6] font-medium text-[#4B5563]"
+                    }`}
+                  >
+                    {s.label} {s.count}
+                  </button>
+                );
+              })}
               {gmailConnection?.connected && incompleteTargets.length > 0 && (
                 <button
                   type="button"
@@ -1132,7 +1236,7 @@ function SlaPage() {
                 Loading data from BigQuery…
               </p>
             )}
-            {!isLoading && filtered.length === 0 && (
+            {!isLoading && scoped.length === 0 && (
               <div className="flex flex-col items-center gap-2.5 px-12 py-16 text-center">
                 <SearchX className="h-6 w-6 text-slate-400" aria-hidden="true" />
                 <span className="font-display text-base font-bold">
@@ -1166,19 +1270,13 @@ function SlaPage() {
                     const id = r.client_request_id ?? r.readable_id ?? "";
                     const ref = r.readable_id ?? id;
                     const isSel = selRef === ref;
-                    const out = partnerOutreach(
-                      item.partners,
-                      ref,
-                      Boolean(r.purchase_order_number),
-                    );
-                    const owed = r.partner_reste_a_decaisser_ttc ?? 0;
                     return (
                       <button
                         key={id}
                         type="button"
                         onClick={() => setSelectedId(id)}
                         className={`flex w-full gap-2.5 border-b border-slate-100 px-4 py-2.5 text-left ${
-                          isSel ? "bg-naboo/25" : "hover:bg-slate-50"
+                          isSel ? "bg-[#fafaf8]" : "hover:bg-[#fafaf8]"
                         }`}
                         style={{ borderLeft: `3px solid ${isSel ? "#101f34" : "transparent"}` }}
                       >
@@ -1196,18 +1294,28 @@ function SlaPage() {
                             {item.partners.length} partner
                             {item.partners.length === 1 ? "" : "s"}
                           </span>
-                          <span className="mt-1 flex flex-wrap gap-1">
-                            {out && <span className={`pill ${out.cls}`}>{out.label}</span>}
-                            {!r.purchase_order_number && (
-                              <span className="pill bg-slate-100 text-slate-600">No PO</span>
+                          <span className="mt-[5px] flex flex-wrap gap-1">
+                            <span
+                              className={`rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+                                MOVE_PILL[item.move.group]
+                              }`}
+                            >
+                              {item.move.label}
+                            </span>
+                            {item.breach && (
+                              <span className="rounded-full bg-[#FEE2E2] px-2 py-[2px] text-[10.5px] font-semibold text-[#991B1B]">
+                                {item.breach}
+                              </span>
                             )}
                           </span>
                         </span>
                         <span className="flex-none whitespace-nowrap text-right">
                           <span className="block cell-mono text-[13px] font-semibold">
-                            {owed > 0.01 ? fmtCurrency(owed, r.currency) : "—"}
+                            {item.move.headline}
                           </span>
-                          <span className="block text-[10.5px] text-slate-400">owed</span>
+                          <span className="block text-[10.5px] text-slate-400">
+                            {item.move.headlineLabel}
+                          </span>
                           <span className="mt-1.5 block text-[10.5px] text-slate-400">
                             {fmtDate(r.booking_date)}
                           </span>
