@@ -462,7 +462,9 @@ function NaPage() {
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedRef, setSelectedRef] = useState<string>("");
-  const [scope, setScope] = useState<"move" | "commission" | "refund" | "all">("move");
+  const [scope, setScope] = useState<"move" | "commission" | "refund" | "client_refund" | "all">(
+    "move",
+  );
   const [detailTab, setDetailTab] = useState<
     "partners" | "invoices" | "emails" | "docs" | "comments"
   >("partners");
@@ -859,6 +861,28 @@ function NaPage() {
         };
       }
 
+      // A negative balance means the client paid more than we invoiced: we owe
+      // them the difference. Same fortnight of grace as the partner recoveries —
+      // a late invoice often closes the gap on its own.
+      const clientCredit = -(r.balance_ccy ?? 0);
+      if (clientCredit > 0.01) {
+        const age = daysSinceEvent(r);
+        if (age != null && age < 14) {
+          return {
+            group: "waiting",
+            label: "Nothing to do yet — pending",
+            headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
+            headlineLabel: `pending ${14 - age}d ${ccyLabel(r.currency_client)}`,
+          };
+        }
+        return {
+          group: "ours",
+          label: `Refund the client ${fmtAmount(clientCredit)}`,
+          headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
+          headlineLabel: `client to refund ${ccyLabel(r.currency_client)}`,
+        };
+      }
+
       return {
         group: "done",
         label: "Nothing to do",
@@ -886,7 +910,9 @@ function NaPage() {
     () => ({
       move: withMove.filter((x) => needsAMove(x.move.group)).length,
       commission: withMove.filter((x) => x.move.headlineLabel.includes("commission")).length,
-      refund: withMove.filter((x) => x.move.headlineLabel.includes("refund")).length,
+      refund: withMove.filter((x) => x.move.headlineLabel.includes("refund to recover")).length,
+      clientRefund: withMove.filter((x) => x.move.headlineLabel.includes("client to refund"))
+        .length,
       all: withMove.length,
     }),
     [withMove],
@@ -1007,6 +1033,11 @@ function NaPage() {
                     count: scopeCounts.commission,
                   },
                   { key: "refund" as const, label: "Refund", count: scopeCounts.refund },
+                  {
+                    key: "client_refund" as const,
+                    label: "Client to refund",
+                    count: scopeCounts.clientRefund,
+                  },
                   { key: "all" as const, label: "All", count: scopeCounts.all },
                 ] as const
               ).map((s) => {
