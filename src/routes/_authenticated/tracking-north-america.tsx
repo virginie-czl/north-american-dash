@@ -1291,10 +1291,6 @@ function NaPage() {
                     totals={selTotals}
                     actionFor={actionFor}
                     factsMap={factsMap}
-                    financialSummaries={financialSummaries}
-                    gmailConnected={gmailConnection?.connected === true}
-                    onSummarize={(input) => summarize.mutate(input)}
-                    summarizing={summarize.isPending ? (summarize.variables ?? null) : null}
                     onRequest={(p) => {
                       // Same targets the list-level button builds, narrowed to
                       // this partner — no new email logic.
@@ -1380,16 +1376,48 @@ function NaPage() {
                 )}
                 {detailTab === "emails" &&
                   (gmailConnection?.connected ? (
-                    <PartnerEmails
-                      eventRef={selRef}
-                      partners={selPartners
+                    <div className="flex flex-col gap-3">
+                      {/* The AI recap belongs with the threads it summarises, not on
+                          the payment card. */}
+                      {selPartners
                         .filter((p) => !p.is_provision && p.email)
-                        .map((p) => ({
-                          name: p.name,
-                          email: p.email,
-                          owed: p.outstanding != null ? fmtAmount(p.outstanding) : null,
-                        }))}
-                    />
+                        .map((p, i) => {
+                          const key = partnerKey(p.name ?? p.email ?? "");
+                          return (
+                            <div
+                              key={`${selRef}-sum-${i}`}
+                              className="rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)]"
+                            >
+                              <div className="text-sm font-semibold">{p.name ?? p.email}</div>
+                              <NaFinancialSummaryBox
+                                existing={financialSummaries?.get(`${selRef}::${key}`)}
+                                loading={
+                                  summarize.isPending &&
+                                  summarize.variables?.event_ref === selRef &&
+                                  summarize.variables?.partner_name === (p.name ?? p.email ?? "")
+                                }
+                                onSummarize={() =>
+                                  summarize.mutate({
+                                    event_ref: selRef,
+                                    partner_name: p.name ?? p.email ?? "",
+                                    partner_email: p.email,
+                                  })
+                                }
+                              />
+                            </div>
+                          );
+                        })}
+                      <PartnerEmails
+                        eventRef={selRef}
+                        partners={selPartners
+                          .filter((p) => !p.is_provision && p.email)
+                          .map((p) => ({
+                            name: p.name,
+                            email: p.email,
+                            owed: p.outstanding != null ? fmtAmount(p.outstanding) : null,
+                          }))}
+                      />
+                    </div>
                   ) : (
                     <p className="rounded-lg border border-border bg-white px-4 py-8 text-center text-[12.5px] text-slate-600">
                       Connectez Gmail depuis le menu de votre compte pour retrouver vos échanges
@@ -1748,10 +1776,6 @@ function PartnerSectionCard({
   totals,
   actionFor,
   factsMap,
-  financialSummaries,
-  gmailConnected,
-  onSummarize,
-  summarizing,
   onRequest,
 }: {
   id: string;
@@ -1759,14 +1783,6 @@ function PartnerSectionCard({
   totals: ReturnType<typeof sumPartners>;
   actionFor: ReturnType<typeof useActionIndex>["actionFor"];
   factsMap: ReturnType<typeof useActionIndex>["factsMap"];
-  financialSummaries: Map<string, NaFinancialSummary> | undefined;
-  gmailConnected: boolean;
-  onSummarize: (input: {
-    event_ref: string;
-    partner_name: string;
-    partner_email: string | null;
-  }) => void;
-  summarizing: { event_ref: string; partner_name: string; partner_email: string | null } | null;
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
@@ -1859,22 +1875,6 @@ function PartnerSectionCard({
                     hideTax
                     hideCardPending
                   />
-                  {gmailConnected && (
-                    <NaFinancialSummaryBox
-                      existing={financialSummaries?.get(`${id}::${key}`)}
-                      loading={
-                        summarizing?.event_ref === id &&
-                        summarizing?.partner_name === (p.name ?? p.email ?? "")
-                      }
-                      onSummarize={() =>
-                        onSummarize({
-                          event_ref: id,
-                          partner_name: p.name ?? p.email ?? "",
-                          partner_email: p.email,
-                        })
-                      }
-                    />
-                  )}
                 </>
               )}
             </div>
