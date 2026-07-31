@@ -54,6 +54,8 @@ export interface NaRow {
   gmv_client_ccy: number | null;
   gmv_client_eur: number | null;
   invoiced_ccy: number | null;
+  /** Our service charge billed to the client, TTC. */
+  client_service_fees_ttc: number | null;
   paid_ccy: number | null;
   balance_ccy: number | null;
   partners_json: string | null;
@@ -153,7 +155,11 @@ invoiced_client AS (
   SELECT
     i.clientRequestReadableId AS rid,
     ROUND(SUM(IF(li.line_type IN ('SERVICE', 'FEE_CLIENT'), li.total_incl_taxes, 0)) / 100, 2)
-      AS invoiced_ttc
+      AS invoiced_ttc,
+    -- Our service charge to the client. It is revenue, not money held on behalf
+    -- of the providers, so it is taken out of the cash available to pay them.
+    ROUND(SUM(IF(li.line_type = 'FEE_CLIENT', li.total_incl_taxes, 0)) / 100, 2)
+      AS client_service_fees_ttc
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
   JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
     ON li.invoice_id = i.invoice_id
@@ -352,6 +358,7 @@ base AS (
     COALESCE(cpt.gmv_client_ccy, CAST(e.live_gross_gmv_ttc_clcurrency AS FLOAT64), fi.gmv) AS gmv_client_ccy,
     CAST(e.live_gross_gmv_ttc_eur AS FLOAT64) AS gmv_client_eur,
     COALESCE(ic.invoiced_ttc, cpt.invoiced_ccy, CAST(ar.total_invoiced_ccy AS FLOAT64)) AS invoiced_ccy,
+    IFNULL(ic.client_service_fees_ttc, 0) AS client_service_fees_ttc,
     COALESCE(CAST(ar.total_paid_client_ccy AS FLOAT64), fi.paid) AS paid_ccy,
     CAST(ar.balance_client_ccy AS FLOAT64) AS ar_balance_ccy,
     TO_JSON_STRING(
@@ -384,6 +391,7 @@ base AS (
 SELECT
   readable_id, client_request_id, company_name, sales_referent, em_referent, days_before_start,
   currency_client, event_name, start_date, end_date, event_type, transaction_kind, participants, billing_entity, booking_url,
+  client_service_fees_ttc,
   gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy, invoices_json,
   -- What is still to be collected from the client: invoiced less received.
   -- Not gmv - paid: the whole-event total includes amounts not yet invoiced, so

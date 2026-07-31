@@ -756,6 +756,19 @@ function NaPage() {
       const refundDue = [...claw.refund.values()].reduce((a, b) => a + b, 0);
       if (commissionDue > 0.01 || refundDue > 0.01) {
         const both = commissionDue > 0.01 && refundDue > 0.01;
+        // Chasing a commission or a refund before the dust settles is premature:
+        // amounts still move in the fortnight after an event.
+        const age = daysSinceEvent(r);
+        if (age != null && age < 14) {
+          return {
+            group: "waiting",
+            label: "Nothing to do yet — pending",
+            headline: both
+              ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
+              : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
+            headlineLabel: `pending ${14 - age}d ${ccyLabel(ccy)}`,
+          };
+        }
         return {
           group: "ours",
           label: both
@@ -794,7 +807,14 @@ function NaPage() {
             { taxTracked: false },
           ),
         );
-        const canPay = actions.some((a) => a.code === "ours_pay");
+        // Having the means is not enough: the booking must actually hold enough
+        // client cash to settle at least one provider, otherwise the next move is
+        // the client's.
+        const cash = availableCash(r, live);
+        const coversSomeone = live.some(
+          (p) => (p.outstanding ?? 0) > 0.01 && cash + 0.01 >= (p.outstanding ?? 0),
+        );
+        const canPay = actions.some((a) => a.code === "ours_pay") && coversSomeone;
         const waiting = actions.some((a) => a.code === "await_reply");
         if (canPay) {
           return {
@@ -808,6 +828,16 @@ function NaPage() {
           return {
             group: "waiting",
             label: "Waiting on a reply",
+            headline: fmt(payTotal),
+            headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+          };
+        }
+        // We hold the means but not the cash: nothing moves until the client pays,
+        // so this is their move even though a provider is owed.
+        if (!coversSomeone) {
+          return {
+            group: "client",
+            label: "Client to pay",
             headline: fmt(payTotal),
             headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
           };
@@ -1190,7 +1220,7 @@ function NaPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-5">
+                <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-6">
                   {[
                     {
                       label: "Client GMV",
@@ -1215,6 +1245,17 @@ function NaPage() {
                           value={sel.balance_ccy}
                           currency={sel.currency_client}
                           kind="danger"
+                        />
+                      ),
+                    },
+                    {
+                      label: "Available cash",
+                      side: "partner" as const,
+                      node: (
+                        <Money
+                          value={availableCash(sel, selPartners)}
+                          currency={sel.currency_client}
+                          kind={availableCash(sel, selPartners) > 0.01 ? "neutral" : "muted"}
                         />
                       ),
                     },
@@ -1448,6 +1489,27 @@ function NaPage() {
       )}
     </div>
   );
+}
+
+/**
+ * Cash actually available on a booking to pay its providers: what the client has
+ * paid, less what we have already disbursed, less our own service charge — that
+ * fee is revenue, not money held on their behalf.
+ */
+function availableCash(r: NaRow, partners: NaPartnerLine[]): number {
+  const received = r.paid_ccy ?? 0;
+  const disbursed = partners.filter((p) => !p.is_provision).reduce((t, p) => t + (p.paid ?? 0), 0);
+  const ourFee = r.client_service_fees_ttc ?? 0;
+  return received - disbursed - ourFee;
+}
+
+/** Days since the event ended (or started, when there is no end date). */
+function daysSinceEvent(r: NaRow): number | null {
+  const raw = r.end_date ?? r.start_date;
+  if (!raw) return null;
+  const t = Date.parse(raw);
+  if (Number.isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 86_400_000);
 }
 
 function Kpi({ title, value }: { title: string; value: string }) {
