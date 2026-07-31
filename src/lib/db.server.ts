@@ -68,6 +68,24 @@ const SCHEMA_STATEMENTS = [
   // Access registry. A verified @naboo.app Google account is necessary but not
   // sufficient: the first sign-in creates a pending row that an admin must approve.
   // Approval is recorded once and never asked again.
+  // Cached BigQuery payloads. The trackers re-run heavy multi-CTE queries on every
+  // page load; finance data moves slowly enough that a short TTL is invisible,
+  // and the Refresh button forces a recompute when it matters.
+  `CREATE TABLE IF NOT EXISTS query_cache (
+     cache_key text PRIMARY KEY,
+     payload text NOT NULL,
+     computed_at timestamptz NOT NULL DEFAULT now()
+   )`,
+  // Credit-card approvals mirrored out of #finance-paiement-by-card, so a cold
+  // serverless instance does not have to page through the Slack API before the
+  // partner cards can render.
+  `CREATE TABLE IF NOT EXISTS slack_card_approvals (
+     owner_code text PRIMARY KEY,
+     event_ref text,
+     approved_by text,
+     approved_at timestamptz,
+     synced_at timestamptz NOT NULL DEFAULT now()
+   )`,
   `CREATE TABLE IF NOT EXISTS app_users (
      email text PRIMARY KEY,
      name text,

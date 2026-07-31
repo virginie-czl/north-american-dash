@@ -1,8 +1,10 @@
 /**
- * Server function exposing Slack credit-card approvals to the tracker.
+ * Credit-card approvals, served from Postgres rather than from Slack.
  *
- * Returns owner codes only — no amounts, approvers or links, since this feeds a
- * shared sticker. The channel itself remains the source of record.
+ * Reading them live meant a cold serverless instance paged through up to ten
+ * conversations.history calls before the partner cards could render. They are now
+ * mirrored into slack_card_approvals and refreshed on demand — approvals are
+ * append-only, so a mirror that lags by a few minutes costs nothing.
  */
 import { createServerFn } from "@tanstack/react-start";
 
@@ -13,17 +15,58 @@ export type CardApprovalSummary = {
   at: string;
 };
 
+/** Fast path: read the mirror. Never calls Slack. */
 export const fetchCardApprovals = createServerFn({ method: "GET" }).handler(
   async (): Promise<CardApprovalSummary[]> => {
     const { requireSession } = await import("./session.server");
     await requireSession();
-    const { fetchCardApprovals: read } = await import("./slack-cards.server");
-    const approvals = await read();
-    return approvals.map((a) => ({
+    const { db, isoOrNull } = await import("./db.server");
+    const sql = await db();
+    const rows = await sql<
+      {
+        owner_code: string;
+        event_ref: string | null;
+        approved_by: string | null;
+        approved_at: Date | null;
+      }[]
+    >`SELECT owner_code, event_ref, approved_by, approved_at FROM slack_card_approvals`;
+    return rows.map((r) => ({
+      owner_code: r.owner_code,
+      event_ref: r.event_ref,
+      approved_by: r.approved_by,
+      at: isoOrNull(r.approved_at) ?? "",
+    }));
+  },
+);
+
+/** Slow path: page through Slack and refresh the mirror. */
+export const syncCardApprovals = createServerFn({ method: "POST" }).handler(
+  async (): Promise<{ synced: number }> => {
+    const { requireSession } = await import("./session.server");
+    await requireSession();
+    const { fetchCardApprovals: readSlack } = await import("./slack-cards.server");
+    const approvals = await readSlack();
+    if (approvals.length === 0) return { synced: 0 };
+
+    const { db } = await import("./db.server");
+    const sql = await db();
+    const payload = approvals.map((a) => ({
       owner_code: a.ownerCode,
       event_ref: a.eventRef,
       approved_by: a.approvedBy,
-      at: a.at,
+      approved_at: a.at || null,
     }));
+    await sql`
+      INSERT INTO slack_card_approvals (owner_code, event_ref, approved_by, approved_at, synced_at)
+      SELECT x.owner_code, x.event_ref, x.approved_by, x.approved_at, now()
+      FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb)
+        AS x(owner_code text, event_ref text, approved_by text, approved_at timestamptz)
+      ON CONFLICT (owner_code) DO UPDATE SET
+        event_ref = EXCLUDED.event_ref,
+        approved_by = EXCLUDED.approved_by,
+        approved_at = EXCLUDED.approved_at,
+        synced_at = now()
+    `;
+    return { synced: approvals.length };
   },
 );

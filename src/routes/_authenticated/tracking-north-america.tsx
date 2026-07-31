@@ -61,6 +61,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
+import { syncCardApprovals } from "@/lib/slack-cards.functions";
 import { parseNaInvoices } from "@/lib/na.functions";
 import {
   GROUP_META,
@@ -445,7 +446,7 @@ function exportRecoverCsv(
 function NaPage() {
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ["na-rows"],
-    queryFn: () => getNaRows(),
+    queryFn: () => getNaRows({ data: { force: false } }),
     staleTime: 60_000,
   });
 
@@ -466,7 +467,9 @@ function NaPage() {
     "partners" | "invoices" | "emails" | "docs" | "comments"
   >("partners");
 
-  const rows = useMemo(() => data ?? [], [data]);
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+  /** How stale the figures are, so the header can say so. */
+  const cachedAge = data?.cachedAgeSeconds ?? null;
   const { data: commentSummaries } = useCommentSummaries();
 
   const decorated = useMemo(
@@ -602,6 +605,11 @@ function NaPage() {
   const { progress: scanProgress, start: startScan } = useFactScan();
   const commissionRefundDialog = useNaCommissionRequestDialog();
   const queryClient = useQueryClient();
+  // Refreshing the mirror is explicit, so a cold instance never pays for Slack.
+  const syncCards = useMutation({
+    mutationFn: () => syncCardApprovals(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["slack-card-approvals"] }),
+  });
 
   const { data: financialSummaries } = useQuery({
     queryKey: ["na-financial-summaries"],
@@ -696,7 +704,15 @@ function NaPage() {
 
   useRegisterTrackerActions(
     {
-      onRefresh: () => refetch(),
+      // Refresh is the escape hatch from the cache: recompute in BigQuery and
+      // re-sync the Slack approvals, then repopulate every dependent query.
+      onRefresh: async () => {
+        await queryClient.fetchQuery({
+          queryKey: ["na-rows"],
+          queryFn: () => getNaRows({ data: { force: true } }),
+        });
+        syncCards.mutate();
+      },
       isFetching,
       exports: [
         { label: "Export CSV", onClick: () => exportCsv(sorted), disabled: sorted.length === 0 },
@@ -989,6 +1005,16 @@ function NaPage() {
                   Recover from {commissionRefundTargets.length} partner
                   {commissionRefundTargets.length > 1 ? "s" : ""}
                 </button>
+              )}
+              {/* Say when the figures were computed, so a cached page never looks
+                  live when it is not. Refresh in the top bar forces a recompute. */}
+              {cachedAge != null && cachedAge > 30 && (
+                <span
+                  className="rounded-full px-2 py-[3px] text-[11.5px] text-slate-400"
+                  title="Chiffres mis en cache. Rafraîchir recalcule depuis BigQuery et resynchronise les cartes approuvées."
+                >
+                  il y a {cachedAge < 90 ? `${cachedAge} s` : `${Math.round(cachedAge / 60)} min`}
+                </span>
               )}
             </div>
           </div>

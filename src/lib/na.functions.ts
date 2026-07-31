@@ -401,15 +401,27 @@ ORDER BY start_date DESC NULLS LAST
 LIMIT 3000
 `;
 
-export const getNaRows = createServerFn({ method: "GET" }).handler(async (): Promise<NaRow[]> => {
-  // Financial data: never served without an approved session that is
-  // explicitly allowed to open this tracker.
-  const { requireTracker } = await import("./session.server");
-  await requireTracker("na");
-  const { runBigQuery } = await import("./bigquery.server");
-  const rows = await runBigQuery(QUERY);
-  return rows as unknown as NaRow[];
-});
+const CACHE_KEY = "na-rows";
+
+export const getNaRows = createServerFn({ method: "GET" })
+  .validator((input?: { force?: boolean }) => ({ force: input?.force === true }))
+  .handler(async ({ data }): Promise<{ rows: NaRow[]; cachedAgeSeconds: number | null }> => {
+    // Financial data: never served without an approved session that is
+    // explicitly allowed to open this tracker.
+    const { requireTracker } = await import("./session.server");
+    await requireTracker("na");
+    const { readCache, writeCache, cacheAge } = await import("./query-cache.server");
+
+    if (!data.force) {
+      const hit = await readCache<NaRow[]>(CACHE_KEY);
+      if (hit) return { rows: hit, cachedAgeSeconds: await cacheAge(CACHE_KEY) };
+    }
+
+    const { runBigQuery } = await import("./bigquery.server");
+    const rows = (await runBigQuery(QUERY)) as unknown as NaRow[];
+    await writeCache(CACHE_KEY, rows);
+    return { rows, cachedAgeSeconds: 0 };
+  });
 
 export function parseNaPartners(json: string | null): NaPartnerLine[] {
   if (!json) return [];
