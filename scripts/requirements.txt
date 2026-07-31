@@ -1,0 +1,3 @@
+# PDF rendering for the client statement of account (scripts/render_statement.py).
+# The runtime also needs Pango, cairo and GDK-PixBuf, which WeasyPrint calls into.
+weasyprint==69.0

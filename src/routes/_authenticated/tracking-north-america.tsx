@@ -29,6 +29,7 @@ import {
   generateNaFinancialSummary,
   type NaFinancialSummary,
 } from "@/lib/na-financial-summary.functions";
+import { generateNaStatement } from "@/lib/statement.functions";
 import { partnerKey } from "@/lib/annotations.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useGmailConnection, useFactScan, useRecoveryLog } from "@/lib/use-gmail";
@@ -88,6 +89,7 @@ import {
   Banknote,
   Check,
   ChevronDown,
+  Download,
   ChevronRight,
   ExternalLink,
   Lock,
@@ -392,6 +394,26 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     }
   }
   downloadCsv(lines, `tracking-north-america-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+/**
+ * Hands the generated statement to the browser.
+ *
+ * The PDF arrives base64-encoded from the server function — it is built per
+ * request and never stored, so there is no URL to link to.
+ */
+function saveStatementPdf(filename: string, base64: string) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function downloadCsv(lines: string[], filename: string) {
@@ -699,6 +721,13 @@ function NaPage() {
       return map;
     },
     staleTime: 60_000,
+  });
+
+  // The statement is generated on click, from a fresh BigQuery read, and dated the
+  // day it is downloaded — never served from the tracker's cached payload.
+  const statement = useMutation({
+    mutationFn: (readableId: string) => generateNaStatement({ data: { readable_id: readableId } }),
+    onSuccess: (file) => saveStatementPdf(file.filename, file.pdf_base64),
   });
 
   const summarize = useMutation({
@@ -1416,6 +1445,12 @@ function NaPage() {
                         Back office
                       </a>
                     )}
+                    <StatementButton
+                      eventRef={selRef}
+                      pending={statement.isPending && statement.variables === selRef}
+                      error={statement.isError ? String(statement.error) : null}
+                      onDownload={() => statement.mutate(selRef)}
+                    />
                     {/* Same targets as the list-level button, narrowed to this booking. */}
                     {(() => {
                       if (!gmailConnection?.connected) return null;
@@ -1623,6 +1658,16 @@ function NaPage() {
                       <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
                         <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
                         Client invoicing
+                        {/* The statement is the client-facing view of this very table. */}
+                        <span className="ml-auto">
+                          <StatementButton
+                            eventRef={selRef}
+                            pending={statement.isPending && statement.variables === selRef}
+                            error={statement.isError ? String(statement.error) : null}
+                            onDownload={() => statement.mutate(selRef)}
+                            tone="primary"
+                          />
+                        </span>
                       </header>
                       {selInvoices.length === 0 ? (
                         <div className="px-9 py-9 text-center">
@@ -2406,6 +2451,50 @@ function PartnerSectionCard({
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Downloads the client statement of account for one booking.
+ *
+ * Generated on click rather than linked: the document is dated the day it is
+ * downloaded and read from BigQuery at that moment, so there is nothing to cache
+ * and no stale copy to hand out.
+ */
+function StatementButton({
+  eventRef,
+  pending,
+  error,
+  onDownload,
+  tone = "secondary",
+}: {
+  eventRef: string;
+  pending: boolean;
+  error: string | null;
+  onDownload: () => void;
+  tone?: "secondary" | "primary";
+}) {
+  if (!eventRef) return null;
+  const className =
+    tone === "primary"
+      ? "inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-[#9ed4de] bg-white px-2.5 text-[11px] font-semibold normal-case tracking-normal text-teal-800 disabled:opacity-60"
+      : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 disabled:opacity-60";
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button type="button" onClick={onDownload} disabled={pending} className={className}>
+        <Download className={`h-3.5 w-3.5 ${pending ? "animate-pulse" : ""}`} aria-hidden="true" />
+        {pending ? "Preparing…" : "Download statement"}
+      </button>
+      {error && (
+        <span
+          role="alert"
+          title={error}
+          className="max-w-[220px] truncate text-[11px] font-normal normal-case tracking-normal text-rose-800"
+        >
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
 
