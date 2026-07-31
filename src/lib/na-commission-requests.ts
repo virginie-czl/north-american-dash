@@ -99,6 +99,61 @@ function fmtDateRange(start: string | null, end: string | null): string {
 
 export type NaComposed = { subject: string; body: string };
 
+/**
+ * The commission section, spelled out: which lines carry a commission, the base
+ * they are computed on, the rate, and the resulting amount. A bare total invites
+ * a "where does that come from?" reply and a second round trip.
+ */
+function commissionBlock(partner: NaPartnerLine, commission: number): string {
+  const ccy = partner.currency;
+  const items = partner.commissionable ?? [];
+  const names = items
+    .map((i) => i.label)
+    .filter(Boolean)
+    .join(", ");
+  const base = partner.commissionable_base_ht ?? null;
+  const rates = [...new Set(items.map((i) => i.rate_pct).filter((r) => r != null))];
+  const rate =
+    rates.length === 1
+      ? `${rates[0]}%`
+      : rates.length > 1
+        ? rates.map((r) => `${r}%`).join(" / ")
+        : "—";
+
+  const lines: string[] = [];
+  if (names) lines.push(`• Commissionable items: ${names}`);
+  if (base != null && base > 0.01) lines.push(`• Commissionable base: ${fmtMoney(base, ccy)}`);
+  if (rate !== "—") lines.push(`• Commission rate: ${rate}`);
+  lines.push(`• Commission due incl. tax: ${fmtMoney(commission, ccy)}`);
+  return lines.join("\n");
+}
+
+/**
+ * Every payment we made, listed. Naming the date, the method and the bank
+ * reference is what lets the other side find it in their own ledger instead of
+ * disputing the total.
+ */
+function paymentsBlock(partner: NaPartnerLine): string {
+  const rows = partner.disbursements ?? [];
+  if (rows.length === 0) {
+    return `• Total paid by Naboo: ${fmtMoney(partner.paid, partner.currency)}`;
+  }
+  const listed = rows
+    .map((d) => {
+      const method = d.method ? ` by ${d.method}` : "";
+      const ref = d.reference ? ` (ref: ${d.reference})` : "";
+      return `   • ${fmtMoney(d.amount, d.currency ?? partner.currency)} paid on ${d.paid_on ?? "—"}${method}${ref}`;
+    })
+    .join("\n");
+  const total = rows.reduce((t, d) => t + (d.amount ?? 0), 0);
+  return `• Amounts paid by Naboo:\n${listed}\n• Total paid by Naboo: ${fmtMoney(total, partner.currency)}`;
+}
+
+/** What the provider actually invoiced us: the payable before our commission. */
+function invoiceDue(partner: NaPartnerLine): number {
+  return (partner.payable ?? 0) + (partner.commission ?? 0);
+}
+
 /** Commission-only email, about this one partner's commission alone. */
 export function composeNaCommissionRequest(
   row: NaRow,
@@ -124,9 +179,9 @@ Thanks again for taking such good care of the ${client} group!
 
 I'm reaching out about the commission for that program. Here's what we have on our end:
 
-• Commission due: ${fmtMoney(commission, ccy)}
+${commissionBlock(partner, commission)}
 
-Would you be able to confirm that figure? Once you give me the green light, I'll issue our commission invoice right away and send it over with our wire details.
+Would you be able to confirm those figures? Once you give me the green light, I'll issue our commission invoice right away and send it over with our wire details.
 
 If your records show something different, just let me know and I'll be happy to walk through it with you.
 
@@ -203,8 +258,8 @@ I've just finished reconciling the ${client} program and wanted to send you ever
 • Commission due incl. tax: ${fmtMoney(commission, ccy)}
 
 2) Overpayment
-• Total invoice due: ${fmtMoney((partner.payable ?? 0) + (partner.commission ?? 0), ccy)}
-• Total paid by Naboo: ${fmtMoney(partner.paid, ccy)}
+• Total invoice due: ${fmtMoney(invoiceDue(partner), ccy)}
+${paymentsBlock(partner)}
 • Refund due to Naboo: ${fmtMoney(refund, ccy)}
 
 Total to be paid to Naboo (commission + overpayment): ${fmtMoney(commission + refund, ccy)}
