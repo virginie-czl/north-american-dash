@@ -379,6 +379,12 @@ partners_rm_dedup AS (
 partners_rm AS (
   SELECT
     rid,
+    -- ⚠ This struct, partners_fi_fallback's, and the typed empty array in base must
+    -- stay identical: same fields, same order, same types. COALESCE picks between
+    -- them, so a field added to one and not the others is either a hard SQL error or
+    -- — worse — a silently empty partner array. na-query.test.mjs asserts all three
+    -- agree, and that every alias a CTE references is actually joined in it: adding
+    -- commission_doc_count here without its join broke the page in production.
     ARRAY_AGG(STRUCT(
       name, email, contact_first_name, owner_code, house_code, commission_doc_count,
       currency, gmv_ttc, paid, outstanding, raw_outstanding,
@@ -406,6 +412,10 @@ partners_rm AS (
 partners_fi_fallback AS (
   SELECT
     e.client_request_readable_id AS rid,
+    -- ⚠ Must match partners_rm's struct and base's typed empty array field for
+    -- field, in order — see the note above partners_rm. Every alias used in here
+    -- also has to be joined in here: this branch has no rm, so quote keys are
+    -- part.quoteId.
     ARRAY_AGG(STRUCT(
       COALESCE(
         NULLIF(o.company_name, ''),
@@ -456,6 +466,11 @@ partners_fi_fallback AS (
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = q.house_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = part.houseOwnerId
   LEFT JOIN invoiced_by_quote ibq ON ibq.quote_id = part.quoteId
+  -- Keyed on part.quoteId, not rm.quote_id: this branch never sees the
+  -- reconciliation master. The count is real here — C-U775 falls back and its quote
+  -- carries a NABCO document — so hard-coding zero would hide a commission
+  -- statement that exists.
+  LEFT JOIN commission_docs_by_quote cd ON cd.quote_id = part.quoteId
   WHERE e.bk_market = 'North America'
     AND e.booking_status = 'ACCEPTED'
     AND part.quoteCancelledAt IS NULL
@@ -484,6 +499,8 @@ base AS (
     IFNULL(ic.client_service_fees_ttc, 0) AS client_service_fees_ttc,
     COALESCE(CAST(ar.total_paid_client_ccy AS FLOAT64), fi.paid) AS paid_ccy,
     CAST(ar.balance_client_ccy AS FLOAT64) AS ar_balance_ccy,
+    -- ⚠ This type declares the shape both partner branches must produce; COALESCE
+    -- between the three requires them identical. See the note above partners_rm.
     TO_JSON_STRING(
       IFNULL(p.items, IFNULL(pfb.items, CAST([] AS ARRAY<STRUCT<
         name STRING, email STRING, contact_first_name STRING, owner_code STRING,
