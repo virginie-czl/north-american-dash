@@ -898,24 +898,30 @@ function NaPage() {
     [filtered, moveFor],
   );
 
-  const scoped = useMemo(() => {
-    if (scope === "commission")
-      return withMove.filter((x) => x.move.headlineLabel.includes("commission"));
-    if (scope === "refund") return withMove.filter((x) => x.move.headlineLabel.includes("refund"));
-    if (scope === "move") return withMove.filter((x) => needsAMove(x.move.group));
-    return withMove;
-  }, [withMove, scope]);
+  // One predicate per scope, shared by the filter and the chip counts below so a
+  // chip can never claim a number the list does not show.
+  const SCOPE_TEST: Record<typeof scope, (x: (typeof withMove)[number]) => boolean> = useMemo(
+    () => ({
+      move: (x) => needsAMove(x.move.group),
+      commission: (x) => x.move.headlineLabel.includes("commission"),
+      refund: (x) => x.move.headlineLabel.includes("refund to recover"),
+      client_refund: (x) => x.move.headlineLabel.includes("client to refund"),
+      all: () => true,
+    }),
+    [],
+  );
+
+  const scoped = useMemo(() => withMove.filter(SCOPE_TEST[scope]), [withMove, scope, SCOPE_TEST]);
 
   const scopeCounts = useMemo(
     () => ({
-      move: withMove.filter((x) => needsAMove(x.move.group)).length,
-      commission: withMove.filter((x) => x.move.headlineLabel.includes("commission")).length,
-      refund: withMove.filter((x) => x.move.headlineLabel.includes("refund to recover")).length,
-      clientRefund: withMove.filter((x) => x.move.headlineLabel.includes("client to refund"))
-        .length,
+      move: withMove.filter(SCOPE_TEST.move).length,
+      commission: withMove.filter(SCOPE_TEST.commission).length,
+      refund: withMove.filter(SCOPE_TEST.refund).length,
+      clientRefund: withMove.filter(SCOPE_TEST.client_refund).length,
       all: withMove.length,
     }),
-    [withMove],
+    [withMove, SCOPE_TEST],
   );
 
   const groups = useMemo(() => {
@@ -1084,7 +1090,7 @@ function NaPage() {
             {isLoading && (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</p>
             )}
-            {!isLoading && filtered.length === 0 && (
+            {!isLoading && scoped.length === 0 && (
               <div className="flex flex-col items-center gap-2.5 px-12 py-16 text-center">
                 <SearchX className="h-6 w-6 text-slate-400" aria-hidden="true" />
                 <span className="font-display text-base font-bold">
