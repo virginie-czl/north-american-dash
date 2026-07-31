@@ -928,9 +928,12 @@ function NaPage() {
                       <button
                         key={ref}
                         type="button"
-                        onClick={() => setSelectedRef(ref)}
+                        onClick={() => {
+                          setSelectedRef(ref);
+                          setDetailTab("partners");
+                        }}
                         className={`flex w-full gap-2.5 border-b border-slate-100 px-4 py-2.5 text-left ${
-                          isSel ? "bg-naboo/25" : "hover:bg-slate-50"
+                          isSel ? "bg-[#fafaf8]" : "hover:bg-[#fafaf8]"
                         }`}
                         style={{ borderLeft: `3px solid ${isSel ? "#101f34" : "transparent"}` }}
                       >
@@ -1049,18 +1052,22 @@ function NaPage() {
                   {[
                     {
                       label: "Client GMV",
+                      side: "client" as const,
                       node: <Money value={sel.gmv_client_ccy} currency={sel.currency_client} />,
                     },
                     {
                       label: "Invoiced",
+                      side: "client" as const,
                       node: <Money value={sel.invoiced_ccy} currency={sel.currency_client} />,
                     },
                     {
                       label: "Received",
+                      side: "client" as const,
                       node: <Money value={sel.paid_ccy} currency={sel.currency_client} />,
                     },
                     {
                       label: "To cash in",
+                      side: "client" as const,
                       node: (
                         <Money
                           value={sel.balance_ccy}
@@ -1071,11 +1078,18 @@ function NaPage() {
                     },
                     {
                       label: "To pay partners",
+                      side: "partner" as const,
                       node: <MultiMoney map={selTotals} field="outstanding" kind="danger" />,
                     },
                   ].map((s) => (
                     <div key={s.label} className="bg-white px-3 py-2.5">
-                      <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                      {/* Label colour is what replaces the old tinted column
+                          blocks: teal client side, lime partner side. */}
+                      <div
+                        className={`text-[9.5px] font-bold uppercase tracking-[0.08em] ${
+                          s.side === "client" ? "text-[#0F766E]" : "text-[#5B6511]"
+                        }`}
+                      >
                         {s.label}
                       </div>
                       <div className="mt-0.5 text-base font-semibold tabular-nums">{s.node}</div>
@@ -1144,6 +1158,17 @@ function NaPage() {
                     gmailConnected={gmailConnection?.connected === true}
                     onSummarize={(input) => summarize.mutate(input)}
                     summarizing={summarize.isPending ? (summarize.variables ?? null) : null}
+                    onRequest={(p) => {
+                      // Same targets the list-level button builds, narrowed to
+                      // this partner — no new email logic.
+                      const mine = incompleteTargets.filter(
+                        (t) =>
+                          t.eventRef === selRef &&
+                          (t.address ?? "").toLowerCase() === (p.email ?? "").toLowerCase(),
+                      );
+                      if (mine.length > 0) requestDialog.open(mine);
+                      else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
+                    }}
                   />
                 )}
                 {detailTab === "invoices" && (
@@ -1569,6 +1594,17 @@ function StatusCell({
   );
 }
 
+/**
+ * One white card per partner line, per the redesign handoff.
+ *
+ * The old tinted table is gone: the client/partner distinction now lives in the
+ * stat strip label colours, not in coloured backgrounds. Cards carry three
+ * metrics and the actual next move as a button. Provision legs stay visible but
+ * muted and excluded from the payable count, as before.
+ *
+ * Only the presentation changed — stickers, financial summaries and every amount
+ * come from the same helpers as the table did.
+ */
 function PartnerSectionCard({
   id,
   partners,
@@ -1579,6 +1615,7 @@ function PartnerSectionCard({
   gmailConnected,
   onSummarize,
   summarizing,
+  onRequest,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
@@ -1593,193 +1630,223 @@ function PartnerSectionCard({
     partner_email: string | null;
   }) => void;
   summarizing: { event_ref: string; partner_name: string; partner_email: string | null } | null;
+  onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
-  const caption =
-    provisionCount > 0
-      ? `${payableCount} partner${payableCount === 1 ? "" : "s"} payable · ${provisionCount} provision leg${provisionCount === 1 ? "" : "s"} excluded`
-      : `${payableCount} partner${payableCount === 1 ? "" : "s"} payable`;
+
+  if (partners.length === 0) {
+    return (
+      <div className="rounded-[10px] border border-dashed border-[#D1D5DB] p-10 text-center">
+        <div className="font-display text-base font-bold">No partner line yet</div>
+        <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-[#6B7280]">
+          Nothing can be asked of the partners until the booking carries a priced quote. It will
+          appear here the day it lands.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <section className="na-section-card na-section-card-partner">
-      <header className="na-section-head">
-        <span aria-hidden>👥</span>
-        <span>Partners</span>
-        <span className="text-text-muted">({partners.length})</span>
-      </header>
-      <table className="na-sub-table">
-        <thead>
-          <tr>
-            <th>Partner</th>
-            <th className="text-right">GMV</th>
-            <th className="text-right">Commission</th>
-            <th className="text-right" title="Whole event: gross less commission">
-              Payable (event)
-            </th>
-            <th
-              className="text-right"
-              title="Invoiced to the client for this partner, less commission — what is owed right now"
-            >
-              Payable to date
-            </th>
-            <th className="text-right">Paid</th>
-            <th className="text-right">Outstanding</th>
-          </tr>
-        </thead>
-        <tbody>
-          {partners.map((p, i) => {
-            const prov = !!p.is_provision;
-            return (
-              <tr key={`${id}-p-${i}`} className={prov ? "na-sub-provision" : ""}>
-                <td>
-                  <div className="flex items-center flex-wrap gap-1">
-                    <span className="font-medium text-text-primary">{p.name ?? "—"}</span>
-                    <PartnerLockBadge admin={!!p.locked_by_admin} client={!!p.locked_by_client} />
-                    {prov && <ProvisionPill />}
-                    {p.payment_method === "CREDIT_CARD" && (
-                      <span className="na-pill na-pill-lavender">Virtual card</span>
-                    )}
-                  </div>
-                  {p.email && (
-                    <a
-                      href={`mailto:${p.email}`}
-                      className="mt-0.5 block text-[11px] text-text-muted hover:text-text-primary hover:underline"
-                    >
-                      {p.email}
-                    </a>
-                  )}
-                  {!prov && (
-                    <>
-                      <PartnerStickers
-                        action={actionFor(
-                          id,
-                          {
-                            name: p.name,
-                            email: p.email,
-                            amount_due: p.outstanding,
-                            vat_raw: null,
-                            tax_identifier: null,
-                            country: null,
-                            cardOnThisEvent:
-                              p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
-                          },
-                          true,
-                          { taxTracked: false },
-                        )}
-                        facts={factsMap?.get(
-                          `${id}::${(p.name ?? "")
-                            .toLowerCase()
-                            .normalize("NFD")
-                            .replace(/[\u0300-\u036f]/g, "")
-                            .replace(/[^a-z0-9]+/g, "-")
-                            .replace(/^-+|-+$/g, "")}`,
-                        )}
-                        partner={{
-                          name: p.name,
-                          email: p.email,
-                          amount_due: p.outstanding,
-                          vat_raw: null,
-                          tax_identifier: null,
-                          country: null,
-                        }}
-                        hideTax
-                        hideCardPending
-                      />
-                      {gmailConnected && (
-                        <NaFinancialSummaryBox
-                          existing={financialSummaries?.get(
-                            `${id}::${partnerKey(p.name ?? p.email ?? "")}`,
-                          )}
-                          loading={
-                            summarizing?.event_ref === id &&
-                            summarizing?.partner_name === (p.name ?? p.email ?? "")
-                          }
-                          onSummarize={() =>
-                            onSummarize({
-                              event_ref: id,
-                              partner_name: p.name ?? p.email ?? "",
-                              partner_email: p.email,
-                            })
-                          }
-                        />
-                      )}
-                    </>
-                  )}
-                </td>
-                <td className="text-right">
-                  {prov ? (
-                    <span className="text-text-muted">—</span>
-                  ) : (
-                    <Money value={p.gmv_ttc} currency={p.currency} />
-                  )}
-                </td>
-                <td className="text-right text-text-secondary">
-                  {prov || p.commission == null ? (
-                    <span className="text-text-muted">—</span>
-                  ) : (
-                    <Money value={p.commission} currency={p.currency} kind="muted" />
-                  )}
-                </td>
-                <td className="text-right">
-                  {prov ? (
-                    <span className="text-text-muted">—</span>
-                  ) : (
-                    <Money value={p.payable} currency={p.currency} />
-                  )}
-                </td>
-                <td className="text-right">
-                  {prov ? (
-                    <span className="text-text-muted">—</span>
-                  ) : (
-                    <Money value={p.payable_to_date} currency={p.currency} />
-                  )}
-                </td>
-                <td className="text-right">
-                  {prov ? (
-                    <span className="text-text-muted">—</span>
-                  ) : (
-                    <Money value={p.paid} currency={p.currency} />
-                  )}
-                </td>
-                <td className="text-right">
-                  {prov ? (
-                    <span className="text-text-muted">—</span>
-                  ) : (
-                    <Money value={p.outstanding} currency={p.currency} kind="danger" />
-                  )}
-                </td>
-              </tr>
+    <div className="flex flex-col gap-3">
+      {partners.map((p, i) => {
+        const prov = !!p.is_provision;
+        const key = partnerKey(p.name ?? p.email ?? "");
+        const action = prov
+          ? null
+          : actionFor(
+              id,
+              {
+                name: p.name,
+                email: p.email,
+                amount_due: p.outstanding,
+                vat_raw: null,
+                tax_identifier: null,
+                country: null,
+                cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
+              },
+              true,
+              { taxTracked: false },
             );
-          })}
-          <tr className="na-sub-subtotal">
-            <td className="text-[10.5px] uppercase tracking-wide text-text-muted">Subtotal</td>
-            <td className="text-right">
-              <MultiMoney map={totals} field="gmv" />
-            </td>
-            <td className="text-right">
-              <MultiMoney map={totals} field="commission" kind="muted" />
-            </td>
-            <td className="text-right">
-              <MultiMoney map={totals} field="payable" kind="muted" />
-            </td>
-            <td className="text-right">
+        const overpaid = (p.outstanding ?? 0) < -0.01;
+        // The last metric is the one that decides the next move, so it carries the
+        // emphasis: amber when it is money to claw back, muted when nothing is due.
+        const outTone = prov
+          ? "text-[#9CA3AF]"
+          : overpaid
+            ? "text-[#B45309]"
+            : (p.outstanding ?? 0) > 0.01
+              ? "text-[#101F34]"
+              : "text-[#9CA3AF]";
+
+        return (
+          <div
+            key={`${id}-p-${i}`}
+            className={`flex items-start gap-4 rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)] transition-colors hover:border-navy ${
+              prov ? "opacity-70" : ""
+            }`}
+          >
+            <div className="min-w-[220px] flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm font-semibold">{p.name ?? "—"}</span>
+                <PartnerLockBadge admin={!!p.locked_by_admin} client={!!p.locked_by_client} />
+                {prov && <ProvisionPill />}
+                {p.payment_method === "CREDIT_CARD" && (
+                  <span className="rounded-full bg-[#F3F4F6] px-2 py-[2px] text-[10.5px] font-medium text-[#4B5563]">
+                    Virtual card
+                  </span>
+                )}
+              </div>
+              {p.email && (
+                <a
+                  href={`mailto:${p.email}`}
+                  className="mt-[3px] block text-xs text-[#6B7280] hover:text-navy hover:underline"
+                >
+                  {p.email}
+                </a>
+              )}
+              {!prov && action && (
+                <>
+                  <div className="mt-2 text-xs text-[#374151]">{action.detail}</div>
+                  <PartnerStickers
+                    action={action}
+                    facts={factsMap?.get(`${id}::${key}`)}
+                    partner={{
+                      name: p.name,
+                      email: p.email,
+                      amount_due: p.outstanding,
+                      vat_raw: null,
+                      tax_identifier: null,
+                      country: null,
+                    }}
+                    hideTax
+                    hideCardPending
+                  />
+                  {gmailConnected && (
+                    <NaFinancialSummaryBox
+                      existing={financialSummaries?.get(`${id}::${key}`)}
+                      loading={
+                        summarizing?.event_ref === id &&
+                        summarizing?.partner_name === (p.name ?? p.email ?? "")
+                      }
+                      onSummarize={() =>
+                        onSummarize({
+                          event_ref: id,
+                          partner_name: p.name ?? p.email ?? "",
+                          partner_email: p.email,
+                        })
+                      }
+                    />
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="flex flex-none items-center gap-[22px] text-right">
+              <span>
+                <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
+                  Payable to date
+                </span>
+                <span className="mt-0.5 block whitespace-nowrap text-[13.5px] tabular-nums text-[#374151]">
+                  {prov ? "—" : <Money value={p.payable_to_date} currency={p.currency} />}
+                </span>
+              </span>
+              <span>
+                <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
+                  Paid
+                </span>
+                <span className="mt-0.5 block whitespace-nowrap text-[13.5px] tabular-nums text-[#374151]">
+                  {prov ? "—" : <Money value={p.paid} currency={p.currency} />}
+                </span>
+              </span>
+              <span>
+                <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
+                  {overpaid ? "To recover" : "Outstanding"}
+                </span>
+                <span
+                  className={`mt-0.5 block whitespace-nowrap text-[15px] font-bold tabular-nums ${outTone}`}
+                >
+                  {prov ? (
+                    "—"
+                  ) : (
+                    <Money
+                      value={overpaid ? -(p.outstanding ?? 0) : p.outstanding}
+                      currency={p.currency}
+                    />
+                  )}
+                </span>
+              </span>
+              {prov ? (
+                <span className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-semibold text-[#9CA3AF]">
+                  Excluded
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!action?.scanUseful && action?.code === "settled"}
+                  onClick={() => onRequest(p)}
+                  className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-navy bg-white px-3 text-xs font-semibold text-navy transition-colors hover:bg-[#FAFAF8] disabled:border-border disabled:text-[#9CA3AF]"
+                >
+                  {action?.code === "settled"
+                    ? "Nothing to do"
+                    : overpaid
+                      ? "Recover the overpayment"
+                      : action?.code === "await_reply"
+                        ? "Read the reply"
+                        : action?.code === "ours_pay"
+                          ? p.payment_method === "CREDIT_CARD"
+                            ? "Debit the card"
+                            : "Pay by transfer"
+                          : "Ask for details"}
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="flex items-center justify-between rounded-[10px] border border-border bg-white px-4 py-3">
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
+          Subtotal
+          <span className="ml-2 font-normal normal-case tracking-normal text-[#9CA3AF]">
+            {payableCount} payable
+            {provisionCount > 0
+              ? ` · ${provisionCount} provision leg${provisionCount === 1 ? "" : "s"} excluded`
+              : ""}
+          </span>
+        </span>
+        <span className="flex items-center gap-[22px] text-right">
+          <span>
+            <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
+              Payable to date
+            </span>
+            <span className="mt-0.5 block text-[13.5px] tabular-nums text-[#374151]">
               <MultiMoney map={totals} field="payableToDate" />
-            </td>
-            <td className="text-right">
+            </span>
+          </span>
+          <span>
+            <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
+              Paid
+            </span>
+            <span className="mt-0.5 block text-[13.5px] tabular-nums text-[#374151]">
               <MultiMoney map={totals} field="paid" />
-            </td>
-            <td className="text-right">
+            </span>
+          </span>
+          <span>
+            <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
+              Outstanding
+            </span>
+            <span className="mt-0.5 block text-[15px] font-bold tabular-nums">
               <MultiMoney map={totals} field="outstanding" kind="danger" />
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div className="na-section-caption px-[14px] pb-3">{caption}</div>
-    </section>
+            </span>
+          </span>
+          <span className="w-[92px]" />
+        </span>
+      </div>
+    </div>
   );
 }
 
-/** AI-written recap of this partner's email thread — generated on click, shared once saved. */
 function NaFinancialSummaryBox({
   existing,
   loading,
