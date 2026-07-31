@@ -3,8 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SummaryStrip, useRegisterTrackerActions } from "@/components/tracker-chrome";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { PartnerEmails } from "@/components/partner-emails";
-import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
-import { buildTargets, needsOf, describeNeeds } from "@/lib/partner-requests";
 import {
   NaCommissionRequestDialog,
   useNaCommissionRequestDialog,
@@ -603,7 +601,6 @@ function NaPage() {
   const { factsMap, actionFor, eventNeedsScan } = useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
   const { progress: scanProgress, start: startScan } = useFactScan();
-  const requestDialog = useRequestDialog();
   const commissionRefundDialog = useNaCommissionRequestDialog();
   const queryClient = useQueryClient();
 
@@ -636,54 +633,9 @@ function NaPage() {
     },
   });
 
-  const incompleteTargets = useMemo(
-    () =>
-      buildTargets(
-        sorted.flatMap(({ row: r, partners: ps }) => {
-          const ref = r.readable_id ?? "";
-          return (
-            ps
-              // Overpaid partners are a commission-to-recover / refund case, not a
-              // bank-or-tax gap — asking them to send bank details makes no sense
-              // when we already paid them too much.
-              .filter((p) => !p.is_provision)
-              .filter((p) => {
-                const cb = partnerClawback(p);
-                return cb.commission < 0.01 && cb.refund < 0.01;
-              })
-              .map((p) => {
-                const a = actionFor(
-                  ref,
-                  {
-                    name: p.name,
-                    email: p.email,
-                    amount_due: p.outstanding,
-                    vat_raw: null,
-                    tax_identifier: null,
-                    country: null,
-                    cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
-                  },
-                  true,
-                  { taxTracked: false },
-                );
-                return {
-                  eventRef: ref,
-                  eventDate: r.start_date ?? null,
-                  name: p.name,
-                  email: p.email,
-                  country: null,
-                  currency: p.currency,
-                  amountDue: p.outstanding,
-                  action: a,
-                  isCancelled: p.is_provision,
-                  eventClientLabel: r.company_name ?? undefined,
-                };
-              })
-          );
-        }),
-      ),
-    [sorted, actionFor],
-  );
+  // Marketplace NA deliberately has no bank/tax request path: on this tracker we
+  // only ever ask for a commission or a refund. That ask lives in
+  // commissionRefundTargets below.
 
   // Overpaid partners: ask for whichever applies — the commission we're owed,
   // a refund beyond that, or both. One email per partner, never combined
@@ -1007,13 +959,14 @@ function NaPage() {
                   </button>
                 );
               })}
-              {gmailConnection?.connected && incompleteTargets.length > 0 && (
+              {gmailConnection?.connected && commissionRefundTargets.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => requestDialog.open(incompleteTargets)}
+                  onClick={() => commissionRefundDialog.open(commissionRefundTargets)}
                   className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
                 >
-                  Request missing info ({incompleteTargets.length})
+                  Recover from {commissionRefundTargets.length} partner
+                  {commissionRefundTargets.length > 1 ? "s" : ""}
                 </button>
               )}
             </div>
@@ -1169,16 +1122,21 @@ function NaPage() {
                     {/* Same targets as the list-level button, narrowed to this booking. */}
                     {(() => {
                       if (!gmailConnection?.connected) return null;
-                      const mine = incompleteTargets.filter((t) => t.eventRef === selRef);
+                      // Marketplace NA only ever asks for commission or a refund —
+                      // bank details and tax numbers are a L'Oreal concern.
+                      const mine = commissionRefundTargets.filter((t) => t.eventRef === selRef);
                       if (mine.length === 0) return null;
+                      const anyRefund = mine.some((t) => t.mode !== "commission");
                       return (
                         <button
                           type="button"
-                          onClick={() => requestDialog.open(mine)}
+                          onClick={() => commissionRefundDialog.open(mine)}
                           className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-naboo px-3 text-[12.5px] font-bold text-navy"
                         >
                           <Send className="h-3.5 w-3.5" aria-hidden="true" />
-                          Ask {mine.length} partner{mine.length > 1 ? "s" : ""} for details
+                          {anyRefund
+                            ? `Recover from ${mine.length} partner${mine.length > 1 ? "s" : ""}`
+                            : `Ask ${mine.length} partner${mine.length > 1 ? "s" : ""} for the commission`}
                         </button>
                       );
                     })()}
@@ -1294,12 +1252,12 @@ function NaPage() {
                     onRequest={(p) => {
                       // Same targets the list-level button builds, narrowed to
                       // this partner — no new email logic.
-                      const mine = incompleteTargets.filter(
+                      const mine = commissionRefundTargets.filter(
                         (t) =>
                           t.eventRef === selRef &&
-                          (t.address ?? "").toLowerCase() === (p.email ?? "").toLowerCase(),
+                          t.address.toLowerCase() === (p.email ?? "").toLowerCase(),
                       );
-                      if (mine.length > 0) requestDialog.open(mine);
+                      if (mine.length > 0) commissionRefundDialog.open(mine);
                       else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
                     }}
                   />
@@ -1434,9 +1392,6 @@ function NaPage() {
         </div>
       </div>
 
-      {requestDialog.targets && (
-        <RequestInfoDialog targets={requestDialog.targets} onClose={requestDialog.close} />
-      )}
       {commissionRefundDialog.targets && (
         <NaCommissionRequestDialog
           targets={commissionRefundDialog.targets}
@@ -1822,6 +1777,8 @@ function PartnerSectionCard({
               { taxTracked: false },
             );
         const overpaid = (p.outstanding ?? 0) < -0.01;
+        const claw = partnerClawback(p);
+        const hasCommissionToClaim = claw.commission > 0.01;
         // The last metric is the one that decides the next move, so it carries the
         // emphasis: amber when it is money to claw back, muted when nothing is due.
         const outTone = prov
@@ -1922,21 +1879,31 @@ function PartnerSectionCard({
               ) : (
                 <button
                   type="button"
-                  disabled={!action?.scanUseful && action?.code === "settled"}
+                  disabled={
+                    action?.code === "settled" ||
+                    (!overpaid &&
+                      !hasCommissionToClaim &&
+                      p.payment_method === "CREDIT_CARD" &&
+                      action?.code === "ours_pay")
+                  }
                   onClick={() => onRequest(p)}
                   className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-navy bg-white px-3 text-xs font-semibold text-navy transition-colors hover:bg-[#FAFAF8] disabled:border-border disabled:text-[#9CA3AF]"
                 >
+                  {/* Marketplace NA never asks for bank or tax details, so every
+                      label here is either a payout state or a recovery ask. The
+                      card is a state we act on elsewhere, not something we debit
+                      from this screen. */}
                   {action?.code === "settled"
                     ? "Nothing to do"
                     : overpaid
-                      ? "Recover the overpayment"
-                      : action?.code === "await_reply"
-                        ? "Read the reply"
+                      ? "Ask for the refund"
+                      : hasCommissionToClaim
+                        ? "Ask for the commission"
                         : action?.code === "ours_pay"
                           ? p.payment_method === "CREDIT_CARD"
-                            ? "Debit the card"
+                            ? "Card to debit"
                             : "Pay by transfer"
-                          : "Ask for details"}
+                          : "Open in back office"}
                 </button>
               )}
             </div>
