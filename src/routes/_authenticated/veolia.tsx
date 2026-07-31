@@ -44,21 +44,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  SummaryStrip,
-  useRegisterTrackerActions,
-} from "@/components/tracker-chrome";
+import { SummaryStrip, useRegisterTrackerActions } from "@/components/tracker-chrome";
 import { PartnerEmails } from "@/components/partner-emails";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
 import { buildTargets, describeNeeds, needsOf } from "@/lib/partner-requests";
 import { UserAvatar } from "@/components/user-avatar";
-import {
-  useActionIndex,
-  tagsForEvent,
-  TAG_FILTER_GROUPS,
-} from "@/lib/use-partner-actions";
+import { useActionIndex, tagsForEvent, TAG_FILTER_GROUPS } from "@/lib/use-partner-actions";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
 import {
   BarChart,
@@ -89,7 +82,6 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-
 export const Route = createFileRoute("/_authenticated/veolia")({
   // Presentation aside, the data query refuses too (requireTracker).
   beforeLoad: ({ context }) => {
@@ -102,7 +94,9 @@ export const Route = createFileRoute("/_authenticated/veolia")({
           : allowed.includes("na")
             ? "/tracking-north-america"
             : null;
-      throw redirect(fallback ? { to: fallback } : { to: "/auth", search: { status: "no-tracker" } });
+      throw redirect(
+        fallback ? { to: fallback } : { to: "/auth", search: { status: "no-tracker" } },
+      );
     }
   },
   head: () => ({
@@ -130,7 +124,6 @@ function fmtCurrency(value: number | null | undefined, currency: string | null |
     }).format(value);
   } catch {
     return `${value.toFixed(2)} ${ccy}`;
-
   }
 }
 
@@ -192,7 +185,9 @@ function invoicingSla(
 ): { label: string; variant: "paid" | "partial" | "due" | "overdue" | "muted" } {
   const hasPo = !!(row.purchase_order_number && String(row.purchase_order_number).trim());
   if (!hasPo) return { label: "No PO", variant: "muted" };
-  const poTs = row.purchase_order_updated_at ? new Date(row.purchase_order_updated_at).getTime() : null;
+  const poTs = row.purchase_order_updated_at
+    ? new Date(row.purchase_order_updated_at).getTime()
+    : null;
   const endTs = row.end_date ? new Date(row.end_date).getTime() : null;
   const anchor = poTs != null && endTs != null ? Math.max(poTs, endTs) : (poTs ?? endTs);
   if (anchor == null) return { label: "No date", variant: "muted" };
@@ -234,7 +229,8 @@ function payoutSla(
   // If every active partner has been settled, the SLA can't be "due" even if
   // the row-level remaining is non-zero (rounding / late finance sync).
   const allPartnersSettled =
-    partners && partners.length > 0 &&
+    partners &&
+    partners.length > 0 &&
     partners.every((p) => {
       if (p.is_cancelled) return true;
       const due = Math.max(p.amount_due ?? 0, 0);
@@ -251,7 +247,9 @@ function payoutSla(
   if (remaining <= 0.01) return { label: "Fully paid", variant: "paid" };
   const hasPo = !!(row.purchase_order_number && String(row.purchase_order_number).trim());
   if (!hasPo) return { label: "No PO", variant: "muted" };
-  const poTs = row.purchase_order_updated_at ? new Date(row.purchase_order_updated_at).getTime() : null;
+  const poTs = row.purchase_order_updated_at
+    ? new Date(row.purchase_order_updated_at).getTime()
+    : null;
   if (poTs == null) return { label: "No PO date", variant: "muted" };
   const deadline = poTs + 86_400_000;
   const now = Date.now();
@@ -263,7 +261,6 @@ function payoutSla(
   return { label: `Breached ${overBy}d`, variant: "overdue" };
 }
 
-
 function PaymentBadge({ status }: { status: ReturnType<typeof paymentStatus> }) {
   const map: Record<string, string> = {
     paid: "bg-emerald-100 text-emerald-800",
@@ -272,32 +269,50 @@ function PaymentBadge({ status }: { status: ReturnType<typeof paymentStatus> }) 
     overdue: "bg-rose-100 text-rose-800",
     muted: "bg-slate-100 text-slate-600",
   };
-  return (
-    <span className={`pill ${map[status.variant]}`}>
-      {status.label}
-    </span>
-  );
+  return <span className={`pill ${map[status.variant]}`}>{status.label}</span>;
 }
 
-
 const PARTNER_STATUS_OPTIONS: { value: PartnerStatusValue; label: string; cls: string }[] = [
-  { value: "not_contacted", label: "Not contacted", cls: "bg-slate-100 text-slate-700 border-slate-200" },
-  { value: "waiting_bank", label: "Waiting bank details", cls: "bg-amber-100 text-amber-800 border-amber-200" },
-  { value: "partially_paid", label: "Partially paid", cls: "bg-sky-100 text-sky-800 border-sky-200" },
-  { value: "fully_paid", label: "Fully paid", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  {
+    value: "not_contacted",
+    label: "Not contacted",
+    cls: "bg-slate-100 text-slate-700 border-slate-200",
+  },
+  {
+    value: "waiting_bank",
+    label: "Waiting bank details",
+    cls: "bg-amber-100 text-amber-800 border-amber-200",
+  },
+  {
+    value: "partially_paid",
+    label: "Partially paid",
+    cls: "bg-sky-100 text-sky-800 border-sky-200",
+  },
+  {
+    value: "fully_paid",
+    label: "Fully paid",
+    cls: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  },
 ];
-
 
 function csvEscape(v: string): string {
   if (/[",\n;]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
   return v;
 }
 
-function exportUnpaidPartners(
-  decorated: { row: SlaRow; partners: PartnerLine[] }[],
-) {
+function exportUnpaidPartners(decorated: { row: SlaRow; partners: PartnerLine[] }[]) {
   const rows: string[][] = [
-    ["Event date", "Event ref", "Company", "Partner name", "Partner email", "Currency", "Amount due", "Amount paid", "Remaining"],
+    [
+      "Event date",
+      "Event ref",
+      "Company",
+      "Partner name",
+      "Partner email",
+      "Currency",
+      "Amount due",
+      "Amount paid",
+      "Remaining",
+    ],
   ];
   decorated.forEach(({ row, partners }) => {
     if (!row.purchase_order_number || !String(row.purchase_order_number).trim()) return;
@@ -339,7 +354,16 @@ function exportContactToBeDone(
   statusMap: Map<string, PartnerStatusRow> | undefined,
 ) {
   const rows: string[][] = [
-    ["Event date", "Event ref", "Company", "Partner name", "Partner email", "Currency", "Amount due", "Outreach status"],
+    [
+      "Event date",
+      "Event ref",
+      "Company",
+      "Partner name",
+      "Partner email",
+      "Currency",
+      "Amount due",
+      "Outreach status",
+    ],
   ];
   decorated.forEach(({ row, partners }) => {
     if (!row.purchase_order_number || !String(row.purchase_order_number).trim()) return;
@@ -378,11 +402,11 @@ function exportContactToBeDone(
   URL.revokeObjectURL(url);
 }
 
-
 function CommentersChip({ summary }: { summary: EventCommentSummary | undefined }) {
   if (!summary || summary.count === 0) return null;
   const shown = summary.commenters.slice(0, 3);
-  const extra = summary.commenters.length - shown.length;  return (
+  const extra = summary.commenters.length - shown.length;
+  return (
     <span
       className="ml-2 inline-flex items-center gap-1.5 align-middle"
       title={`${summary.count} comment${summary.count > 1 ? "s" : ""} from ${summary.commenters
@@ -411,10 +435,8 @@ function CommentersChip({ summary }: { summary: EventCommentSummary | undefined 
   );
 }
 
-
 function SlaPage() {
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-
     queryKey: ["veolia-sla-rows"],
     queryFn: () => getVeoliaSlaRows(),
     staleTime: 60_000,
@@ -439,8 +461,7 @@ function SlaPage() {
   const poDates = usePoEmissionDates(rawRows);
   const { data: statusMap } = usePartnerStatuses();
   const { data: commentSummaries } = useCommentSummaries();
-  const { factsMap, factsError, actionFor, eventNeedsScan, cardApprovedCodes } =
-    useActionIndex();
+  const { factsMap, factsError, actionFor, eventNeedsScan, cardApprovedCodes } = useActionIndex();
   const { data: gmailConnection, error: gmailError } = useGmailConnection();
   const { data: me } = useCurrentUser();
   const requestDialog = useRequestDialog();
@@ -466,8 +487,7 @@ function SlaPage() {
         // (or nothing left to disburse), force each partner line to fully-paid
         // regardless of what the raw reconciliation table still shows.
         const fullyPaid =
-          r.payout_sla_status === "FULLY_PAID" ||
-          (r.partner_reste_a_decaisser_ttc ?? 0) === 0;
+          r.payout_sla_status === "FULLY_PAID" || (r.partner_reste_a_decaisser_ttc ?? 0) === 0;
         const normalizedPartners = fullyPaid
           ? partners.map((p) => ({
               ...p,
@@ -486,11 +506,17 @@ function SlaPage() {
   );
 
   const distinctEventTypes = useMemo(
-    () => Array.from(new Set(decorated.map((d) => d.row.event_type).filter((v): v is string => !!v))).sort(),
+    () =>
+      Array.from(
+        new Set(decorated.map((d) => d.row.event_type).filter((v): v is string => !!v)),
+      ).sort(),
     [decorated],
   );
   const distinctCountries = useMemo(
-    () => Array.from(new Set(decorated.map((d) => d.row.country_iso_code).filter((v): v is string => !!v))).sort(),
+    () =>
+      Array.from(
+        new Set(decorated.map((d) => d.row.country_iso_code).filter((v): v is string => !!v)),
+      ).sort(),
     [decorated],
   );
   const distinctOutreach = useMemo(() => {
@@ -503,7 +529,6 @@ function SlaPage() {
     return Array.from(s).sort();
   }, [decorated, statusMap]);
 
-
   const filtered = useMemo(() => {
     let r = decorated;
     if (search.trim()) {
@@ -513,9 +538,7 @@ function SlaPage() {
           x.row.readable_id?.toLowerCase().includes(q) ||
           x.row.event_type?.toLowerCase().includes(q) ||
           x.partners.some(
-            (p) =>
-              p.name?.toLowerCase().includes(q) ||
-              p.email?.toLowerCase().includes(q),
+            (p) => p.name?.toLowerCase().includes(q) || p.email?.toLowerCase().includes(q),
           ) ||
           x.invoices.some((i) => i.invoice_ref?.toLowerCase().includes(q)),
       );
@@ -524,9 +547,9 @@ function SlaPage() {
       r = r.filter(({ row: x, partners: ps, invoices: iv }) => {
         if (statusFilter === "invoicing_breached") return invoicingSla(x, iv).variant === "overdue";
         if (statusFilter === "payout_breached") return payoutSla(x, ps).variant === "overdue";
-        if (statusFilter === "receivable_overdue") return paymentStatus(x, iv).variant === "overdue";
-        if (statusFilter === "not_invoiced")
-          return !x.first_income_invoice_emission_date;
+        if (statusFilter === "receivable_overdue")
+          return paymentStatus(x, iv).variant === "overdue";
+        if (statusFilter === "not_invoiced") return !x.first_income_invoice_emission_date;
         if (statusFilter === "partner_outstanding")
           return (x.partner_reste_a_decaisser_ttc ?? 0) > 0;
         return true;
@@ -587,10 +610,17 @@ function SlaPage() {
     });
     return sorted;
   }, [
-    decorated, search, statusFilter, tagFilter,
-    sortKey, sortDir, colFilters, actionFor, factsMap, cardApprovedCodes,
+    decorated,
+    search,
+    statusFilter,
+    tagFilter,
+    sortKey,
+    sortDir,
+    colFilters,
+    actionFor,
+    factsMap,
+    cardApprovedCodes,
   ]);
-
 
   // KPIs
   const kpis = useMemo(() => {
@@ -598,19 +628,21 @@ function SlaPage() {
     const invoiceSent = decorated.filter(({ invoices: iv }) =>
       iv.some((i) => i.is_sent || !!i.first_sent_at),
     ).length;
-    const invoiceIssuedNotSent = decorated.filter(({ invoices: iv }) =>
-      iv.length > 0 && !iv.some((i) => i.is_sent || !!i.first_sent_at),
+    const invoiceIssuedNotSent = decorated.filter(
+      ({ invoices: iv }) => iv.length > 0 && !iv.some((i) => i.is_sent || !!i.first_sent_at),
     ).length;
     const notInvoiced = total - invoiceSent - invoiceIssuedNotSent;
-    const overdueReceivables = decorated.filter(({ row: r, invoices: iv }) => paymentStatus(r, iv).variant === "overdue").length;
+    const overdueReceivables = decorated.filter(
+      ({ row: r, invoices: iv }) => paymentStatus(r, iv).variant === "overdue",
+    ).length;
 
     // Partner outstanding: split into buckets by PO presence, partner naming,
     // and outreach status (not contacted vs waiting bank details).
     const partnerBuckets = {
-      toContact: new Map<string, number>(),    // PO + named partner, not contacted yet
-      waitingBank: new Map<string, number>(),  // PO + named partner, already contacted
+      toContact: new Map<string, number>(), // PO + named partner, not contacted yet
+      waitingBank: new Map<string, number>(), // PO + named partner, already contacted
       withPoNoName: new Map<string, number>(), // PO + partner has no name
-      noPo: new Map<string, number>(),         // no PO
+      noPo: new Map<string, number>(), // no PO
     };
     const partnerCounts = { toContact: 0, waitingBank: 0, withPoNoName: 0, noPo: 0 };
     decorated.forEach(({ row, partners }) => {
@@ -640,11 +672,17 @@ function SlaPage() {
       });
     });
     const partnerByCcy = new Map<string, number>();
-    [partnerBuckets.toContact, partnerBuckets.waitingBank, partnerBuckets.withPoNoName, partnerBuckets.noPo].forEach((m) =>
-      m.forEach((v, k) => partnerByCcy.set(k, (partnerByCcy.get(k) ?? 0) + v)),
-    );
+    [
+      partnerBuckets.toContact,
+      partnerBuckets.waitingBank,
+      partnerBuckets.withPoNoName,
+      partnerBuckets.noPo,
+    ].forEach((m) => m.forEach((v, k) => partnerByCcy.set(k, (partnerByCcy.get(k) ?? 0) + v)));
     const partnerOutstandingCount =
-      partnerCounts.toContact + partnerCounts.waitingBank + partnerCounts.withPoNoName + partnerCounts.noPo;
+      partnerCounts.toContact +
+      partnerCounts.waitingBank +
+      partnerCounts.withPoNoName +
+      partnerCounts.noPo;
 
     // Client outstanding: split per event by PO + named partner presence,
     // and within PO+partner by invoice status (sent vs issued-not-sent vs not invoiced).
@@ -667,9 +705,7 @@ function SlaPage() {
       if (v <= 0.01) return;
       const ccy = row.currency || "EUR";
       const hasPo = !!(row.purchase_order_number && String(row.purchase_order_number).trim());
-      const hasNamedPartner = partners.some(
-        (p) => !p.is_cancelled && p.name && p.name.trim(),
-      );
+      const hasNamedPartner = partners.some((p) => !p.is_cancelled && p.name && p.name.trim());
       let bucket: keyof typeof clientBuckets;
       if (!hasPo) bucket = "noPo";
       else if (!hasNamedPartner) bucket = "withPoNoPartner";
@@ -680,8 +716,8 @@ function SlaPage() {
       clientCounts[bucket]++;
     });
     const clientByCcy = new Map<string, number>();
-    Object.values(clientBuckets).forEach(
-      (m) => m.forEach((v, k) => clientByCcy.set(k, (clientByCcy.get(k) ?? 0) + v)),
+    Object.values(clientBuckets).forEach((m) =>
+      m.forEach((v, k) => clientByCcy.set(k, (clientByCcy.get(k) ?? 0) + v)),
     );
 
     // Already collected from clients & service fees generated (invoiced - partner net).
@@ -722,7 +758,6 @@ function SlaPage() {
     };
   }, [rows, decorated, statusMap]);
 
-
   const fmtMultiCcy = (m: Map<string, number>) => {
     if (m.size === 0) return fmtCurrency(0, "EUR");
     return Array.from(m.entries())
@@ -731,16 +766,20 @@ function SlaPage() {
       .join(" · ");
   };
 
-
   // Per-event partner payout breakdown (fully/partial/not paid).
   const partnerBreakdown = (partners: PartnerLine[]) => {
-    let fully = 0, partial = 0, notPaid = 0;
+    let fully = 0,
+      partial = 0,
+      notPaid = 0;
     partners.forEach((p) => {
       if (p.is_cancelled) return;
       const due = Math.max(p.amount_due ?? 0, 0);
       const paid = Math.abs(p.amount_paid ?? 0);
       if (due <= 0.01 && paid <= 0.01) return;
-      if (due <= 0.01) { fully++; return; }
+      if (due <= 0.01) {
+        fully++;
+        return;
+      }
       if (paid > 0.01 && paid + 0.01 >= due) fully++;
       else if (paid > 0.01) partial++;
       else notPaid++;
@@ -772,8 +811,7 @@ function SlaPage() {
       const paid = Math.abs(p.amount_paid ?? 0);
       return paid > 0.01;
     });
-    if (anyPartial)
-      return { label: "Payout TBD", cls: "bg-sky-100 text-sky-800" };
+    if (anyPartial) return { label: "Payout TBD", cls: "bg-sky-100 text-sky-800" };
     // Contact is established either by the manual dropdown or by the email scan —
     // a row must not read "Contact TBD" when an email has demonstrably gone out.
     const contactMade = active.map((p) => {
@@ -788,7 +826,6 @@ function SlaPage() {
       return { label: "⏳ Contact", cls: "bg-amber-100 text-amber-800 border-amber-200" };
     return null;
   }
-
 
   const byInvoicingStatus = useMemo(() => {
     const m = new Map<string, number>();
@@ -859,16 +896,16 @@ function SlaPage() {
       onRefresh: () => refetch(),
       isFetching,
       exports: [
-                {
-                  label: "Export unpaid partners",
-                  onClick: () => exportUnpaidPartners(decorated),
-                  disabled: isLoading || decorated.length === 0,
-                },
-                {
-                  label: "Export contact to-do",
-                  onClick: () => exportContactToBeDone(decorated, statusMap),
-                  disabled: isLoading || decorated.length === 0,
-                },
+        {
+          label: "Export unpaid partners",
+          onClick: () => exportUnpaidPartners(decorated),
+          disabled: isLoading || decorated.length === 0,
+        },
+        {
+          label: "Export contact to-do",
+          onClick: () => exportContactToBeDone(decorated, statusMap),
+          disabled: isLoading || decorated.length === 0,
+        },
       ],
     },
     [isFetching, isLoading, decorated.length],
@@ -882,9 +919,7 @@ function SlaPage() {
           { label: "Events", value: isLoading ? "…" : String(kpis.total) },
           {
             label: "Not sent",
-            value: isLoading
-              ? "…"
-              : String(kpis.invoiceIssuedNotSent + kpis.notInvoiced),
+            value: isLoading ? "…" : String(kpis.invoiceIssuedNotSent + kpis.notInvoiced),
           },
           {
             label: "Client outstanding",
@@ -899,7 +934,11 @@ function SlaPage() {
       >
         {/* Summary detail (collapsed by default) */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <KpiCard icon={<Receipt className="h-4 w-4" />} label="Total events" value={isLoading ? "…" : kpis.total.toString()} />
+          <KpiCard
+            icon={<Receipt className="h-4 w-4" />}
+            label="Total events"
+            value={isLoading ? "…" : kpis.total.toString()}
+          />
           <KpiCard
             icon={<CheckCircle2 className="h-4 w-4 text-emerald-600" />}
             label="Invoice sent"
@@ -912,7 +951,11 @@ function SlaPage() {
             value={isLoading ? "…" : (kpis.invoiceIssuedNotSent + kpis.notInvoiced).toString()}
             sub={`${kpis.invoiceIssuedNotSent} issued · ${kpis.notInvoiced} not invoiced`}
           />
-          <KpiCard icon={<AlertTriangle className="h-4 w-4 text-rose-600" />} label="Overdue (60d)" value={isLoading ? "…" : kpis.overdueReceivables.toString()} />
+          <KpiCard
+            icon={<AlertTriangle className="h-4 w-4 text-rose-600" />}
+            label="Overdue (60d)"
+            value={isLoading ? "…" : kpis.overdueReceivables.toString()}
+          />
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -922,10 +965,30 @@ function SlaPage() {
             total={isLoading ? "…" : fmtMultiCcy(kpis.partnerByCcy)}
             accent="indigo"
             rows={[
-              { label: "To contact", hint: "PO + named partner, not contacted yet", amount: fmtMultiCcy(kpis.partnerBuckets.toContact), count: kpis.partnerCounts.toContact },
-              { label: "Waiting bank details", hint: "contacted — awaiting info", amount: fmtMultiCcy(kpis.partnerBuckets.waitingBank), count: kpis.partnerCounts.waitingBank },
-              { label: "PO, partner name missing", hint: "needs partner info", amount: fmtMultiCcy(kpis.partnerBuckets.withPoNoName), count: kpis.partnerCounts.withPoNoName },
-              { label: "No PO", hint: "blocked — awaiting PO", amount: fmtMultiCcy(kpis.partnerBuckets.noPo), count: kpis.partnerCounts.noPo },
+              {
+                label: "To contact",
+                hint: "PO + named partner, not contacted yet",
+                amount: fmtMultiCcy(kpis.partnerBuckets.toContact),
+                count: kpis.partnerCounts.toContact,
+              },
+              {
+                label: "Waiting bank details",
+                hint: "contacted — awaiting info",
+                amount: fmtMultiCcy(kpis.partnerBuckets.waitingBank),
+                count: kpis.partnerCounts.waitingBank,
+              },
+              {
+                label: "PO, partner name missing",
+                hint: "needs partner info",
+                amount: fmtMultiCcy(kpis.partnerBuckets.withPoNoName),
+                count: kpis.partnerCounts.withPoNoName,
+              },
+              {
+                label: "No PO",
+                hint: "blocked — awaiting PO",
+                amount: fmtMultiCcy(kpis.partnerBuckets.noPo),
+                count: kpis.partnerCounts.noPo,
+              },
             ]}
           />
           <BreakdownCard
@@ -934,11 +997,36 @@ function SlaPage() {
             total={isLoading ? "…" : fmtMultiCcy(kpis.clientByCcy)}
             accent="sky"
             rows={[
-              { label: "Invoice sent", hint: "sent — chasing payment", amount: fmtMultiCcy(kpis.clientBuckets.invoiceSent), count: kpis.clientCounts.invoiceSent },
-              { label: "Invoice issued, not sent", hint: "needs to be sent", amount: fmtMultiCcy(kpis.clientBuckets.invoiceIssuedNotSent), count: kpis.clientCounts.invoiceIssuedNotSent },
-              { label: "Not invoiced yet", hint: "PO + partner ready, no invoice", amount: fmtMultiCcy(kpis.clientBuckets.notInvoiced), count: kpis.clientCounts.notInvoiced },
-              { label: "PO, partner name missing", hint: "needs partner info", amount: fmtMultiCcy(kpis.clientBuckets.withPoNoPartner), count: kpis.clientCounts.withPoNoPartner },
-              { label: "No PO", hint: "blocked — awaiting PO", amount: fmtMultiCcy(kpis.clientBuckets.noPo), count: kpis.clientCounts.noPo },
+              {
+                label: "Invoice sent",
+                hint: "sent — chasing payment",
+                amount: fmtMultiCcy(kpis.clientBuckets.invoiceSent),
+                count: kpis.clientCounts.invoiceSent,
+              },
+              {
+                label: "Invoice issued, not sent",
+                hint: "needs to be sent",
+                amount: fmtMultiCcy(kpis.clientBuckets.invoiceIssuedNotSent),
+                count: kpis.clientCounts.invoiceIssuedNotSent,
+              },
+              {
+                label: "Not invoiced yet",
+                hint: "PO + partner ready, no invoice",
+                amount: fmtMultiCcy(kpis.clientBuckets.notInvoiced),
+                count: kpis.clientCounts.notInvoiced,
+              },
+              {
+                label: "PO, partner name missing",
+                hint: "needs partner info",
+                amount: fmtMultiCcy(kpis.clientBuckets.withPoNoPartner),
+                count: kpis.clientCounts.withPoNoPartner,
+              },
+              {
+                label: "No PO",
+                hint: "blocked — awaiting PO",
+                amount: fmtMultiCcy(kpis.clientBuckets.noPo),
+                count: kpis.clientCounts.noPo,
+              },
             ]}
           />
         </div>
@@ -951,8 +1039,6 @@ function SlaPage() {
             sub="sum of live service fees (gross − net GMV HT)"
           />
         </div>
-
-
       </SummaryStrip>
 
       {error != null && (
@@ -965,560 +1051,622 @@ function SlaPage() {
       )}
 
       <Tabs defaultValue="table" className="flex min-h-0 flex-1 flex-col gap-0">
-          <TabsList className="mx-5 my-1.5 h-8 flex-none self-start">
-            <TabsTrigger value="table">Detailed table</TabsTrigger>
-            <TabsTrigger value="charts">Breakdown</TabsTrigger>
-            <TabsTrigger value="breached">Breached ({breached.length})</TabsTrigger>
-          </TabsList>
+        <TabsList className="mx-5 my-1.5 h-8 flex-none self-start">
+          <TabsTrigger value="table">Detailed table</TabsTrigger>
+          <TabsTrigger value="charts">Breakdown</TabsTrigger>
+          <TabsTrigger value="breached">Breached ({breached.length})</TabsTrigger>
+        </TabsList>
 
-          <TabsContent
-            value="table"
-            className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
-          >
+        <TabsContent
+          value="table"
+          className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+        >
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2">
-                  <Input
-                    placeholder="Search ref, event type, partner name/email, invoice…"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="max-w-sm"
-                  />
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-[220px]">
-                      <SelectValue placeholder="Filter" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All events</SelectItem>
-                      <SelectItem value="not_invoiced">Not invoiced</SelectItem>
-                      <SelectItem value="invoicing_breached">Invoicing SLA breached</SelectItem>
-                      <SelectItem value="payout_breached">Partner payout breached</SelectItem>
-                      <SelectItem value="receivable_overdue">Client receivable overdue</SelectItem>
-                      <SelectItem value="partner_outstanding">Partner still to pay</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <TagFilterSelect groups={TAG_FILTER_GROUPS} selected={tagFilter} onChange={setTagFilter} />
-                  <Select
-                    value={`${sortKey}:${sortDir}`}
-                    onValueChange={(v) => {
-                      const [k, d] = v.split(":");
-                      setSortKey(k);
-                      setSortDir(d as "asc" | "desc");
-                    }}
+              <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2">
+                <Input
+                  placeholder="Search ref, event type, partner name/email, invoice…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="max-w-sm"
+                />
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="w-[220px]">
+                    <SelectValue placeholder="Filter" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All events</SelectItem>
+                    <SelectItem value="not_invoiced">Not invoiced</SelectItem>
+                    <SelectItem value="invoicing_breached">Invoicing SLA breached</SelectItem>
+                    <SelectItem value="payout_breached">Partner payout breached</SelectItem>
+                    <SelectItem value="receivable_overdue">Client receivable overdue</SelectItem>
+                    <SelectItem value="partner_outstanding">Partner still to pay</SelectItem>
+                  </SelectContent>
+                </Select>
+                <TagFilterSelect
+                  groups={TAG_FILTER_GROUPS}
+                  selected={tagFilter}
+                  onChange={setTagFilter}
+                />
+                <Select
+                  value={`${sortKey}:${sortDir}`}
+                  onValueChange={(v) => {
+                    const [k, d] = v.split(":");
+                    setSortKey(k);
+                    setSortDir(d as "asc" | "desc");
+                  }}
+                >
+                  <SelectTrigger className="w-[260px]">
+                    <SelectValue placeholder="Sort" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="booking_created_at:desc">Most recently booked</SelectItem>
+                    <SelectItem value="booking_created_at:asc">Oldest bookings</SelectItem>
+                    <SelectItem value="days_since_booking:desc">Days since booking</SelectItem>
+                    <SelectItem value="client_reste_a_encaisser_ttc:desc">
+                      Outstanding receivable
+                    </SelectItem>
+                    <SelectItem value="partner_reste_a_decaisser_ttc:desc">
+                      Outstanding payout
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="ghost" size="sm" onClick={expandAll}>
+                  Expand all
+                </Button>
+                <Button variant="ghost" size="sm" onClick={collapseAll}>
+                  Collapse
+                </Button>
+                {gmailConnection?.connected && incompleteTargets.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={() => requestDialog.open(incompleteTargets)}
+                    title="Un email par prestataire à qui il manque au moins une information"
                   >
-                    <SelectTrigger className="w-[260px]">
-                      <SelectValue placeholder="Sort" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="booking_created_at:desc">Most recently booked</SelectItem>
-                      <SelectItem value="booking_created_at:asc">Oldest bookings</SelectItem>
-                      <SelectItem value="days_since_booking:desc">Days since booking</SelectItem>
-                      <SelectItem value="client_reste_a_encaisser_ttc:desc">Outstanding receivable</SelectItem>
-                      <SelectItem value="partner_reste_a_decaisser_ttc:desc">Outstanding payout</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button variant="ghost" size="sm" onClick={expandAll}>
-                    Expand all
+                    <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                    Demander les infos manquantes ({incompleteTargets.length})
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={collapseAll}>
-                    Collapse
-                  </Button>
-                  {gmailConnection?.connected && incompleteTargets.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5"
-                      onClick={() => requestDialog.open(incompleteTargets)}
-                      title="Un email par prestataire à qui il manque au moins une information"
-                    >
-                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
-                      Demander les infos manquantes ({incompleteTargets.length})
-                    </Button>
-                  )}
-                  {gmailError != null && (
-                    <span
-                      role="alert"
-                      className="inline-flex items-center rounded-md bg-rose-100 px-2 py-1 text-[11px] text-rose-800"
-                      title={String((gmailError as Error).message ?? gmailError)}
-                    >
-                      Recherche email indisponible
-                    </span>
-                  )}
-                  {gmailConnection?.connected === false && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        window.location.href = "/api/gmail/connect";
-                      }}
-                      className="text-[11.5px] text-slate-600 underline-offset-2 hover:underline"
-                    >
-                      Connecter Gmail
-                    </button>
-                  )}
-                  {gmailConnection?.connected && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5"
-                      disabled={scanProgress.running || filtered.length === 0}
-                      onClick={() =>
-                        startScan(
-                          filtered
-                            .filter(({ row: r, partners: ps }) =>
-                              eventNeedsScan(
-                                r.readable_id ?? r.client_request_id ?? "",
-                                ps,
-                                Boolean(r.purchase_order_number),
-                              ),
-                            )
-                            .map(({ row: r, partners: ps }) => ({
-                              event_ref: r.readable_id ?? r.client_request_id ?? "",
-                              // Only partners with an open question — a settled or
-                              // already-answered partner cannot learn anything new.
-                              partners: ps
-                                .filter(
-                                  (p) =>
-                                    !p.is_cancelled &&
-                                    actionFor(
-                                      r.readable_id ?? r.client_request_id ?? "",
-                                      p,
-                                      Boolean(r.purchase_order_number),
-                                    ).scanUseful,
-                                )
-                                .map((p) => ({ name: p.name ?? "", email: p.email })),
-                            })),
-                        )
-                      }
-                      title="Recherche dans vos emails les échanges liés à ces partenaires, puis met à jour les stickers partagés"
-                    >
-                      <Mail className="h-3.5 w-3.5" aria-hidden="true" />
-                      {scanProgress.running
-                        ? `Recherche… ${scanProgress.done}/${scanProgress.total}`
-                        : `Rechercher dans mes emails (${
-                            filtered.filter(({ row: r, partners: ps }) =>
-                              eventNeedsScan(
-                                r.readable_id ?? r.client_request_id ?? "",
-                                ps,
-                                Boolean(r.purchase_order_number),
-                              ),
-                            ).length
-                          })`}
-                    </Button>
-                  )}
-                  <div className="ml-auto text-xs text-muted-foreground">
-                    {filtered.length} / {rows.length} events
-                  </div>
-                </div>
-
-                {factsError != null && (
-                  <div
+                )}
+                {gmailError != null && (
+                  <span
                     role="alert"
-                    className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-1.5 text-xs text-rose-800"
+                    className="inline-flex items-center rounded-md bg-rose-100 px-2 py-1 text-[11px] text-rose-800"
+                    title={String((gmailError as Error).message ?? gmailError)}
                   >
-                    Pastilles email non chargées :{" "}
-                    {String((factsError as Error).message ?? factsError)}
-                  </div>
+                    Recherche email indisponible
+                  </span>
                 )}
-                {(scanProgress.running || scanProgress.error) && (
-                  <div
-                    role="status"
-                    className={`flex-none border-b px-5 py-1.5 text-xs ${
-                      scanProgress.error
-                        ? "border-rose-200 bg-rose-50 text-rose-800"
-                        : "border-border bg-slate-50 text-slate-600"
-                    }`}
+                {gmailConnection?.connected === false && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.href = "/api/gmail/connect";
+                    }}
+                    className="text-[11.5px] text-slate-600 underline-offset-2 hover:underline"
                   >
-                    {scanProgress.error
-                      ? `Recherche interrompue : ${scanProgress.error}`
-                      : `Analyse de vos emails — ${scanProgress.done}/${scanProgress.total} événements, ${scanProgress.matched} partenaires rapprochés. Les contenus ne sont jamais stockés.`}
-                  </div>
+                    Connecter Gmail
+                  </button>
                 )}
-                <div className="sla-scroll">
-                  <Table className="sla-table">
-                    <TableHeader>
-                      <TableRow className="border-b-0">
-                        <TableHead className="w-8"></TableHead>
-                        <TableHead colSpan={5} className="text-center text-[11px] uppercase tracking-wide text-muted-foreground">
-                          Event
-                        </TableHead>
-                        <TableHead colSpan={3} className="border-l-2 border-sky-200 bg-sky-50/60 text-center text-[11px] font-semibold uppercase tracking-wide text-sky-800">
-                          Client — invoicing &amp; receivables
-                        </TableHead>
-                        <TableHead colSpan={3} className="border-l-2 border-indigo-200 bg-indigo-50/60 text-center text-[11px] font-semibold uppercase tracking-wide text-indigo-800">
-                          Partner — payout
-                        </TableHead>
-                      </TableRow>
-                      <TableRow>
-                        <TableHead className="w-8"></TableHead>
-                        <TableHead>Ref</TableHead>
-                        <TableHead>Event</TableHead>
-                        <TableHead>Booked</TableHead>
-                        <TableHead className="whitespace-nowrap text-right">Days</TableHead>
-                        <TableHead className="whitespace-nowrap">PO #</TableHead>
-                        <TableHead className="border-l-2 border-sky-200 bg-sky-50/60">Invoicing SLA</TableHead>
-                        <TableHead className="bg-sky-50/60 text-right">Outstanding</TableHead>
-                        <TableHead className="bg-sky-50/60">Payment</TableHead>
-                        <TableHead className="border-l-2 border-indigo-200 bg-indigo-50/60">Payout SLA</TableHead>
-                        <TableHead className="bg-indigo-50/60">Outreach</TableHead>
-                        <TableHead className="bg-indigo-50/60 text-right">Owed</TableHead>
-                      </TableRow>
-                      <TableRow className="bg-slate-50/70">
-                        <TableHead className="w-8"></TableHead>
-                        <TableHead></TableHead>
-                        <TableHead>
-                          <ColFilter
-                            value={colFilters.event_type ?? "all"}
-                            onChange={(v) => setCol("event_type", v)}
-                            options={distinctEventTypes.map((v) => ({
-                              value: v,
-                              label: v.replaceAll("_", " ").toLowerCase(),
-                            }))}
-                          />
-                          <ColFilter
-                            value={colFilters.country ?? "all"}
-                            onChange={(v) => setCol("country", v)}
-                            options={distinctCountries.map((v) => ({ value: v, label: v }))}
-                            placeholder="Country"
-                          />
-                        </TableHead>
-                        <TableHead></TableHead>
-                        <TableHead></TableHead>
-                        <TableHead>
-                          <ColFilter
-                            value={colFilters.po ?? "all"}
-                            onChange={(v) => setCol("po", v)}
-                            options={[
-                              { value: "with", label: "Has PO" },
-                              { value: "without", label: "No PO" },
-                            ]}
-                          />
-                        </TableHead>
-                        <TableHead className="border-l-2 border-sky-200 bg-sky-50/60">
-                          <ColFilter
-                            value={colFilters.invoicing_sla ?? "all"}
-                            onChange={(v) => setCol("invoicing_sla", v)}
-                            options={[
-                              { value: "paid", label: "On time" },
-                              { value: "due", label: "Pending" },
-                              { value: "overdue", label: "Breached" },
-                              { value: "muted", label: "No PO / N/A" },
-                            ]}
-                          />
-                        </TableHead>
-                        <TableHead className="bg-sky-50/60"></TableHead>
-                        <TableHead className="bg-sky-50/60">
-                          <ColFilter
-                            value={colFilters.payment_status ?? "all"}
-                            onChange={(v) => setCol("payment_status", v)}
-                            options={[
-                              { value: "paid", label: "Paid" },
-                              { value: "due", label: "Due" },
-                              { value: "overdue", label: "Overdue" },
-                              { value: "muted", label: "Not sent / N/A" },
-                            ]}
-                          />
-                        </TableHead>
-                        <TableHead className="border-l-2 border-indigo-200 bg-indigo-50/60">
-                          <ColFilter
-                            value={colFilters.payout_sla ?? "all"}
-                            onChange={(v) => setCol("payout_sla", v)}
-                            options={[
-                              { value: "paid", label: "Fully paid" },
-                              { value: "due", label: "Pending" },
-                              { value: "overdue", label: "Breached" },
-                              { value: "muted", label: "No PO / N/A" },
-                            ]}
-                          />
-                        </TableHead>
-                        <TableHead className="bg-indigo-50/60">
-                          <ColFilter
-                            value={colFilters.outreach ?? "all"}
-                            onChange={(v) => setCol("outreach", v)}
-                            options={distinctOutreach.map((v) => ({ value: v, label: v }))}
-                          />
-                        </TableHead>
-                        <TableHead className="bg-indigo-50/60"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {isLoading && (
-                        <TableRow>
-                          <TableCell colSpan={12} className="py-12 text-center text-muted-foreground">
-                            Loading data from BigQuery…
-                          </TableCell>
-                        </TableRow>
-                      )}
-                      {!isLoading &&
-                        filtered.map(({ row: r, partners, invoices }) => {
-                          const id = r.client_request_id ?? r.readable_id ?? "";
-                          const isOpen = !!expanded[id];
-                          const pay = paymentStatus(r, invoices);
-                          const inv = invoicingSla(r, invoices);
-                          const pay2 = payoutSla(r, partners);
-                          const childCount = partners.length + invoices.length;
-                          return (
-                            <Fragment key={id || Math.random()}>
-                              <TableRow
-                                className="cursor-pointer hover:bg-slate-50"
-                                onClick={() => toggle(id)}
-                              >
-                                <TableCell>
-                                  {childCount > 0 ? (
-                                    isOpen ? (
-                                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                                    ) : (
-                                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                                    )
-                                  ) : null}
-                                </TableCell>
-                                <TableCell className="whitespace-nowrap font-mono font-medium">
-                                  {r.booking_url ? (
-                                    <a href={r.booking_url} target="_blank" rel="noreferrer"
-                                      className="hover:underline underline-offset-2"
-                                      onClick={(e) => e.stopPropagation()}>
-                                      {r.readable_id || "—"}
-                                    </a>
-                                  ) : (r.readable_id || "—")}
-                                  {childCount > 0 && (
-                                    <span className="ml-1 text-[9.5px] text-muted-foreground">
-                                      ({partners.length}p·{invoices.length}i)
-                                    </span>
-                                  )}
-                                  <CommentersChip summary={commentSummaries?.get(r.readable_id ?? r.client_request_id ?? "")} />
-                                  {r.sales_name && r.sales_name.trim() ? (
-                                    <div className="mt-0.5 font-sans text-[10px] font-normal text-muted-foreground">
-                                      {r.sales_name}
-                                    </div>
-                                  ) : null}
-                                </TableCell>
-                                <TableCell className="max-w-[150px]">
-                                  <div className="truncate font-medium">
-                                    {(r.event_type || "—").replaceAll("_", " ").toLowerCase()}
-                                  </div>
-                                  <div className="cell-sub truncate">
-                                    {r.country_iso_code} · {r.billing_entity}
-                                  </div>
-                                </TableCell>
-                                <TableCell className="whitespace-nowrap">
-                                  <div>{fmtDate(r.booking_created_at)}</div>
-                                  <div className="cell-sub">
-                                    {fmtDate(r.booking_date)}
-                                    {r.end_date && r.end_date !== r.booking_date
-                                      ? ` → ${fmtDateShort(r.end_date)}`
-                                      : ""}
-                                  </div>
-                                </TableCell>
-                                <TableCell className="text-right tabular-nums">
-                                  {r.days_since_booking ?? "—"}
-                                </TableCell>
-                                <TableCell className="whitespace-nowrap">
-                                  {r.purchase_order_number ? (
-                                    <>
-                                      <div className="cell-mono">{r.purchase_order_number}</div>
-                                      <div className="cell-sub">
-                                        since {fmtDateShort(r.purchase_order_updated_at)}
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <span className="cell-sub">—</span>
-                                  )}
-                                </TableCell>
-                                <TableCell className="border-l-2 border-sky-200 bg-sky-50/40">
-                                  <PaymentBadge status={inv} />
-                                </TableCell>
-                                <TableCell className="bg-sky-50/40 text-right tabular-nums">
-                                  {fmtCurrency(r.client_reste_a_encaisser_ttc, r.currency)}
-                                </TableCell>
-                                <TableCell className="bg-sky-50/40">
-                                  <PaymentBadge status={pay} />
-                                </TableCell>
-                                <TableCell className="border-l-2 border-indigo-200 bg-indigo-50/40">
-                                  <PaymentBadge status={pay2} />
-                                  {(() => {
-                                    const b = partnerBreakdown(partners);
-                                    if (b.fully + b.partial + b.notPaid === 0) return null;
-                                    return (
-                                      <div className="mt-1 flex gap-1 text-[10px]">
-                                        {b.fully > 0 && <span className="rounded bg-emerald-100 px-1 text-emerald-800" title="Fully paid">{b.fully}✓</span>}
-                                        {b.partial > 0 && <span className="rounded bg-sky-100 px-1 text-sky-800" title="Partially paid">{b.partial}½</span>}
-                                        {b.notPaid > 0 && <span className="rounded bg-rose-100 px-1 text-rose-800" title="Not paid">{b.notPaid}✗</span>}
-                                      </div>
-                                    );
-                                  })()}
-                                </TableCell>
-                                <TableCell className="bg-indigo-50/40">
-                                  {(() => {
-                                    const hasPo = !!(r.purchase_order_number && String(r.purchase_order_number).trim());
-                                    const outreach = partnerOutreach(partners, r.readable_id ?? r.client_request_id ?? "", hasPo);
-                                    return (
-                                      <>
-                                        {outreach ? (
-                                          <span className={`pill ${outreach.cls}`}>
-                                            {outreach.label}
-                                          </span>
-                                        ) : (
-                                          <span className="cell-sub">—</span>
-                                        )}
-                                        <EventStickers
-                                          eventRef={r.readable_id ?? r.client_request_id ?? ""}
-                                          partners={partners}
-                                          hasPo={Boolean(r.purchase_order_number)}
-                                          factsMap={factsMap}
-                                          actionFor={actionFor}
-                                          cardApprovedCodes={cardApprovedCodes}
-                                        />
-                                      </>
-                                    );
-                                  })()}
-                                </TableCell>
-                                <TableCell className="bg-indigo-50/40 text-right tabular-nums">
-                                  {fmtCurrency(r.partner_reste_a_decaisser_ttc, r.currency)}
-                                </TableCell>
-                              </TableRow>
-                              {isOpen && (
-                                <TableRow className="bg-slate-50/60 hover:bg-slate-50/60">
-                                  <TableCell></TableCell>
-                                  <TableCell colSpan={11} className="py-4">
-                                    <EventDetails partners={partners} invoices={invoices} row={r} />
-                                  </TableCell>
-                                </TableRow>
-                              )}
-                            </Fragment>
-                          );
-                        })}
-                      {!isLoading && filtered.length === 0 && (
-                        <TableRow>
-                          <TableCell colSpan={12} className="py-12 text-center text-muted-foreground">
-                            No rows match your filters.
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
+                {gmailConnection?.connected && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    disabled={scanProgress.running || filtered.length === 0}
+                    onClick={() =>
+                      startScan(
+                        filtered
+                          .filter(({ row: r, partners: ps }) =>
+                            eventNeedsScan(
+                              r.readable_id ?? r.client_request_id ?? "",
+                              ps,
+                              Boolean(r.purchase_order_number),
+                            ),
+                          )
+                          .map(({ row: r, partners: ps }) => ({
+                            event_ref: r.readable_id ?? r.client_request_id ?? "",
+                            // Only partners with an open question — a settled or
+                            // already-answered partner cannot learn anything new.
+                            partners: ps
+                              .filter(
+                                (p) =>
+                                  !p.is_cancelled &&
+                                  actionFor(
+                                    r.readable_id ?? r.client_request_id ?? "",
+                                    p,
+                                    Boolean(r.purchase_order_number),
+                                  ).scanUseful,
+                              )
+                              .map((p) => ({ name: p.name ?? "", email: p.email })),
+                          })),
+                      )
+                    }
+                    title="Recherche dans vos emails les échanges liés à ces partenaires, puis met à jour les stickers partagés"
+                  >
+                    <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+                    {scanProgress.running
+                      ? `Recherche… ${scanProgress.done}/${scanProgress.total}`
+                      : `Rechercher dans mes emails (${
+                          filtered.filter(({ row: r, partners: ps }) =>
+                            eventNeedsScan(
+                              r.readable_id ?? r.client_request_id ?? "",
+                              ps,
+                              Boolean(r.purchase_order_number),
+                            ),
+                          ).length
+                        })`}
+                  </Button>
+                )}
+                <div className="ml-auto text-xs text-muted-foreground">
+                  {filtered.length} / {rows.length} events
                 </div>
               </div>
-            </div>
-          </TabsContent>
 
-          <TabsContent value="charts" className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Invoicing SLA status</CardTitle>
-              </CardHeader>
-              <CardContent style={{ height: 320 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={byInvoicingStatus} dataKey="value" nameKey="name" outerRadius={110} label>
-                      {byInvoicingStatus.map((_, i) => (
-                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Top event types</CardTitle>
-              </CardHeader>
-              <CardContent style={{ height: 320 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={byEventType} layout="vertical" margin={{ left: 20 }}>
-                    <XAxis type="number" />
-                    <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="breached">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">
-                  Items past SLA — {breached.length} events need action
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
+              {factsError != null && (
+                <div
+                  role="alert"
+                  className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-1.5 text-xs text-rose-800"
+                >
+                  Pastilles email non chargées :{" "}
+                  {String((factsError as Error).message ?? factsError)}
+                </div>
+              )}
+              {(scanProgress.running || scanProgress.error) && (
+                <div
+                  role="status"
+                  className={`flex-none border-b px-5 py-1.5 text-xs ${
+                    scanProgress.error
+                      ? "border-rose-200 bg-rose-50 text-rose-800"
+                      : "border-border bg-slate-50 text-slate-600"
+                  }`}
+                >
+                  {scanProgress.error
+                    ? `Recherche interrompue : ${scanProgress.error}`
+                    : `Analyse de vos emails — ${scanProgress.done}/${scanProgress.total} événements, ${scanProgress.matched} partenaires rapprochés. Les contenus ne sont jamais stockés.`}
+                </div>
+              )}
+              <div className="sla-scroll">
+                <Table className="sla-table">
+                  <TableHeader>
+                    <TableRow className="border-b-0">
+                      <TableHead className="w-8"></TableHead>
+                      <TableHead
+                        colSpan={5}
+                        className="text-center text-[11px] uppercase tracking-wide text-muted-foreground"
+                      >
+                        Event
+                      </TableHead>
+                      <TableHead
+                        colSpan={3}
+                        className="border-l-2 border-sky-200 bg-sky-50/60 text-center text-[11px] font-semibold uppercase tracking-wide text-sky-800"
+                      >
+                        Client — invoicing &amp; receivables
+                      </TableHead>
+                      <TableHead
+                        colSpan={3}
+                        className="border-l-2 border-indigo-200 bg-indigo-50/60 text-center text-[11px] font-semibold uppercase tracking-wide text-indigo-800"
+                      >
+                        Partner — payout
+                      </TableHead>
+                    </TableRow>
+                    <TableRow>
+                      <TableHead className="w-8"></TableHead>
+                      <TableHead>Ref</TableHead>
+                      <TableHead>Event</TableHead>
+                      <TableHead>Booked</TableHead>
+                      <TableHead className="whitespace-nowrap text-right">Days</TableHead>
+                      <TableHead className="whitespace-nowrap">PO #</TableHead>
+                      <TableHead className="border-l-2 border-sky-200 bg-sky-50/60">
+                        Invoicing SLA
+                      </TableHead>
+                      <TableHead className="bg-sky-50/60 text-right">Outstanding</TableHead>
+                      <TableHead className="bg-sky-50/60">Payment</TableHead>
+                      <TableHead className="border-l-2 border-indigo-200 bg-indigo-50/60">
+                        Payout SLA
+                      </TableHead>
+                      <TableHead className="bg-indigo-50/60">Outreach</TableHead>
+                      <TableHead className="bg-indigo-50/60 text-right">Owed</TableHead>
+                    </TableRow>
+                    <TableRow className="bg-slate-50/70">
+                      <TableHead className="w-8"></TableHead>
+                      <TableHead></TableHead>
+                      <TableHead>
+                        <ColFilter
+                          value={colFilters.event_type ?? "all"}
+                          onChange={(v) => setCol("event_type", v)}
+                          options={distinctEventTypes.map((v) => ({
+                            value: v,
+                            label: v.replaceAll("_", " ").toLowerCase(),
+                          }))}
+                        />
+                        <ColFilter
+                          value={colFilters.country ?? "all"}
+                          onChange={(v) => setCol("country", v)}
+                          options={distinctCountries.map((v) => ({ value: v, label: v }))}
+                          placeholder="Country"
+                        />
+                      </TableHead>
+                      <TableHead></TableHead>
+                      <TableHead></TableHead>
+                      <TableHead>
+                        <ColFilter
+                          value={colFilters.po ?? "all"}
+                          onChange={(v) => setCol("po", v)}
+                          options={[
+                            { value: "with", label: "Has PO" },
+                            { value: "without", label: "No PO" },
+                          ]}
+                        />
+                      </TableHead>
+                      <TableHead className="border-l-2 border-sky-200 bg-sky-50/60">
+                        <ColFilter
+                          value={colFilters.invoicing_sla ?? "all"}
+                          onChange={(v) => setCol("invoicing_sla", v)}
+                          options={[
+                            { value: "paid", label: "On time" },
+                            { value: "due", label: "Pending" },
+                            { value: "overdue", label: "Breached" },
+                            { value: "muted", label: "No PO / N/A" },
+                          ]}
+                        />
+                      </TableHead>
+                      <TableHead className="bg-sky-50/60"></TableHead>
+                      <TableHead className="bg-sky-50/60">
+                        <ColFilter
+                          value={colFilters.payment_status ?? "all"}
+                          onChange={(v) => setCol("payment_status", v)}
+                          options={[
+                            { value: "paid", label: "Paid" },
+                            { value: "due", label: "Due" },
+                            { value: "overdue", label: "Overdue" },
+                            { value: "muted", label: "Not sent / N/A" },
+                          ]}
+                        />
+                      </TableHead>
+                      <TableHead className="border-l-2 border-indigo-200 bg-indigo-50/60">
+                        <ColFilter
+                          value={colFilters.payout_sla ?? "all"}
+                          onChange={(v) => setCol("payout_sla", v)}
+                          options={[
+                            { value: "paid", label: "Fully paid" },
+                            { value: "due", label: "Pending" },
+                            { value: "overdue", label: "Breached" },
+                            { value: "muted", label: "No PO / N/A" },
+                          ]}
+                        />
+                      </TableHead>
+                      <TableHead className="bg-indigo-50/60">
+                        <ColFilter
+                          value={colFilters.outreach ?? "all"}
+                          onChange={(v) => setCol("outreach", v)}
+                          options={distinctOutreach.map((v) => ({ value: v, label: v }))}
+                        />
+                      </TableHead>
+                      <TableHead className="bg-indigo-50/60"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {isLoading && (
                       <TableRow>
-                        <TableHead>Ref</TableHead>
-                        <TableHead>Event</TableHead>
-                        <TableHead>Partners</TableHead>
-                        <TableHead>Issue</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
+                        <TableCell colSpan={12} className="py-12 text-center text-muted-foreground">
+                          Loading data from BigQuery…
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {breached.map(({ row: r, partners, invoices }) => {
+                    )}
+                    {!isLoading &&
+                      filtered.map(({ row: r, partners, invoices }) => {
+                        const id = r.client_request_id ?? r.readable_id ?? "";
+                        const isOpen = !!expanded[id];
                         const pay = paymentStatus(r, invoices);
                         const inv = invoicingSla(r, invoices);
                         const pay2 = payoutSla(r, partners);
-                        const issues: string[] = [];
-                        if (inv.variant === "overdue") issues.push(`Invoicing ${inv.label}`);
-                        if (pay.variant === "overdue") issues.push(`Receivable ${pay.label}`);
-                        if (pay2.variant === "overdue") issues.push(`Payout ${pay2.label}`);
-                        const amount =
-                          pay.variant === "overdue"
-                            ? r.client_reste_a_encaisser_ttc
-                            : r.partner_reste_a_decaisser_ttc;
+                        const childCount = partners.length + invoices.length;
                         return (
-                          <TableRow key={r.client_request_id ?? r.readable_id}>
-                            <TableCell className="font-mono text-xs">{r.readable_id}</TableCell>
-                            <TableCell>
-                              <div className="font-medium">
-                                {(r.event_type || "—").replaceAll("_", " ").toLowerCase()}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                booked {fmtDate(r.booking_created_at)}
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-xs">
-                              {partners.map((p) => p.name).filter(Boolean).join(", ") || "—"}
-                            </TableCell>
-                            <TableCell className="space-x-1">
-                              {issues.map((i) => (
-                                <span
-                                  key={i}
-                                  className="pill bg-rose-100 text-rose-800"
-                                >
-                                  {i}
-                                </span>
-                              ))}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {fmtCurrency(amount, r.currency)}
-                            </TableCell>
-                          </TableRow>
+                          <Fragment key={id || Math.random()}>
+                            <TableRow
+                              className="cursor-pointer hover:bg-slate-50"
+                              onClick={() => toggle(id)}
+                            >
+                              <TableCell>
+                                {childCount > 0 ? (
+                                  isOpen ? (
+                                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                  )
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap font-mono font-medium">
+                                {r.booking_url ? (
+                                  <a
+                                    href={r.booking_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="hover:underline underline-offset-2"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {r.readable_id || "—"}
+                                  </a>
+                                ) : (
+                                  r.readable_id || "—"
+                                )}
+                                {childCount > 0 && (
+                                  <span className="ml-1 text-[9.5px] text-muted-foreground">
+                                    ({partners.length}p·{invoices.length}i)
+                                  </span>
+                                )}
+                                <CommentersChip
+                                  summary={commentSummaries?.get(
+                                    r.readable_id ?? r.client_request_id ?? "",
+                                  )}
+                                />
+                                {r.sales_name && r.sales_name.trim() ? (
+                                  <div className="mt-0.5 font-sans text-[10px] font-normal text-muted-foreground">
+                                    {r.sales_name}
+                                  </div>
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="max-w-[150px]">
+                                <div className="truncate font-medium">
+                                  {(r.event_type || "—").replaceAll("_", " ").toLowerCase()}
+                                </div>
+                                <div className="cell-sub truncate">
+                                  {r.country_iso_code} · {r.billing_entity}
+                                </div>
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap">
+                                <div>{fmtDate(r.booking_created_at)}</div>
+                                <div className="cell-sub">
+                                  {fmtDate(r.booking_date)}
+                                  {r.end_date && r.end_date !== r.booking_date
+                                    ? ` → ${fmtDateShort(r.end_date)}`
+                                    : ""}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {r.days_since_booking ?? "—"}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap">
+                                {r.purchase_order_number ? (
+                                  <>
+                                    <div className="cell-mono">{r.purchase_order_number}</div>
+                                    <div className="cell-sub">
+                                      since {fmtDateShort(r.purchase_order_updated_at)}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <span className="cell-sub">—</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="border-l-2 border-sky-200 bg-sky-50/40">
+                                <PaymentBadge status={inv} />
+                              </TableCell>
+                              <TableCell className="bg-sky-50/40 text-right tabular-nums">
+                                {fmtCurrency(r.client_reste_a_encaisser_ttc, r.currency)}
+                              </TableCell>
+                              <TableCell className="bg-sky-50/40">
+                                <PaymentBadge status={pay} />
+                              </TableCell>
+                              <TableCell className="border-l-2 border-indigo-200 bg-indigo-50/40">
+                                <PaymentBadge status={pay2} />
+                                {(() => {
+                                  const b = partnerBreakdown(partners);
+                                  if (b.fully + b.partial + b.notPaid === 0) return null;
+                                  return (
+                                    <div className="mt-1 flex gap-1 text-[10px]">
+                                      {b.fully > 0 && (
+                                        <span
+                                          className="rounded bg-emerald-100 px-1 text-emerald-800"
+                                          title="Fully paid"
+                                        >
+                                          {b.fully}✓
+                                        </span>
+                                      )}
+                                      {b.partial > 0 && (
+                                        <span
+                                          className="rounded bg-sky-100 px-1 text-sky-800"
+                                          title="Partially paid"
+                                        >
+                                          {b.partial}½
+                                        </span>
+                                      )}
+                                      {b.notPaid > 0 && (
+                                        <span
+                                          className="rounded bg-rose-100 px-1 text-rose-800"
+                                          title="Not paid"
+                                        >
+                                          {b.notPaid}✗
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </TableCell>
+                              <TableCell className="bg-indigo-50/40">
+                                {(() => {
+                                  const hasPo = !!(
+                                    r.purchase_order_number &&
+                                    String(r.purchase_order_number).trim()
+                                  );
+                                  const outreach = partnerOutreach(
+                                    partners,
+                                    r.readable_id ?? r.client_request_id ?? "",
+                                    hasPo,
+                                  );
+                                  return (
+                                    <>
+                                      {outreach ? (
+                                        <span className={`pill ${outreach.cls}`}>
+                                          {outreach.label}
+                                        </span>
+                                      ) : (
+                                        <span className="cell-sub">—</span>
+                                      )}
+                                      <EventStickers
+                                        eventRef={r.readable_id ?? r.client_request_id ?? ""}
+                                        partners={partners}
+                                        hasPo={Boolean(r.purchase_order_number)}
+                                        factsMap={factsMap}
+                                        actionFor={actionFor}
+                                        cardApprovedCodes={cardApprovedCodes}
+                                      />
+                                    </>
+                                  );
+                                })()}
+                              </TableCell>
+                              <TableCell className="bg-indigo-50/40 text-right tabular-nums">
+                                {fmtCurrency(r.partner_reste_a_decaisser_ttc, r.currency)}
+                              </TableCell>
+                            </TableRow>
+                            {isOpen && (
+                              <TableRow className="bg-slate-50/60 hover:bg-slate-50/60">
+                                <TableCell></TableCell>
+                                <TableCell colSpan={11} className="py-4">
+                                  <EventDetails partners={partners} invoices={invoices} row={r} />
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </Fragment>
                         );
                       })}
-                      {breached.length === 0 && (
-                        <TableRow>
-                          <TableCell colSpan={5} className="py-10 text-center text-emerald-700">
-                            🎉 No SLA breaches in scope.
+                    {!isLoading && filtered.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={12} className="py-12 text-center text-muted-foreground">
+                          No rows match your filters.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="charts" className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Invoicing SLA status</CardTitle>
+            </CardHeader>
+            <CardContent style={{ height: 320 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={byInvoicingStatus}
+                    dataKey="value"
+                    nameKey="name"
+                    outerRadius={110}
+                    label
+                  >
+                    {byInvoicingStatus.map((_, i) => (
+                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Top event types</CardTitle>
+            </CardHeader>
+            <CardContent style={{ height: 320 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={byEventType} layout="vertical" margin={{ left: 20 }}>
+                  <XAxis type="number" />
+                  <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="breached">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">
+                Items past SLA — {breached.length} events need action
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Ref</TableHead>
+                      <TableHead>Event</TableHead>
+                      <TableHead>Partners</TableHead>
+                      <TableHead>Issue</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {breached.map(({ row: r, partners, invoices }) => {
+                      const pay = paymentStatus(r, invoices);
+                      const inv = invoicingSla(r, invoices);
+                      const pay2 = payoutSla(r, partners);
+                      const issues: string[] = [];
+                      if (inv.variant === "overdue") issues.push(`Invoicing ${inv.label}`);
+                      if (pay.variant === "overdue") issues.push(`Receivable ${pay.label}`);
+                      if (pay2.variant === "overdue") issues.push(`Payout ${pay2.label}`);
+                      const amount =
+                        pay.variant === "overdue"
+                          ? r.client_reste_a_encaisser_ttc
+                          : r.partner_reste_a_decaisser_ttc;
+                      return (
+                        <TableRow key={r.client_request_id ?? r.readable_id}>
+                          <TableCell className="font-mono text-xs">{r.readable_id}</TableCell>
+                          <TableCell>
+                            <div className="font-medium">
+                              {(r.event_type || "—").replaceAll("_", " ").toLowerCase()}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              booked {fmtDate(r.booking_created_at)}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {partners
+                              .map((p) => p.name)
+                              .filter(Boolean)
+                              .join(", ") || "—"}
+                          </TableCell>
+                          <TableCell className="space-x-1">
+                            {issues.map((i) => (
+                              <span key={i} className="pill bg-rose-100 text-rose-800">
+                                {i}
+                              </span>
+                            ))}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {fmtCurrency(amount, r.currency)}
                           </TableCell>
                         </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
+                      );
+                    })}
+                    {breached.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="py-10 text-center text-emerald-700">
+                          🎉 No SLA breaches in scope.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
       {requestDialog.targets && (
-        <RequestInfoDialog
-          targets={requestDialog.targets}
-          onClose={requestDialog.close}
-        />
+        <RequestInfoDialog targets={requestDialog.targets} onClose={requestDialog.close} />
       )}
     </div>
   );
@@ -1561,7 +1709,6 @@ function EventDetails({
                   <th className="px-2 py-1.5 text-right">Due</th>
                   <th className="px-2 py-1.5 text-right">Paid</th>
                   <th className="px-2 py-1.5">Manual status</th>
-
                 </tr>
               </thead>
               <tbody>
@@ -1571,7 +1718,7 @@ function EventDetails({
                   // Paid is stored as a negative (cash outflow) in the source;
                   // normalize to a positive magnitude for status logic.
                   const paid = Math.abs(paidRaw);
-                  
+
                   const pname = p.name ?? "";
                   const key = `${eventRef}::${partnerKey(pname)}`;
                   const stored = statusMap?.get(key)?.status;
@@ -1582,8 +1729,7 @@ function EventDetails({
                   else if (paid > 0.01 && paid + 0.01 >= due) derived = "fully_paid";
                   else if (paid > 0.01) derived = "partially_paid";
 
-                  const current: PartnerStatusValue =
-                    derived ?? stored ?? "not_contacted";
+                  const current: PartnerStatusValue = derived ?? stored ?? "not_contacted";
                   const opt = PARTNER_STATUS_OPTIONS.find((o) => o.value === current)!;
                   const manualOptions = PARTNER_STATUS_OPTIONS.filter(
                     (o) => o.value === "not_contacted" || o.value === "waiting_bank",
@@ -1593,7 +1739,9 @@ function EventDetails({
                       <td className="px-2 py-1.5 font-medium">
                         {pname || "—"}
                         {p.is_cancelled && (
-                          <span className="ml-1 text-[10px] text-muted-foreground">(cancelled)</span>
+                          <span className="ml-1 text-[10px] text-muted-foreground">
+                            (cancelled)
+                          </span>
                         )}
                         <PartnerStickers
                           action={actionFor(eventRef, p, Boolean(row.purchase_order_number))}
@@ -1606,11 +1754,7 @@ function EventDetails({
                         />
                         {(() => {
                           if (!gmailConnection?.connected || !p.email) return null;
-                          const action = actionFor(
-                            eventRef,
-                            p,
-                            Boolean(row.purchase_order_number),
-                          );
+                          const action = actionFor(eventRef, p, Boolean(row.purchase_order_number));
                           const needs = needsOf(action, p.country);
                           if (!needs) return null;
                           return (
@@ -1653,10 +1797,7 @@ function EventDetails({
 
                       <td className="px-2 py-1.5">
                         {derived ? (
-                          <span
-                            className={`pill ${opt.cls}`}
-                            title="Derived from amounts"
-                          >
+                          <span className={`pill ${opt.cls}`} title="Derived from amounts">
                             {opt.label}
                           </span>
                         ) : (
@@ -1688,7 +1829,6 @@ function EventDetails({
           </div>
         )}
       </div>
-
 
       <div>
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1753,10 +1893,11 @@ function EventDetails({
           if (!firstActive?.emission_date) return null;
           return (
             <div className="mt-2 text-[11px] text-muted-foreground">
-              First invoice emitted {fmtDate(firstActive.emission_date)} ·
-              payment due {new Date(new Date(firstActive.emission_date).getTime() + 60 * 86_400_000)
+              First invoice emitted {fmtDate(firstActive.emission_date)} · payment due{" "}
+              {new Date(new Date(firstActive.emission_date).getTime() + 60 * 86_400_000)
                 .toISOString()
-                .slice(0, 10)} (60d)
+                .slice(0, 10)}{" "}
+              (60d)
             </div>
           );
         })()}
@@ -1782,10 +1923,7 @@ function EventDetails({
       </div>
 
       {requestDialog.targets && (
-        <RequestInfoDialog
-          targets={requestDialog.targets}
-          onClose={requestDialog.close}
-        />
+        <RequestInfoDialog targets={requestDialog.targets} onClose={requestDialog.close} />
       )}
     </div>
   );
@@ -1825,27 +1963,23 @@ function EventComments({ eventRef }: { eventRef: string }) {
       </div>
       <div className="rounded border bg-white">
         <div className="divide-y">
-          {isLoading && (
-            <div className="px-3 py-3 text-xs text-muted-foreground">Loading…</div>
-          )}
+          {isLoading && <div className="px-3 py-3 text-xs text-muted-foreground">Loading…</div>}
           {!isLoading && (comments?.length ?? 0) === 0 && (
             <div className="px-3 py-3 text-xs text-muted-foreground">No comments yet.</div>
           )}
           {comments?.map((c) => (
             <div key={c.id} className="flex gap-3 px-3 py-2.5">
               <UserAvatar
-  name={c.user_name}
-  email={c.user_email}
-  picture={c.user_avatar_url}
-  className="h-6 w-6"
-  fallbackClassName="bg-slate-200 text-slate-700"
-  textClassName="text-[10px]"
-/>
+                name={c.user_name}
+                email={c.user_email}
+                picture={c.user_avatar_url}
+                className="h-6 w-6"
+                fallbackClassName="bg-slate-200 text-slate-700"
+                textClassName="text-[10px]"
+              />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span className="font-medium text-slate-800">
-                    {c.user_name || c.user_email}
-                  </span>
+                  <span className="font-medium text-slate-800">{c.user_name || c.user_email}</span>
                   <span>·</span>
                   <span>{fmtWhen(c.created_at)}</span>
                   {user?.id === c.user_id && (
@@ -1890,13 +2024,20 @@ function EventComments({ eventRef }: { eventRef: string }) {
           </Button>
         </div>
         {addComment.isError && (
-          <div role="alert" className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+          <div
+            role="alert"
+            className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+          >
             Comment not saved: {String((addComment.error as Error)?.message ?? addComment.error)}
           </div>
         )}
         {deleteComment.isError && (
-          <div role="alert" className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-            Comment not deleted: {String((deleteComment.error as Error)?.message ?? deleteComment.error)}
+          <div
+            role="alert"
+            className="border-t border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+          >
+            Comment not deleted:{" "}
+            {String((deleteComment.error as Error)?.message ?? deleteComment.error)}
           </div>
         )}
       </div>
@@ -1922,12 +2063,15 @@ function KpiCard({
           {icon}
           {label}
         </div>
-        <div className="mt-1 font-display text-[28px] font-bold leading-tight tracking-tight">{value}</div>
-        {sub != null && (
-          typeof sub === "string"
-            ? <div className="text-xs text-muted-foreground">{sub}</div>
-            : <div className="mt-1 text-xs text-muted-foreground">{sub}</div>
-        )}
+        <div className="mt-1 font-display text-[28px] font-bold leading-tight tracking-tight">
+          {value}
+        </div>
+        {sub != null &&
+          (typeof sub === "string" ? (
+            <div className="text-xs text-muted-foreground">{sub}</div>
+          ) : (
+            <div className="mt-1 text-xs text-muted-foreground">{sub}</div>
+          ))}
       </CardContent>
     </Card>
   );
@@ -1963,7 +2107,9 @@ function BreakdownCard({
             <div key={i} className="flex items-center justify-between gap-3 px-3 py-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 text-sm font-medium">
-                  <span className={`inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded px-1.5 text-[11px] font-semibold ${accentBg} ${accentText}`}>
+                  <span
+                    className={`inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded px-1.5 text-[11px] font-semibold ${accentBg} ${accentText}`}
+                  >
                     {r.count}
                   </span>
                   <span className="truncate">{r.label}</span>
@@ -1980,7 +2126,6 @@ function BreakdownCard({
     </Card>
   );
 }
-
 
 function ColFilter({
   value,

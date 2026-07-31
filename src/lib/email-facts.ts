@@ -119,10 +119,7 @@ function newer(a: string | null, b: string): boolean {
  * Folds a partner's messages (any order) into a single set of facts.
  * `selfAddress` is the mailbox owner, used as a fallback attribution.
  */
-export function extractFacts(
-  messages: MessageInput[],
-  selfAddress: string,
-): ExtractedFacts {
+export function extractFacts(messages: MessageInput[], selfAddress: string): ExtractedFacts {
   const facts: ExtractedFacts = {
     contactedAt: null,
     contactedBy: null,

@@ -15,12 +15,7 @@
 import { useState } from "react";
 import { ExternalLink, Mail, RefreshCw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  useDraftEmail,
-  useGmailConnection,
-  usePartnerEmails,
-  useSendEmail,
-} from "@/lib/use-gmail";
+import { useDraftEmail, useGmailConnection, usePartnerEmails, useSendEmail } from "@/lib/use-gmail";
 
 export type PartnerContact = {
   name: string | null;

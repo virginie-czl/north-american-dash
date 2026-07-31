@@ -184,7 +184,10 @@ export function tagsForEvent(
 }
 
 /** Filter options, grouped for the dropdown. */
-export const TAG_FILTER_GROUPS: Array<{ label: string; options: Array<{ value: TagKey; label: string }> }> = [
+export const TAG_FILTER_GROUPS: Array<{
+  label: string;
+  options: Array<{ value: TagKey; label: string }>;
+}> = [
   {
     label: "Action",
     options: [

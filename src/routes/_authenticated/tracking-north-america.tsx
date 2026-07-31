@@ -1874,6 +1874,8 @@ function PartnerSectionCard({
                     }}
                     hideTax
                     hideCardPending
+                    hideAction
+                    hideContact
                   />
                 </>
               )}

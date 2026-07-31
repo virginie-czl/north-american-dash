@@ -78,17 +78,37 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "Naboo Tracker" },
-      { name: "description", content: "Client SLA Watcher tracks and monitors Service Level Agreements for clients using BigQuery data." },
+      {
+        name: "description",
+        content:
+          "Client SLA Watcher tracks and monitors Service Level Agreements for clients using BigQuery data.",
+      },
       { name: "author", content: "Lovable" },
       { property: "og:title", content: "Naboo Tracker" },
-      { property: "og:description", content: "Client SLA Watcher tracks and monitors Service Level Agreements for clients using BigQuery data." },
+      {
+        property: "og:description",
+        content:
+          "Client SLA Watcher tracks and monitors Service Level Agreements for clients using BigQuery data.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
       { name: "twitter:title", content: "Naboo Tracker" },
-      { name: "twitter:description", content: "Client SLA Watcher tracks and monitors Service Level Agreements for clients using BigQuery data." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/e79148e1-f4a4-4618-8411-adb9370c0e9c/id-preview-1d8d76b6--17e8c571-5007-4296-b60d-73f0a83fe01c.lovable.app-1782859906995.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/e79148e1-f4a4-4618-8411-adb9370c0e9c/id-preview-1d8d76b6--17e8c571-5007-4296-b60d-73f0a83fe01c.lovable.app-1782859906995.png" },
+      {
+        name: "twitter:description",
+        content:
+          "Client SLA Watcher tracks and monitors Service Level Agreements for clients using BigQuery data.",
+      },
+      {
+        property: "og:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/e79148e1-f4a4-4618-8411-adb9370c0e9c/id-preview-1d8d76b6--17e8c571-5007-4296-b60d-73f0a83fe01c.lovable.app-1782859906995.png",
+      },
+      {
+        name: "twitter:image",
+        content:
+          "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/e79148e1-f4a4-4618-8411-adb9370c0e9c/id-preview-1d8d76b6--17e8c571-5007-4296-b60d-73f0a83fe01c.lovable.app-1782859906995.png",
+      },
     ],
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },

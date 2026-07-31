@@ -15,7 +15,6 @@ export type GmailConnection = {
   connected_at?: string;
 };
 
-
 /**
  * Server functions should return arrays, but a transport-level surprise (an auth
  * error serialised into the return value, say) would otherwise crash on
@@ -183,11 +182,7 @@ export function useFactScan() {
 
 // --- Batch provider requests -------------------------------------------------
 
-import {
-  sendPartnerRequests,
-  type BatchResult,
-  type OutgoingMessage,
-} from "@/lib/gmail.functions";
+import { sendPartnerRequests, type BatchResult, type OutgoingMessage } from "@/lib/gmail.functions";
 
 export type { BatchResult, OutgoingMessage };
 

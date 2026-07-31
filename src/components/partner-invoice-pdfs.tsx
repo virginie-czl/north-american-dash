@@ -20,11 +20,7 @@ function filename(url: string): string {
   }
 }
 
-export function PartnerInvoicePdfs({
-  clientRequestId,
-}: {
-  clientRequestId: string | null;
-}) {
+export function PartnerInvoicePdfs({ clientRequestId }: { clientRequestId: string | null }) {
   const [pdfs, setPdfs] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,9 +66,7 @@ export function PartnerInvoicePdfs({
         </p>
       )}
 
-      {loading && (
-        <p className="px-3.5 py-2.5 text-[11.5px] text-slate-500">Chargement…</p>
-      )}
+      {loading && <p className="px-3.5 py-2.5 text-[11.5px] text-slate-500">Chargement…</p>}
 
       {error && (
         <p role="alert" className="px-3.5 py-2.5 text-[11.5px] text-rose-800">
@@ -80,8 +74,9 @@ export function PartnerInvoicePdfs({
         </p>
       )}
 
-      {pdfs !== null && !loading && (
-        pdfs.length === 0 ? (
+      {pdfs !== null &&
+        !loading &&
+        (pdfs.length === 0 ? (
           <p className="px-3.5 py-2.5 text-[11.5px] text-slate-500">
             Aucune facture soumise pour cet événement.
           </p>
@@ -105,8 +100,7 @@ export function PartnerInvoicePdfs({
               </li>
             ))}
           </ul>
-        )
-      )}
+        ))}
     </section>
   );
 }

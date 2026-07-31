@@ -80,8 +80,8 @@ export function NaCommissionRequestDialog({
           <span className="min-w-0">
             <h2 className="font-display text-lg font-bold leading-tight">Send selected</h2>
             <p className="mt-0.5 text-[12.5px] text-slate-600">
-              Deselect partners you don't want to contact. Each message will be sent
-              from your Gmail. Your Gmail signature will be added automatically.
+              Deselect partners you don't want to contact. Each message will be sent from your
+              Gmail. Your Gmail signature will be added automatically.
             </p>
           </span>
           <button
@@ -114,12 +114,8 @@ export function NaCommissionRequestDialog({
                     className="mt-0.5 h-3.5 w-3.5 flex-none accent-navy"
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[13px] font-semibold">
-                      {t.partnerName ?? "—"}
-                    </span>
-                    <span className="block truncate text-[11.5px] text-slate-500">
-                      {t.address}
-                    </span>
+                    <span className="block text-[13px] font-semibold">{t.partnerName ?? "—"}</span>
+                    <span className="block truncate text-[11.5px] text-slate-500">{t.address}</span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-2">
                       <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-[1px] text-[10px] font-medium text-slate-600">
                         {t.eventRef}
@@ -188,7 +184,10 @@ export function NaCommissionRequestDialog({
                       value={message.subject}
                       disabled={requests.running || finished}
                       onChange={(e) =>
-                        setEdits((prev) => ({ ...prev, [k]: { ...message, subject: e.target.value } }))
+                        setEdits((prev) => ({
+                          ...prev,
+                          [k]: { ...message, subject: e.target.value },
+                        }))
                       }
                       aria-label="Subject"
                       placeholder="Subject"
@@ -244,7 +243,10 @@ export function NaCommissionRequestDialog({
                   size="sm"
                   className="h-8 gap-1.5"
                   disabled={requests.running || messages.length === 0}
-                  onClick={() => { setConfirmSend(false); requests.run(messages, "draft"); }}
+                  onClick={() => {
+                    setConfirmSend(false);
+                    requests.run(messages, "draft");
+                  }}
                 >
                   <FileText className="h-3.5 w-3.5" aria-hidden="true" />
                   Save as drafts ({messages.length})
@@ -285,7 +287,10 @@ export function NaCommissionRequestDialog({
         </footer>
 
         {requests.error && (
-          <p role="alert" className="border-t border-rose-200 bg-rose-50 px-5 py-2 text-xs text-rose-800">
+          <p
+            role="alert"
+            className="border-t border-rose-200 bg-rose-50 px-5 py-2 text-xs text-rose-800"
+          >
             {requests.error}
           </p>
         )}

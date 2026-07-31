@@ -127,10 +127,7 @@ export function SummaryStrip({
         <span className="ml-auto text-xs text-slate-500">{open ? "Hide" : "Show"} details</span>
       </button>
       {open && (
-        <div
-          id={panelId}
-          className="space-y-3 border-b border-border bg-slate-50 px-5 py-3.5"
-        >
+        <div id={panelId} className="space-y-3 border-b border-border bg-slate-50 px-5 py-3.5">
           {children}
         </div>
       )}

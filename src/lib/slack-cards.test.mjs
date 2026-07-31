@@ -1,7 +1,16 @@
 import { parseApprovals } from "./slack-cards.server.ts";
 
-let pass = 0, fail = 0;
-const t = (n, c, g = "") => { if (c) { pass++; console.log("  ✓", n); } else { fail++; console.log("  ✗", n, g); } };
+let pass = 0,
+  fail = 0;
+const t = (n, c, g = "") => {
+  if (c) {
+    pass++;
+    console.log("  ✓", n);
+  } else {
+    fail++;
+    console.log("  ✗", n, g);
+  }
+};
 
 // Real message bodies from #finance-paiement-by-card
 const approved = {
@@ -72,17 +81,22 @@ t("amount-update refusal is not an approval", !all.some((a) => a.ownerCode === "
 t("lock notice ignored (no O- code)", all.length === 1);
 
 // Approvals by someone else are still approvals
-const byOther = parseApprovals([{
-  ts: "1785333600.000000",
-  text: `*Credit Card Request Approved* :white_check_mark:
+const byOther = parseApprovals([
+  {
+    ts: "1785333600.000000",
+    text: `*Credit Card Request Approved* :white_check_mark:
 
 *Approved by:* Gaspard De Surville
 *Amount:* €1,512.00
 *Client Request:* C-S900
 *Partner:* O-G0264
 *Pliant Card ID:* a535aaf6-7e4b-4669-aecd-5d8c242f33cc`,
-}]);
-t("approval by a colleague counts", byOther[0]?.ownerCode === "O-G0264" && byOther[0]?.approvedBy === "Gaspard De Surville");
+  },
+]);
+t(
+  "approval by a colleague counts",
+  byOther[0]?.ownerCode === "O-G0264" && byOther[0]?.approvedBy === "Gaspard De Surville",
+);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

@@ -1,9 +1,15 @@
 import { pickContact, composeCommissionRequest } from "./commission-requests.ts";
 
-let pass = 0, fail = 0;
+let pass = 0,
+  fail = 0;
 const t = (name, cond, got = "") => {
-  if (cond) { pass++; console.log("  ✓", name); }
-  else { fail++; console.log("  ✗", name, got); }
+  if (cond) {
+    pass++;
+    console.log("  ✓", name);
+  } else {
+    fail++;
+    console.log("  ✗", name, got);
+  }
 };
 
 const partner = (overrides = {}) => ({

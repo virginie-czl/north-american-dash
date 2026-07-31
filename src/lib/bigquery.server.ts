@@ -33,15 +33,8 @@ function getCredentials(): ServiceAccountCredentials {
 }
 
 function b64url(input: ArrayBuffer | string): string {
-  const buf =
-    typeof input === "string"
-      ? Buffer.from(input, "utf8")
-      : Buffer.from(input);
-  return buf
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
+  const buf = typeof input === "string" ? Buffer.from(input, "utf8") : Buffer.from(input);
+  return buf.toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
 async function createJWT(credentials: ServiceAccountCredentials): Promise<string> {

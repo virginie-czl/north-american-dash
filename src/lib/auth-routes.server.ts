@@ -195,7 +195,6 @@ function handleLogout(request: Request): Response {
   });
 }
 
-
 // --- Gmail connection (separate from sign-in) -------------------------------
 // Signing in never asks for mailbox access; connecting Gmail is an explicit,
 // revocable extra step, so the tracker is usable without it.
@@ -313,7 +312,6 @@ async function handleGmailDisconnect(request: Request): Promise<Response> {
   await disconnect(session.email);
   return new Response(null, { status: 204 });
 }
-
 
 // --- Access administration ---------------------------------------------------
 

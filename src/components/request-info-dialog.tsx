@@ -58,9 +58,7 @@ export function RequestInfoDialog({
   }
 
   const sentKey = (r: RequestTarget) =>
-    requests.results.find(
-      (res) => res.to.toLowerCase() === r.address.toLowerCase(),
-    );
+    requests.results.find((res) => res.to.toLowerCase() === r.address.toLowerCase());
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/40 p-4">
@@ -73,12 +71,10 @@ export function RequestInfoDialog({
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <header className="flex flex-none items-start gap-3 border-b border-border px-5 py-4">
           <span className="min-w-0">
-            <h2 className="font-display text-lg font-bold leading-tight">
-              Send selected
-            </h2>
+            <h2 className="font-display text-lg font-bold leading-tight">Send selected</h2>
             <p className="mt-0.5 text-[12.5px] text-slate-600">
-              Deselect providers you don't want to contact. Each message will be
-              sent from your Gmail. Your Gmail signature will be added automatically.
+              Deselect providers you don't want to contact. Each message will be sent from your
+              Gmail. Your Gmail signature will be added automatically.
             </p>
           </span>
           <button
@@ -116,9 +112,7 @@ export function RequestInfoDialog({
                   {/* name + meta */}
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13px] font-semibold">{t.partnerName}</span>
-                    <span className="block truncate text-[11.5px] text-slate-500">
-                      {t.address}
-                    </span>
+                    <span className="block truncate text-[11.5px] text-slate-500">{t.address}</span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-2">
                       <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-[1px] text-[10px] font-medium text-slate-600">
                         {t.eventRef}
@@ -222,9 +216,7 @@ export function RequestInfoDialog({
             </span>
           ) : finished ? (
             <span className="text-[12.5px]">
-              <span className="text-emerald-800">
-                {successes.length} successful
-              </span>
+              <span className="text-emerald-800">{successes.length} successful</span>
               {failures.length > 0 && (
                 <span className="ml-2 text-rose-800">{failures.length} failed</span>
               )}
@@ -247,7 +239,10 @@ export function RequestInfoDialog({
                   size="sm"
                   className="h-8 gap-1.5"
                   disabled={requests.running || messages.length === 0}
-                  onClick={() => { setConfirmSend(false); requests.run(messages, "draft"); }}
+                  onClick={() => {
+                    setConfirmSend(false);
+                    requests.run(messages, "draft");
+                  }}
                 >
                   <FileText className="h-3.5 w-3.5" aria-hidden="true" />
                   Save as drafts ({messages.length})

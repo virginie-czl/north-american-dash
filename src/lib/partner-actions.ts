@@ -28,7 +28,8 @@ const QST_RE = /(\d{10})\W{0,3}TQ\W{0,3}(\d{4})/i;
  * EU VAT, matched after separators are stripped. Some countries insert letters
  * (Spanish `ESB97894372`, Dutch `NL123456789B01`), so the body is alphanumeric.
  */
-const EU_VAT_RE = /\b(FR|BE|DE|ES|IT|NL|LU|IE|PT|AT|PL|GB|DK|SE|FI|CZ|RO|HU|GR|EL)([0-9A-Z]{8,13})\b/;
+const EU_VAT_RE =
+  /\b(FR|BE|DE|ES|IT|NL|LU|IE|PT|AT|PL|GB|DK|SE|FI|CZ|RO|HU|GR|EL)([0-9A-Z]{8,13})\b/;
 
 /**
  * Values people type to get past a required field. These mean "not filled in",
@@ -36,8 +37,24 @@ const EU_VAT_RE = /\b(FR|BE|DE|ES|IT|NL|LU|IE|PT|AT|PL|GB|DK|SE|FI|CZ|RO|HU|GR|E
  * would bury the handful of records that genuinely need correcting.
  */
 const PLACEHOLDERS = new Set([
-  "0", "00", "000", "x", "xx", "xxx", "n", "na", "nan", "none", "no", "nil",
-  "neant", "aucun", "tbc", "tbd", "sansobjet", "notapplicable",
+  "0",
+  "00",
+  "000",
+  "x",
+  "xx",
+  "xxx",
+  "n",
+  "na",
+  "nan",
+  "none",
+  "no",
+  "nil",
+  "neant",
+  "aucun",
+  "tbc",
+  "tbd",
+  "sansobjet",
+  "notapplicable",
 ]);
 
 function isPlaceholder(text: string): boolean {
@@ -56,7 +73,9 @@ function isPlaceholder(text: string): boolean {
  * `121107726RT0001` to `TPS/GST : 819512187RT0001 - TVQ/PST : 1222113845TQ0001`
  * to `7886 41132`, plus plenty of empty strings. Read out what we can.
  */
-export function parseTaxRegistration(...sources: Array<string | null | undefined>): TaxRegistration {
+export function parseTaxRegistration(
+  ...sources: Array<string | null | undefined>
+): TaxRegistration {
   const text = sources.filter(Boolean).join(" ").trim();
   if (!text || isPlaceholder(text)) {
     return { gst: null, qst: null, vat: null, unparsed: null, usable: false };

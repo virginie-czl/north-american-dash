@@ -89,7 +89,6 @@ function Avatar({ user }: { user: AppUser }) {
   return <UserAvatar name={user.name} email={user.email} picture={user.picture} />;
 }
 
-
 /**
  * Which trackers a person may open. Separate from approval on purpose: someone can
  * be a trusted colleague and still have no business in the L'Oréal numbers.
@@ -169,12 +168,18 @@ function AdminPage() {
       </header>
 
       {error != null && (
-        <div role="alert" className="border-b border-rose-200 bg-rose-50 px-6 py-2.5 text-sm text-rose-800">
+        <div
+          role="alert"
+          className="border-b border-rose-200 bg-rose-50 px-6 py-2.5 text-sm text-rose-800"
+        >
           {String((error as Error).message)}
         </div>
       )}
       {decide.isError && (
-        <div role="alert" className="border-b border-rose-200 bg-rose-50 px-6 py-2.5 text-sm text-rose-800">
+        <div
+          role="alert"
+          className="border-b border-rose-200 bg-rose-50 px-6 py-2.5 text-sm text-rose-800"
+        >
           {String((decide.error as Error).message)}
         </div>
       )}

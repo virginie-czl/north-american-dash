@@ -43,7 +43,6 @@ export type EventCommentSummary = {
   commenters: CommenterSummary[];
 };
 
-
 /** Same guard as the Gmail hooks: an unexpected payload must not crash on forEach. */
 function expectArray<T>(value: unknown, what: string): T[] {
   if (Array.isArray(value)) return value as T[];
@@ -164,7 +163,9 @@ export function useCommentSummaries() {
  * Mirrors the BigQuery-sourced PO numbers into the annotation table so the app
  * remembers when a PO was first seen (emission date), and returns the map.
  */
-export function usePoEmissionDates(rows: Array<{ readable_id: string | null; purchase_order_number?: string | number | null }>) {
+export function usePoEmissionDates(
+  rows: Array<{ readable_id: string | null; purchase_order_number?: string | number | null }>,
+) {
   const qc = useQueryClient();
   const { data: map } = useQuery({
     queryKey: ["po-emission"],

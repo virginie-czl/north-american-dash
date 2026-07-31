@@ -85,11 +85,12 @@ export async function findContactThreads(
         threadId: string;
         internalDate?: string;
         payload?: { headers?: Array<{ name: string; value: string }> };
-      }>(email, `/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject`);
+      }>(
+        email,
+        `/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject`,
+      );
       const headers = detail.payload?.headers ?? [];
-      const at = detail.internalDate
-        ? new Date(Number(detail.internalDate)).toISOString()
-        : null;
+      const at = detail.internalDate ? new Date(Number(detail.internalDate)).toISOString() : null;
       if (!at) continue;
       const from = header(headers, "From").toLowerCase();
       const outbound = from.includes(email.toLowerCase());
@@ -163,7 +164,6 @@ export async function sendMessage(
   return { messageId: sent.id, threadId: sent.threadId };
 }
 
-
 // --- Scanning for partner facts ---------------------------------------------
 
 import type { MessageInput } from "./email-facts";
@@ -217,9 +217,7 @@ async function fetchMessages(email: string, ids: string[]): Promise<MessageInput
   for (const id of ids) {
     const detail = await gmail<RawMessage>(email, `/messages/${id}?format=full`);
     const headers = detail.payload?.headers ?? [];
-    const at = detail.internalDate
-      ? new Date(Number(detail.internalDate)).toISOString()
-      : null;
+    const at = detail.internalDate ? new Date(Number(detail.internalDate)).toISOString() : null;
     if (!at) continue;
     const from = header(headers, "From");
     const { text, attachments } = flatten(detail.payload);

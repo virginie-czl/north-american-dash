@@ -130,8 +130,12 @@ function NaCommissionsPage() {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [composing, setComposing] = useState<null | {
-    to: string; contactName: string | null; subject: string; body: string;
-    row: CommissionRow; mode: "commission" | "refund" | "combined";
+    to: string;
+    contactName: string | null;
+    subject: string;
+    body: string;
+    row: CommissionRow;
+    mode: "commission" | "refund" | "combined";
   }>(null);
   const { data: gmailConnection } = useGmailConnection();
   const requests = usePartnerRequests();
@@ -157,27 +161,27 @@ function NaCommissionsPage() {
         (r.company_name ?? "").toLowerCase().includes(q) ||
         (r.event_name ?? "").toLowerCase().includes(q) ||
         (r.em_referent ?? "").toLowerCase().includes(q) ||
-        (r.partners ?? []).some((p) =>
-          (p.partner_name ?? "").toLowerCase().includes(q),
-        ),
+        (r.partners ?? []).some((p) => (p.partner_name ?? "").toLowerCase().includes(q)),
     );
   }, [data, search]);
 
   // KPIs
   const totalCommission = useMemo(
     () =>
-      data.reduce((s, r) => {
-        if (!r.total_commission_ht) return s;
-        const k = r.currency_client ?? "?";
-        s[k] = (s[k] ?? 0) + Number(r.total_commission_ht);
-        return s;
-      }, {} as Record<string, number>),
+      data.reduce(
+        (s, r) => {
+          if (!r.total_commission_ht) return s;
+          const k = r.currency_client ?? "?";
+          s[k] = (s[k] ?? 0) + Number(r.total_commission_ht);
+          return s;
+        },
+        {} as Record<string, number>,
+      ),
     [data],
   );
 
   const mismatches = useMemo(
-    () =>
-      data.filter((r) => (r.partners ?? []).some((p) => p.mismatch)).length,
+    () => data.filter((r) => (r.partners ?? []).some((p) => p.mismatch)).length,
     [data],
   );
 
@@ -225,7 +229,10 @@ function NaCommissionsPage() {
       />
 
       {error != null && (
-        <div role="alert" className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-2.5 text-sm text-rose-800">
+        <div
+          role="alert"
+          className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-2.5 text-sm text-rose-800"
+        >
           Failed to load: {String((error as Error).message ?? error)}
         </div>
       )}
@@ -312,9 +319,7 @@ function NaCommissionsPage() {
                     <TableCell className="max-w-[130px] truncate font-medium">
                       {r.company_name ?? "—"}
                     </TableCell>
-                    <TableCell className="max-w-[160px] truncate">
-                      {r.event_name ?? "—"}
-                    </TableCell>
+                    <TableCell className="max-w-[160px] truncate">{r.event_name ?? "—"}</TableCell>
                     <TableCell className="whitespace-nowrap text-slate-500">
                       {fmtEventType(r.event_type)}
                     </TableCell>
@@ -400,64 +405,85 @@ function NaCommissionsPage() {
                             ))}
                           </tbody>
                         </table>
-                        {gmailConnection?.connected && (() => {
-                          const contact = pickContact(r.partners ?? []);
-                          if (!contact.address) return (
-                            <p className="mt-2 text-[10.5px] text-slate-400">
-                              No contact email on file for this booking.
-                            </p>
-                          );
-                          const { subject, body } = composeCommissionRequest(r, contact);
-                          return (
-                            <>
-                            <button
-                              type="button"
-                              className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-sky-800 underline-offset-2 hover:underline"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setComposing({ to: contact.address!, contactName: contact.name, subject, body, row: r, mode: "commission" });
-                              }}
-                            >
-                              <Send className="h-3 w-3" aria-hidden="true" />
-                              Request commission
-                            </button>
-                            {(() => {
-                              const refund = composeRefundRequest(r, contact);
-                              if (!refund) return null;
+                        {gmailConnection?.connected &&
+                          (() => {
+                            const contact = pickContact(r.partners ?? []);
+                            if (!contact.address)
                               return (
+                                <p className="mt-2 text-[10.5px] text-slate-400">
+                                  No contact email on file for this booking.
+                                </p>
+                              );
+                            const { subject, body } = composeCommissionRequest(r, contact);
+                            return (
+                              <>
                                 <button
                                   type="button"
-                                  className="mt-1 inline-flex items-center gap-1.5 text-[11.5px] text-rose-800 underline-offset-2 hover:underline"
+                                  className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-sky-800 underline-offset-2 hover:underline"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setComposing({ to: contact.address!, contactName: contact.name, ...refund, row: r, mode: "refund" });
+                                    setComposing({
+                                      to: contact.address!,
+                                      contactName: contact.name,
+                                      subject,
+                                      body,
+                                      row: r,
+                                      mode: "commission",
+                                    });
                                   }}
                                 >
                                   <Send className="h-3 w-3" aria-hidden="true" />
-                                  Request refund
+                                  Request commission
                                 </button>
-                              );
-                            })()}
-                            {(() => {
-                              const combined = composeCombinedRequest(r, contact);
-                              if (!combined) return null;
-                              return (
-                                <button
-                                  type="button"
-                                  className="mt-1 inline-flex items-center gap-1.5 text-[11.5px] text-amber-800 underline-offset-2 hover:underline"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setComposing({ to: contact.address!, contactName: contact.name, ...combined, row: r, mode: "combined" });
-                                  }}
-                                >
-                                  <Send className="h-3 w-3" aria-hidden="true" />
-                                  Commission + refund combined
-                                </button>
-                              );
-                            })()}
-                          </>
-                          );
-                        })()}
+                                {(() => {
+                                  const refund = composeRefundRequest(r, contact);
+                                  if (!refund) return null;
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="mt-1 inline-flex items-center gap-1.5 text-[11.5px] text-rose-800 underline-offset-2 hover:underline"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setComposing({
+                                          to: contact.address!,
+                                          contactName: contact.name,
+                                          ...refund,
+                                          row: r,
+                                          mode: "refund",
+                                        });
+                                      }}
+                                    >
+                                      <Send className="h-3 w-3" aria-hidden="true" />
+                                      Request refund
+                                    </button>
+                                  );
+                                })()}
+                                {(() => {
+                                  const combined = composeCombinedRequest(r, contact);
+                                  if (!combined) return null;
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="mt-1 inline-flex items-center gap-1.5 text-[11.5px] text-amber-800 underline-offset-2 hover:underline"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setComposing({
+                                          to: contact.address!,
+                                          contactName: contact.name,
+                                          ...combined,
+                                          row: r,
+                                          mode: "combined",
+                                        });
+                                      }}
+                                    >
+                                      <Send className="h-3 w-3" aria-hidden="true" />
+                                      Commission + refund combined
+                                    </button>
+                                  );
+                                })()}
+                              </>
+                            );
+                          })()}
                       </TableCell>
                     </TableRow>
                   ),
@@ -473,7 +499,10 @@ function NaCommissionsPage() {
         <CommissionRequestDialog
           composing={composing}
           requests={requests}
-          onClose={() => { setComposing(null); requests.reset(); }}
+          onClose={() => {
+            setComposing(null);
+            requests.reset();
+          }}
         />
       )}
     </div>
@@ -517,12 +546,18 @@ function CommissionRequestDialog({
               {composing.mode === "refund" ? "Request refund" : "Request commission"}
             </h2>
             <p className="mt-0.5 text-[12px] text-slate-600">
-              To: {composing.to}{composing.contactName ? ` (${composing.contactName})` : ""}
-              {" · "}{composing.row.readable_id} · {composing.row.company_name}
+              To: {composing.to}
+              {composing.contactName ? ` (${composing.contactName})` : ""}
+              {" · "}
+              {composing.row.readable_id} · {composing.row.company_name}
             </p>
           </span>
-          <button type="button" onClick={onClose} aria-label="Close"
-            className="ml-auto rounded-md p-1 text-slate-500 hover:bg-slate-100">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="ml-auto rounded-md p-1 text-slate-500 hover:bg-slate-100"
+          >
             <ExternalLink className="h-4 w-4 rotate-45" aria-hidden="true" />
           </button>
         </header>
@@ -553,42 +588,66 @@ function CommissionRequestDialog({
           {requests.running && <span className="text-[12.5px] text-slate-600">Sending…</span>}
           {finished && result && (
             <span className={`text-[12.5px] ${result.ok ? "text-emerald-800" : "text-rose-800"}`}>
-              {result.ok
-                ? result.link
-                  ? <a href={result.link} target="_blank" rel="noreferrer" className="underline underline-offset-2">Draft saved — open in Gmail</a>
-                  : "Sent!"
-                : `Failed: ${result.error}`}
+              {result.ok ? (
+                result.link ? (
+                  <a
+                    href={result.link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2"
+                  >
+                    Draft saved — open in Gmail
+                  </a>
+                ) : (
+                  "Sent!"
+                )
+              ) : (
+                `Failed: ${result.error}`
+              )}
             </span>
           )}
           <span className="ml-auto flex flex-wrap items-center gap-2">
             {finished ? (
-              <Button size="sm" className="h-8" onClick={onClose}>Close</Button>
+              <Button size="sm" className="h-8" onClick={onClose}>
+                Close
+              </Button>
             ) : (
               <>
-                <Button variant="outline" size="sm" className="h-8 gap-1.5"
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5"
                   disabled={requests.running}
-                  onClick={() => requests.run([{ to: composing.to, subject, body }], "draft")}>
+                  onClick={() => requests.run([{ to: composing.to, subject, body }], "draft")}
+                >
                   Save as draft
                 </Button>
                 {confirmSend ? (
                   <>
-                    <Button size="sm"
+                    <Button
+                      size="sm"
                       className="h-8 gap-1.5 border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
                       disabled={requests.running}
-                      onClick={() => requests.run([{ to: composing.to, subject, body }], "send")}>
+                      onClick={() => requests.run([{ to: composing.to, subject, body }], "send")}
+                    >
                       <Send className="h-3.5 w-3.5" aria-hidden="true" />
                       Confirm send
                     </Button>
-                    <button type="button" onClick={() => setConfirmSend(false)}
-                      className="text-[11.5px] text-slate-500 underline-offset-2 hover:underline">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmSend(false)}
+                      className="text-[11.5px] text-slate-500 underline-offset-2 hover:underline"
+                    >
                       Cancel
                     </button>
                   </>
                 ) : (
-                  <Button size="sm"
+                  <Button
+                    size="sm"
                     className="h-8 gap-1.5 border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
                     disabled={requests.running}
-                    onClick={() => setConfirmSend(true)}>
+                    onClick={() => setConfirmSend(true)}
+                  >
                     <Send className="h-3.5 w-3.5" aria-hidden="true" />
                     Send now
                   </Button>

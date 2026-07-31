@@ -39,8 +39,7 @@ export const lookupPartnerEmails = createServerFn({ method: "GET" })
       lastOutboundAt: t.lastOutboundAt,
       lastInboundAt: t.lastInboundAt,
       replied:
-        t.lastInboundAt != null &&
-        (t.lastOutboundAt == null || t.lastInboundAt > t.lastOutboundAt),
+        t.lastInboundAt != null && (t.lastOutboundAt == null || t.lastInboundAt > t.lastOutboundAt),
       link: t.link,
     }));
   });

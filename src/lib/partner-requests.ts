@@ -48,9 +48,7 @@ export type PartnerInput = {
 export function needsOf(action: PartnerAction, country: string | null): Needs | null {
   const taxMissing = !taxComplete(action.tax, country);
   const bankMissing =
-    action.code === "ask_bank" ||
-    action.code === "ask_bank_and_tax" ||
-    action.code === "ask_card"; // card-first: still might need bank if they decline
+    action.code === "ask_bank" || action.code === "ask_bank_and_tax" || action.code === "ask_card"; // card-first: still might need bank if they decline
   if (!taxMissing && !bankMissing) return null;
   return { bank: bankMissing, tax: taxMissing };
 }

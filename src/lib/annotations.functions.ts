@@ -10,11 +10,7 @@
  */
 import { createServerFn } from "@tanstack/react-start";
 
-export type PartnerStatusValue =
-  | "not_contacted"
-  | "waiting_bank"
-  | "partially_paid"
-  | "fully_paid";
+export type PartnerStatusValue = "not_contacted" | "waiting_bank" | "partially_paid" | "fully_paid";
 
 export type PartnerStatusRow = {
   event_ref: string;
@@ -91,16 +87,14 @@ export const fetchPartnerStatuses = createServerFn({ method: "GET" }).handler(
 );
 
 export const savePartnerStatus = createServerFn({ method: "POST" })
-  .validator(
-    (input: { event_ref: string; partner_name: string; status: PartnerStatusValue }) => {
-      if (!input?.event_ref || typeof input.event_ref !== "string") {
-        throw new Error("event_ref is required");
-      }
-      if (typeof input.partner_name !== "string") throw new Error("partner_name is required");
-      if (!PARTNER_STATUS_VALUES.includes(input.status)) throw new Error("Invalid status");
-      return input;
-    },
-  )
+  .validator((input: { event_ref: string; partner_name: string; status: PartnerStatusValue }) => {
+    if (!input?.event_ref || typeof input.event_ref !== "string") {
+      throw new Error("event_ref is required");
+    }
+    if (typeof input.partner_name !== "string") throw new Error("partner_name is required");
+    if (!PARTNER_STATUS_VALUES.includes(input.status)) throw new Error("Invalid status");
+    return input;
+  })
   .handler(async ({ data }) => {
     const { requireSession } = await import("./session.server");
     const session = await requireSession();

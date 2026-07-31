@@ -11,10 +11,7 @@
 
 const GQL = "https://api.services.naboo.app/graphql";
 
-async function gql<T>(
-  query: string,
-  variables: Record<string, unknown>,
-): Promise<T> {
+async function gql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   const token = process.env.NABOO_ADMIN_TOKEN;
   if (!token) {
     throw new Error(
@@ -65,9 +62,7 @@ const QUERY = `
   }
 `;
 
-export async function fetchReInvoicingPdfs(
-  clientRequestId: string,
-): Promise<string[]> {
+export async function fetchReInvoicingPdfs(clientRequestId: string): Promise<string[]> {
   const data = await gql<GqlResult>(QUERY, { clientRequestId });
   const requests = data?.getClientRequestByIdAdmin?.reInvoicingRequests ?? [];
   return requests

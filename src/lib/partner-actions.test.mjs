@@ -28,7 +28,11 @@ t("labelled GST + QST", both.gst === "819512187RT0001" && both.qst === "12221138
 
 // Eventure (F-B694): 8-digit BN, 5-digit suffix — real value from owners.vat_number
 const eventure = parseTaxRegistration("84861700RT00017 / 1217376285TQ00017");
-t("8-digit GST accepted", eventure.gst?.startsWith("84861700RT") === true, JSON.stringify(eventure));
+t(
+  "8-digit GST accepted",
+  eventure.gst?.startsWith("84861700RT") === true,
+  JSON.stringify(eventure),
+);
 t("QST alongside it", eventure.qst?.startsWith("1217376285TQ") === true, JSON.stringify(eventure));
 
 const euSpaces = parseTaxRegistration("FR32 904 443 462");
@@ -100,27 +104,62 @@ t("paid, odd format with digits → settled", a4.code === "settled" && !a4.scanU
 const a5 = decidePartnerAction(S({ taxRaw: "0000" }));
 t("paid, zeros only → still ask tax", a5.code === "ask_tax", a5.code);
 
-const a6 = decidePartnerAction(S({ outstanding: 5000, bankDetails: "received", taxRaw: registered }));
-t("owes, bank in hand → Payout TBD", a6.code === "ours_pay" && a6.label === "Payout TBD" && a6.payableBy === "bank", JSON.stringify([a6.label, a6.payableBy]));
+const a6 = decidePartnerAction(
+  S({ outstanding: 5000, bankDetails: "received", taxRaw: registered }),
+);
+t(
+  "owes, bank in hand → Payout TBD",
+  a6.code === "ours_pay" && a6.label === "Payout TBD" && a6.payableBy === "bank",
+  JSON.stringify([a6.label, a6.payableBy]),
+);
 
-const a7 = decidePartnerAction(S({ outstanding: 5000, cardEverAccepted: true, taxRaw: registered }));
-t("owes, card accepted before → payout by card", a7.code === "ours_pay" && a7.payableBy === "card", JSON.stringify([a7.label, a7.payableBy]));
+const a7 = decidePartnerAction(
+  S({ outstanding: 5000, cardEverAccepted: true, taxRaw: registered }),
+);
+t(
+  "owes, card accepted before → payout by card",
+  a7.code === "ours_pay" && a7.payableBy === "card",
+  JSON.stringify([a7.label, a7.payableBy]),
+);
 
 const a8 = decidePartnerAction(S({ outstanding: 5000 }));
 t("owes, nothing known → ask bank + tax", a8.code === "ask_bank_and_tax" && a8.scanUseful, a8.code);
 
 const a9 = decidePartnerAction(S({ outstanding: 5000, cardEverAccepted: true }));
-t("card history beats asking for IBAN", a9.code !== "ask_bank" && a9.code !== "ask_bank_and_tax", a9.code);
+t(
+  "card history beats asking for IBAN",
+  a9.code !== "ask_bank" && a9.code !== "ask_bank_and_tax",
+  a9.code,
+);
 
-const a10 = decidePartnerAction(S({
-  outstanding: 5000, bankDetails: "asked", contacted: true, taxRaw: registered,
-}));
-t("asked, no reply → waiting on partner", a10.code === "await_reply" && a10.owner === "partner", a10.code);
+const a10 = decidePartnerAction(
+  S({
+    outstanding: 5000,
+    bankDetails: "asked",
+    contacted: true,
+    taxRaw: registered,
+  }),
+);
+t(
+  "asked, no reply → waiting on partner",
+  a10.code === "await_reply" && a10.owner === "partner",
+  a10.code,
+);
 
-const a11 = decidePartnerAction(S({
-  outstanding: 5000, bankDetails: "asked", contacted: true, replied: true, taxRaw: registered,
-}));
-t("asked and replied → ours to process", a11.code === "await_reply" && a11.owner === "us", a11.owner);
+const a11 = decidePartnerAction(
+  S({
+    outstanding: 5000,
+    bankDetails: "asked",
+    contacted: true,
+    replied: true,
+    taxRaw: registered,
+  }),
+);
+t(
+  "asked and replied → ours to process",
+  a11.code === "await_reply" && a11.owner === "us",
+  a11.owner,
+);
 
 const a12 = decidePartnerAction(S({ outstanding: 5000, hasPo: false }));
 t("no PO → blocked, no scan", a12.code === "blocked_no_po" && !a12.scanUseful, a12.code);
@@ -130,35 +169,71 @@ if (fail) process.exitCode = 1;
 
 // --- Slack approval as a card source ---
 {
-  let p = 0, f = 0;
-  const t = (n, c, g = "") => { if (c) { p++; console.log("  ✓", n); } else { f++; console.log("  ✗", n, g); } };
+  let p = 0,
+    f = 0;
+  const t = (n, c, g = "") => {
+    if (c) {
+      p++;
+      console.log("  ✓", n);
+    } else {
+      f++;
+      console.log("  ✗", n, g);
+    }
+  };
   const S2 = (o = {}) => ({
-    outstanding: 0, hasPo: true, country: "CA", taxRaw: null, taxIdentifier: null,
-    bankDetails: "not_asked", taxAsked: false, contacted: false, replied: false,
-    cardOnThisEvent: "unknown", cardEverAccepted: false, ...o,
+    outstanding: 0,
+    hasPo: true,
+    country: "CA",
+    taxRaw: null,
+    taxIdentifier: null,
+    bankDetails: "not_asked",
+    taxAsked: false,
+    contacted: false,
+    replied: false,
+    cardOnThisEvent: "unknown",
+    cardEverAccepted: false,
+    ...o,
   });
   const reg = "TPS 819512187RT0001 TVQ 1222113845TQ0001";
 
-  const slackApproved = decidePartnerAction(S2({
-    outstanding: 5000, taxRaw: reg, cardApprovedInSlack: true,
-  }));
-  t("Slack approval → payable by card, never ask IBAN",
-    slackApproved.code === "card_to_debit" && slackApproved.payableBy === "card", JSON.stringify([slackApproved.label, slackApproved.payableBy]));
-  t("label is Card created, service provider to debit",
-    slackApproved.label === "Card created, service provider to debit", slackApproved.label);
+  const slackApproved = decidePartnerAction(
+    S2({
+      outstanding: 5000,
+      taxRaw: reg,
+      cardApprovedInSlack: true,
+    }),
+  );
+  t(
+    "Slack approval → payable by card, never ask IBAN",
+    slackApproved.code === "card_to_debit" && slackApproved.payableBy === "card",
+    JSON.stringify([slackApproved.label, slackApproved.payableBy]),
+  );
+  t(
+    "label is Card created, service provider to debit",
+    slackApproved.label === "Card created, service provider to debit",
+    slackApproved.label,
+  );
   t("owner is the provider, not us", slackApproved.owner === "partner", slackApproved.owner);
-  t("detail cites the Slack channel",
-    slackApproved.detail.includes("finance-paiement-by-card"), slackApproved.detail);
+  t(
+    "detail cites the Slack channel",
+    slackApproved.detail.includes("finance-paiement-by-card"),
+    slackApproved.detail,
+  );
 
   const noSlackNoEmail = decidePartnerAction(S2({ outstanding: 5000, taxRaw: reg }));
-  t("without either source → ask for bank",
-    noSlackNoEmail.code === "ask_bank", noSlackNoEmail.code);
+  t(
+    "without either source → ask for bank",
+    noSlackNoEmail.code === "ask_bank",
+    noSlackNoEmail.code,
+  );
 
   const slackNoTax = decidePartnerAction(S2({ outstanding: 5000, cardApprovedInSlack: true }));
-  t("Slack approval but no tax → ask tax only",
-    slackNoTax.code === "ask_tax", slackNoTax.code);
-  t("and it does not ask for bank details",
-    !slackNoTax.detail.toLowerCase().includes("bancaire"), slackNoTax.detail);
+  t("Slack approval but no tax → ask tax only", slackNoTax.code === "ask_tax", slackNoTax.code);
+  t(
+    "and it does not ask for bank details",
+    !slackNoTax.detail.toLowerCase().includes("bancaire"),
+    slackNoTax.detail,
+  );
 
   console.log(`\n[slack card] ${p} passed, ${f} failed`);
   if (f) process.exitCode = 1;
@@ -166,13 +241,28 @@ if (fail) process.exitCode = 1;
 
 // --- Payout TBD covers "not paid" and "partially paid" alike ---
 {
-  let p = 0, f = 0;
-  const t = (n, c, g = "") => { if (c) { p++; console.log("  ✓", n); } else { f++; console.log("  ✗", n, g); } };
+  let p = 0,
+    f = 0;
+  const t = (n, c, g = "") => {
+    if (c) {
+      p++;
+      console.log("  ✓", n);
+    } else {
+      f++;
+      console.log("  ✗", n, g);
+    }
+  };
   const reg = "TPS 819512187RT0001 TVQ 1222113845TQ0001";
   const base = {
-    hasPo: true, country: "CA", taxRaw: reg, taxIdentifier: null,
-    taxAsked: false, contacted: false, replied: false,
-    cardOnThisEvent: "unknown", cardEverAccepted: false,
+    hasPo: true,
+    country: "CA",
+    taxRaw: reg,
+    taxIdentifier: null,
+    taxAsked: false,
+    contacted: false,
+    replied: false,
+    cardOnThisEvent: "unknown",
+    cardEverAccepted: false,
   };
 
   // Nothing paid yet, bank details in hand
@@ -185,13 +275,23 @@ if (fail) process.exitCode = 1;
 
   // Card approved (issued) in Slack instead of bank — provider debits it themselves
   const byCard = decidePartnerAction({ ...base, outstanding: 5000, cardApprovedInSlack: true });
-  t("card approved in Slack → Card created, service provider to debit",
-    byCard.label === "Card created, service provider to debit" && byCard.payableBy === "card", byCard.label);
+  t(
+    "card approved in Slack → Card created, service provider to debit",
+    byCard.label === "Card created, service provider to debit" && byCard.payableBy === "card",
+    byCard.label,
+  );
 
   // Card merely accepted before (no Pliant card actually issued) — still ours to action
-  const cardKnownNotIssued = decidePartnerAction({ ...base, outstanding: 5000, cardEverAccepted: true });
-  t("card known but not issued in Slack → still Payout TBD",
-    cardKnownNotIssued.label === "Payout TBD" && cardKnownNotIssued.payableBy === "card", cardKnownNotIssued.label);
+  const cardKnownNotIssued = decidePartnerAction({
+    ...base,
+    outstanding: 5000,
+    cardEverAccepted: true,
+  });
+  t(
+    "card known but not issued in Slack → still Payout TBD",
+    cardKnownNotIssued.label === "Payout TBD" && cardKnownNotIssued.payableBy === "card",
+    cardKnownNotIssued.label,
+  );
 
   // Fully paid → nothing to do, not a payout
   const settled = decidePartnerAction({ ...base, outstanding: 0, bankDetails: "received" });
@@ -207,38 +307,81 @@ if (fail) process.exitCode = 1;
 
 // --- taxTracked: false (Marketplace NA has no tax fields at all) -------------
 {
-  let p = 0, f = 0;
-  const t = (n, c, g = "") => { if (c) { p++; console.log("  ✓", n); } else { f++; console.log("  ✗", n, g); } };
+  let p = 0,
+    f = 0;
+  const t = (n, c, g = "") => {
+    if (c) {
+      p++;
+      console.log("  ✓", n);
+    } else {
+      f++;
+      console.log("  ✗", n, g);
+    }
+  };
   const base = {
-    hasPo: true, country: null, taxRaw: null, taxIdentifier: null,
-    bankDetails: "not_asked", taxAsked: false, contacted: false, replied: false,
-    cardOnThisEvent: "unknown", cardEverAccepted: false,
+    hasPo: true,
+    country: null,
+    taxRaw: null,
+    taxIdentifier: null,
+    bankDetails: "not_asked",
+    taxAsked: false,
+    contacted: false,
+    replied: false,
+    cardOnThisEvent: "unknown",
+    cardEverAccepted: false,
   };
 
   // No tax on file anywhere, but taxTracked: false must never gate on it.
   const paidUntracked = decidePartnerAction({ ...base, outstanding: 0, taxTracked: false });
-  t("paid, tax untracked → settled despite nothing on file",
-    paidUntracked.code === "settled", paidUntracked.code);
+  t(
+    "paid, tax untracked → settled despite nothing on file",
+    paidUntracked.code === "settled",
+    paidUntracked.code,
+  );
 
-  const owedNoMeansUntracked = decidePartnerAction({ ...base, outstanding: 5000, taxTracked: false });
-  t("owed, no means, tax untracked → asks for bank, never mentions tax",
-    owedNoMeansUntracked.code === "ask_bank", owedNoMeansUntracked.code);
+  const owedNoMeansUntracked = decidePartnerAction({
+    ...base,
+    outstanding: 5000,
+    taxTracked: false,
+  });
+  t(
+    "owed, no means, tax untracked → asks for bank, never mentions tax",
+    owedNoMeansUntracked.code === "ask_bank",
+    owedNoMeansUntracked.code,
+  );
 
   const owedWithBankUntracked = decidePartnerAction({
-    ...base, outstanding: 5000, bankDetails: "received", taxTracked: false,
+    ...base,
+    outstanding: 5000,
+    bankDetails: "received",
+    taxTracked: false,
   });
-  t("owed, bank in hand, tax untracked → Payout TBD (not ask_tax)",
-    owedWithBankUntracked.label === "Payout TBD", owedWithBankUntracked.label);
+  t(
+    "owed, bank in hand, tax untracked → Payout TBD (not ask_tax)",
+    owedWithBankUntracked.label === "Payout TBD",
+    owedWithBankUntracked.label,
+  );
 
   // Same inputs but taxTracked omitted (default true) — old behaviour must survive.
   const owedNoMeansTracked = decidePartnerAction({ ...base, outstanding: 5000 });
-  t("same inputs without taxTracked → still asks for tax too (unchanged default)",
-    owedNoMeansTracked.code === "ask_bank_and_tax", owedNoMeansTracked.code);
+  t(
+    "same inputs without taxTracked → still asks for tax too (unchanged default)",
+    owedNoMeansTracked.code === "ask_bank_and_tax",
+    owedNoMeansTracked.code,
+  );
 
   // hasPo: true (Marketplace NA never tracks PO) must never produce blocked_no_po.
-  const noPoButTrackedAsTrue = decidePartnerAction({ ...base, outstanding: 5000, hasPo: true, taxTracked: false });
-  t("hasPo forced true → never blocked_no_po",
-    noPoButTrackedAsTrue.code !== "blocked_no_po", noPoButTrackedAsTrue.code);
+  const noPoButTrackedAsTrue = decidePartnerAction({
+    ...base,
+    outstanding: 5000,
+    hasPo: true,
+    taxTracked: false,
+  });
+  t(
+    "hasPo forced true → never blocked_no_po",
+    noPoButTrackedAsTrue.code !== "blocked_no_po",
+    noPoButTrackedAsTrue.code,
+  );
 
   console.log(`\n[tax untracked] ${p} passed, ${f} failed`);
   if (f) process.exitCode = 1;

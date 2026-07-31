@@ -327,6 +327,8 @@ export function PartnerStickers({
   cardApprovedInSlack,
   hideTax,
   hideCardPending,
+  hideAction,
+  hideContact,
 }: {
   action: PartnerAction;
   facts: PartnerFacts | undefined;
@@ -336,6 +338,10 @@ export function PartnerStickers({
   hideTax?: boolean;
   /** Skip the payment sticker when no payment method is known yet, rather than showing a "pending" placeholder. */
   hideCardPending?: boolean;
+  /** Skip the action pill — for layouts where the next move is already a button. */
+  hideAction?: boolean;
+  /** Skip the contact/reply pill — for layouts that show email state in their own tab. */
+  hideContact?: boolean;
 }) {
   const cardReady =
     cardApprovedInSlack === true ||
@@ -349,7 +355,7 @@ export function PartnerStickers({
 
   return (
     <span className="mt-1 flex flex-wrap gap-1">
-      <ActionSticker action={action} />
+      {!hideAction && <ActionSticker action={action} />}
       {!hideTax && (
         <TaxSticker
           registration={action.tax}
@@ -359,7 +365,8 @@ export function PartnerStickers({
           emailAskedBy={facts?.tax_asked_by}
         />
       )}
-      {!settled &&
+      {!hideContact &&
+        !settled &&
         (facts ? (
           <ContactSticker facts={facts} />
         ) : (
@@ -404,7 +411,7 @@ export function EventStickers({
   hideTax?: boolean;
   /** Skip the payment sticker when no payment method is known yet, rather than showing a "pending" placeholder. */
   hideCardPending?: boolean;
-  }) {
+}) {
   const live = partners.filter((p) => !p.is_cancelled);
   if (live.length === 0) return null;
 
@@ -431,8 +438,7 @@ export function EventStickers({
   });
 
   const leadCardReady =
-    (lead.partner.owner_code != null &&
-      cardApprovedCodes?.has(lead.partner.owner_code) === true) ||
+    (lead.partner.owner_code != null && cardApprovedCodes?.has(lead.partner.owner_code) === true) ||
     lead.facts?.card_payment === "accepted";
   const leadCardSource =
     lead.partner.owner_code != null && cardApprovedCodes?.has(lead.partner.owner_code)

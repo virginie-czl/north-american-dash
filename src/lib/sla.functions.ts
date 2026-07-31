@@ -480,14 +480,11 @@ function mergePartners(list: PartnerLine[]): PartnerLine[] {
   // we already kept under the legal name.
   return result.filter((p) => {
     const noAmounts =
-      (p.amount_due ?? 0) === 0 &&
-      (p.amount_paid ?? 0) === 0 &&
-      (p.net_payable_ttc ?? 0) === 0;
+      (p.amount_due ?? 0) === 0 && (p.amount_paid ?? 0) === 0 && (p.net_payable_ttc ?? 0) === 0;
     const noContact = !p.email && !p.phone;
     return !(noAmounts && noContact);
   });
 }
-
 
 function mergeInto(existing: PartnerLine, p: PartnerLine) {
   // Prefer the variant that actually carries amounts (service_providers row)
@@ -497,9 +494,7 @@ function mergeInto(existing: PartnerLine, p: PartnerLine) {
     (existing.amount_paid ?? 0) !== 0 ||
     (existing.net_payable_ttc ?? 0) !== 0;
   const incomingHasAmounts =
-    (p.amount_due ?? 0) !== 0 ||
-    (p.amount_paid ?? 0) !== 0 ||
-    (p.net_payable_ttc ?? 0) !== 0;
+    (p.amount_due ?? 0) !== 0 || (p.amount_paid ?? 0) !== 0 || (p.net_payable_ttc ?? 0) !== 0;
   if (!existingHasAmounts && incomingHasAmounts && p.name) existing.name = p.name;
 
   // p_outstanding_payable_pcurrency only means money due when positive; negative
@@ -513,7 +508,8 @@ function mergeInto(existing: PartnerLine, p: PartnerLine) {
 
   const existingPaid = existing.amount_paid ?? 0;
   const incomingPaid = p.amount_paid ?? 0;
-  existing.amount_paid = Math.abs(incomingPaid) > Math.abs(existingPaid) ? incomingPaid : existingPaid;
+  existing.amount_paid =
+    Math.abs(incomingPaid) > Math.abs(existingPaid) ? incomingPaid : existingPaid;
 
   existing.net_payable_ttc = (existing.net_payable_ttc ?? 0) + (p.net_payable_ttc ?? 0);
   existing.is_outstanding = Boolean(existing.is_outstanding) || Boolean(p.is_outstanding);
@@ -525,24 +521,22 @@ function mergeInto(existing: PartnerLine, p: PartnerLine) {
   if (!existing.tax_identifier && p.tax_identifier) existing.tax_identifier = p.tax_identifier;
   if (!existing.country && p.country) existing.country = p.country;
   if (!existing.currency && p.currency) existing.currency = p.currency;
-  if (!existing.payout_fx_date || (p.payout_fx_date && p.payout_fx_date > existing.payout_fx_date)) {
+  if (
+    !existing.payout_fx_date ||
+    (p.payout_fx_date && p.payout_fx_date > existing.payout_fx_date)
+  ) {
     existing.payout_fx_date = p.payout_fx_date;
   }
 }
-
-
 
 export function parseInvoices(json: string | null): InvoiceLine[] {
   if (!json) return [];
   try {
     const all = JSON.parse(json) as InvoiceLine[];
     return all.filter(
-      (inv) =>
-        !(inv.status ?? "").toUpperCase().includes("CANCEL") &&
-        (inv.amount_ttc ?? 0) >= 0,
+      (inv) => !(inv.status ?? "").toUpperCase().includes("CANCEL") && (inv.amount_ttc ?? 0) >= 0,
     );
   } catch {
     return [];
   }
 }
-

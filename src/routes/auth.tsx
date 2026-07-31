@@ -80,8 +80,8 @@ function AuthPage() {
                   seule fois : votre demande vient d'être enregistrée.
                 </p>
                 <p>
-                  Une fois validée, vous entrerez directement à chaque connexion — vous n'aurez
-                  plus rien à demander.
+                  Une fois validée, vous entrerez directement à chaque connexion — vous n'aurez plus
+                  rien à demander.
                 </p>
               </>
             ) : (

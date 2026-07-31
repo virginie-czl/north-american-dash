@@ -58,7 +58,9 @@ export function TagFilterSelect({
         {groups.map((g) => (
           <div key={g.label}>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-xs text-muted-foreground">{g.label}</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">
+              {g.label}
+            </DropdownMenuLabel>
             {g.options.map((o) => (
               <DropdownMenuCheckboxItem
                 key={o.value}

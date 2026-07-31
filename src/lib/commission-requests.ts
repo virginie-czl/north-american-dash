@@ -62,7 +62,13 @@ function fmtDateRange(start: string | null, end: string | null): string {
     const same_month = s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear();
     const same_year = s.getFullYear() === e.getFullYear();
     if (same_month) {
-      return `${s.toLocaleDateString("en-CA", opts)}–${e.toLocaleString("en-CA", yearOpts).replace(/^[^0-9]*/, "").replace(/.*?,\s*/, "").split(",")[0]}, ${e.getFullYear()}`;
+      return `${s.toLocaleDateString("en-CA", opts)}–${
+        e
+          .toLocaleString("en-CA", yearOpts)
+          .replace(/^[^0-9]*/, "")
+          .replace(/.*?,\s*/, "")
+          .split(",")[0]
+      }, ${e.getFullYear()}`;
     }
     if (same_year) {
       return `${s.toLocaleDateString("en-CA", opts)}–${e.toLocaleDateString("en-CA", yearOpts)}`;
@@ -75,7 +81,10 @@ function fmtDateRange(start: string | null, end: string | null): string {
 
 export type CommissionComposed = { subject: string; body: string };
 
-export function composeCommissionRequest(row: CommissionRow, to: { name: string | null }): CommissionComposed {
+export function composeCommissionRequest(
+  row: CommissionRow,
+  to: { name: string | null },
+): CommissionComposed {
   const client = row.company_name ?? "your group";
   const dateRange = fmtDateRange(row.start_date, row.end_date);
   const bookingId = row.readable_id ?? "—";
@@ -90,9 +99,7 @@ export function composeCommissionRequest(row: CommissionRow, to: { name: string 
   ].join("");
 
   // Build commission items bullet list (one per partner)
-  const partners = (row.partners ?? []).filter(
-    (p) => (p.commission_ht ?? 0) > 0.01,
-  );
+  const partners = (row.partners ?? []).filter((p) => (p.commission_ht ?? 0) > 0.01);
 
   const commissionItems = partners
     .map((p) => {
@@ -119,9 +126,7 @@ export function composeCommissionRequest(row: CommissionRow, to: { name: string 
         partners.reduce((s, p) => s + (p.gmv_ht ?? 0), 0),
         ccy,
       )
-    : partners
-        .map((p) => fmtMoney(p.gmv_ht, p.partner_currency))
-        .join(" + ");
+    : partners.map((p) => fmtMoney(p.gmv_ht, p.partner_currency)).join(" + ");
 
   const ach_eft = row.billing_entity === "NABOO_US" ? "ACH" : "EFT";
   const body = `Hi ${firstName},
@@ -160,9 +165,7 @@ export function composeRefundRequest(
   row: CommissionRow,
   to: { name: string | null },
 ): RefundComposed | null {
-  const overpaidPartners = (row.partners ?? []).filter(
-    (p) => (p.outstanding_payable ?? 0) < -0.10,
-  );
+  const overpaidPartners = (row.partners ?? []).filter((p) => (p.outstanding_payable ?? 0) < -0.1);
   if (overpaidPartners.length === 0) return null;
 
   const client = row.company_name ?? "your group";
@@ -229,12 +232,8 @@ export function composeCombinedRequest(
   row: CommissionRow,
   to: { name: string | null },
 ): CombinedComposed | null {
-  const commissionPartners = (row.partners ?? []).filter(
-    (p) => (p.commission_ht ?? 0) > 0.01,
-  );
-  const overpaidPartners = (row.partners ?? []).filter(
-    (p) => (p.outstanding_payable ?? 0) < -0.10,
-  );
+  const commissionPartners = (row.partners ?? []).filter((p) => (p.commission_ht ?? 0) > 0.01);
+  const overpaidPartners = (row.partners ?? []).filter((p) => (p.outstanding_payable ?? 0) < -0.1);
   if (commissionPartners.length === 0 || overpaidPartners.length === 0) return null;
 
   const client = row.company_name ?? "your group";
@@ -248,7 +247,10 @@ export function composeCombinedRequest(
   // Commission section
   const partners = commissionPartners;
   const commissionableBase = partners.every((p) => p.partner_currency === ccy)
-    ? fmtMoney(partners.reduce((s, p) => s + (p.gmv_ht ?? 0), 0), ccy)
+    ? fmtMoney(
+        partners.reduce((s, p) => s + (p.gmv_ht ?? 0), 0),
+        ccy,
+      )
     : partners.map((p) => fmtMoney(p.gmv_ht, p.partner_currency)).join(" + ");
 
   const ratesSummary = (() => {
@@ -272,7 +274,9 @@ export function composeCombinedRequest(
               p.rate_house != null ? `venue ${fmtPct(p.rate_house)}` : null,
               p.rate_food != null ? `F&B ${fmtPct(p.rate_food)}` : null,
               p.rate_activity != null ? `activity ${fmtPct(p.rate_activity)}` : null,
-            ].filter(Boolean).join(", ");
+            ]
+              .filter(Boolean)
+              .join(", ");
             return `${p.partner_name ?? "Partner"}: ${c}`;
           })
           .join("; ");
