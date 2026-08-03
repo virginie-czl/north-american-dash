@@ -389,7 +389,10 @@ export const AIRLINE_CARRIERS = [
  * Providers a card has already been created for, at no fee.
  *
  * The list is finance's own — the cards actually issued to service providers, given as
- * booking/provider pairs and reduced here to the 136 distinct owner codes in them. A
+ * booking/provider pairs and reduced here to the distinct owner codes in them. Eleven lines
+ * named only the house (H-) and one only the quote (Q-); those were resolved to their owner
+ * through `raw_naboo_data.houses.owner_id` and `quotes.house_id`, one owner each, no
+ * ambiguity — so the eight codes that added are in here on the same footing as the rest. A
  * created card is the strongest thing this page can know: an approval in Slack is a
  * decision to issue one, and this is one that exists and has been used. So it decides the
  * status ahead of both Slack and the email scan, and because there is no fee the row
@@ -406,7 +409,8 @@ export const AIRLINE_CARRIERS = [
  * shows as "Card OK if fee" and returns to the queue as a judgement — which is right: the
  * claim below is "a card was created at no fee", and a fee on file contradicts it.
  *
- * Sorted, six to a line, so adding one is a one-line diff and a duplicate is visible.
+ * Sorted, one to a line — the formatter's own layout for an array this long, and the one
+ * that makes adding a code a one-line diff and a duplicate impossible to miss.
  */
 export const CARDS_CREATED: string[] = [
   "O-A014",
@@ -459,15 +463,20 @@ export const CARDS_CREATED: string[] = [
   "O-C9683",
   "O-C9690",
   "O-C9780",
+  "O-C9868",
   "O-D4721",
+  "O-D7871",
   "O-D7927",
   "O-D7928",
   "O-D9031",
+  "O-D9053",
   "O-D9126",
   "O-D9146",
+  "O-D9193",
   "O-E4896",
   "O-E4913",
   "O-E4925",
+  "O-E4953",
   "O-E8821",
   "O-E9369",
   "O-E9427",
@@ -484,6 +493,7 @@ export const CARDS_CREATED: string[] = [
   "O-F4271",
   "O-F4318",
   "O-F4325",
+  "O-F4328",
   "O-F4381",
   "O-F4406",
   "O-F4411",
@@ -495,6 +505,7 @@ export const CARDS_CREATED: string[] = [
   "O-F8522",
   "O-F8539",
   "O-F8554",
+  "O-F8676",
   "O-F8884",
   "O-F8926",
   "O-F8929",
@@ -514,6 +525,7 @@ export const CARDS_CREATED: string[] = [
   "O-G0090",
   "O-G0276",
   "O-G0938",
+  "O-G1074",
   "O-G1539",
   "O-G1629",
   "O-G1858",
