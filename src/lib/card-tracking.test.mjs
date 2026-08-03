@@ -1,19 +1,30 @@
 import {
   aggregateProviders,
   buildRows,
+  cardKpis,
+  cardOutreach,
   cardStatus,
   CARD_SCOPES,
   CARD_STATUS_LABEL,
   csvRows,
   CSV_HEADER,
+  declineNote,
+  dominantCurrency,
   emptyTerms,
   fmtAge,
   fmtAmounts,
   fmtFee,
+  fmtRound,
   hasFee,
   matchesSearch,
+  needsDecision,
+  nextMove,
   NO_EVIDENCE,
+  openDecisionsNote,
+  partitionRows,
+  payableNote,
   peakAmount,
+  provenance,
   scopeCounts,
   scopeMatcher,
   sortRows,
@@ -496,6 +507,187 @@ console.log("\n[CSV]");
     new Map(),
   );
   t("an override is marked in the export", csvRows(rows)[0][6] === "Card OK (override)");
+}
+
+// ── The queue and the ledger ────────────────────────────────────────────────
+// The page deals the rows that need a human as cards and collapses the rest into a
+// table. One predicate decides which, because the queue, its count and the KPI all
+// have to agree about what "open" means.
+console.log("\n[needsDecision]");
+{
+  const build = (t, e) =>
+    buildRows(
+      aggregateProviders([row()]),
+      new Map([["O-A001", terms(t)]]),
+      new Map([["O-A001", ev(e)]]),
+    )[0];
+
+  t("never asked is open", needsDecision(build({}, {})));
+  t(
+    "they accept and nobody has answered is open",
+    needsDecision(build({}, { slackApproved: true })),
+  );
+  t(
+    "they accept and we said yes is settled",
+    !needsDecision(build({ naboo_pays_card: "yes" }, { slackApproved: true })),
+  );
+  t(
+    "they accept and we said no is settled — the decision was taken",
+    !needsDecision(build({ naboo_pays_card: "no", naboo_reason: "Fee" }, { slackApproved: true })),
+  );
+  t(
+    "a refusing provider is settled — there is nothing to decide",
+    !needsDecision(build({ accepts_card: "no" }, {})),
+  );
+  // The chip and the queue must not be able to drift apart.
+  const open = build({}, {});
+  t(
+    "the scope predicate is the same function",
+    CARD_SCOPES.find((s) => s.key === "needs_decision").match(open) === needsDecision(open),
+  );
+}
+{
+  const rows = [
+    ...buildRows(aggregateProviders([row()]), new Map(), new Map()),
+    ...buildRows(
+      aggregateProviders([row({ owner_code: "O-B002" })]),
+      new Map([["O-B002", terms({ accepts_card: "yes", naboo_pays_card: "yes" })]]),
+      new Map(),
+    ),
+  ];
+  const { open, settled } = partitionRows(rows);
+  t("the split loses nothing", open.length + settled.length === rows.length);
+  t("and duplicates nothing", open.length === 1 && settled.length === 1);
+}
+
+console.log("\n[cardKpis]");
+{
+  // Four providers: one never asked, one accepting-undecided, one accepted-and-paid
+  // with a fee, one we decline with a reason on file.
+  const quotes = [
+    row({ owner_code: "O-A001", currency: "USD", outstanding: 12300 }),
+    row({ owner_code: "O-B002", currency: "CAD", outstanding: 14505 }),
+    row({ owner_code: "O-C003", currency: "CAD", outstanding: 88215 }),
+    row({ owner_code: "O-D004", currency: "USD", outstanding: 26780 }),
+    // One provider whose currency is numerically enormous and materially small.
+    row({ owner_code: "O-E005", currency: "IDR", outstanding: 281000000 }),
+  ];
+  const rows = buildRows(
+    aggregateProviders(quotes),
+    new Map([
+      ["O-B002", terms({ fee_percent: 3 })],
+      ["O-C003", terms({ fee_percent: 1.75, naboo_pays_card: "yes" })],
+      ["O-D004", terms({ naboo_pays_card: "no", naboo_reason: "Over the card limit" })],
+      ["O-E005", terms({ naboo_pays_card: "yes" })],
+    ]),
+    new Map([
+      ["O-B002", ev({ emailVerdict: "accepted" })],
+      ["O-C003", ev({ slackApproved: true })],
+      ["O-D004", ev({ slackApproved: true })],
+      ["O-E005", ev({ slackApproved: true })],
+    ]),
+  );
+  const k = cardKpis(rows);
+  t("open decisions", k.open.total === 2, k.open.total);
+  t("split by which question is unanswered", k.open.neverAsked === 1 && k.open.waitingOnUs === 1);
+  t("payable by card", k.payableByCard.total === 4, k.payableByCard.total);
+  t("of which some charge a fee", k.payableByCard.withFee === 2, k.payableByCard.withFee);
+  t("they accept and we decline", k.weDecline.total === 1);
+  t("the decline is on the record", k.weDecline.withReason === 1);
+
+  // The trap the design called out: 281,000,000 IDR is the biggest number here and
+  // means the least. The currency is picked by how many providers carry it.
+  t("the exposure card names a currency", k.largestExposure.currency === "CAD", k.largestExposure);
+  t("and never lands on the numerically largest", k.largestExposure.amount === 88215);
+  t("naming the provider behind it", k.largestExposure.provider === "Hyatt Regency");
+  t("the dominant currency is by provider count, not size", dominantCurrency(rows) === "CAD");
+  t("no rows, no exposure", cardKpis([]).largestExposure === null);
+}
+
+console.log("\n[the KPI notes]");
+t(
+  "the backlog says what shape it is",
+  openDecisionsNote({ total: 6, neverAsked: 4, waitingOnUs: 2 }) ===
+    "4 never asked · 2 waiting on us",
+);
+t(
+  "one half only",
+  openDecisionsNote({ total: 4, neverAsked: 4, waitingOnUs: 0 }) === "4 never asked",
+);
+t(
+  "an empty queue says so",
+  openDecisionsNote({ total: 0, neverAsked: 0, waitingOnUs: 0 }) === "nothing waiting on anyone",
+);
+t("fees among the accepting", payableNote({ total: 8, withFee: 4 }) === "4 of them charge a fee");
+t("none charging", payableNote({ total: 8, withFee: 0 }) === "none of them charge a fee");
+t(
+  "two declines both written up",
+  declineNote({ total: 2, withReason: 2 }) === "both with a written reason",
+);
+t("more than two", declineNote({ total: 5, withReason: 5 }) === "all with a written reason");
+// The reason is mandatory, so a shortfall here is a rule that leaked.
+t(
+  "a missing reason is visible",
+  declineNote({ total: 3, withReason: 2 }) === "2 of 3 with a written reason",
+);
+t(
+  "nothing declined",
+  declineNote({ total: 0, withReason: 0 }) === "nothing declined that they would accept",
+);
+t("a headline figure drops the cents", fmtRound(88215.4) === "88,215");
+
+console.log("\n[nextMove and provenance]");
+{
+  const build = (tt, e) =>
+    buildRows(
+      aggregateProviders([row()]),
+      new Map([["O-A001", terms(tt)]]),
+      new Map([["O-A001", ev(e)]]),
+    )[0];
+  t(
+    "never asked",
+    nextMove(build({}, {})) === "Never asked — no Slack approval, nothing in the email scan.",
+  );
+  t(
+    "a percentage fee is quoted in the sentence",
+    nextMove(build({ fee_percent: 3 }, { slackApproved: true })) ===
+      "They accept at 3% — decide whether the fee is worth it or wire instead.",
+  );
+  t(
+    "a flat fee has no percentage to quote",
+    nextMove(build({ fee_fixed: 45 }, { slackApproved: true })) ===
+      "Fee recorded, nobody has said yes or no on our side.",
+  );
+  t(
+    "accepted with no fee still needs an answer",
+    /no fee/.test(nextMove(build({}, { slackApproved: true }))),
+  );
+  t(
+    "a settled row has no next move",
+    nextMove(build({ naboo_pays_card: "yes" }, { slackApproved: true })) === null,
+  );
+
+  t("slack", provenance(build({}, { slackApproved: true })) === "Approved card in Slack");
+  t("email", provenance(build({}, { emailVerdict: "accepted" })) === "From the email scan");
+  t("by hand", provenance(build({ accepts_card: "yes" }, {})) === "Set by hand");
+  t("nothing at all", provenance(build({}, {})) === "Never asked");
+}
+
+console.log("\n[cardOutreach]");
+{
+  const one = cardOutreach({ provider_name: "Rooftop 210", bookings: 1 });
+  const many = cardOutreach({ provider_name: "Rooftop 210", bookings: 3 });
+  t("the provider is named in the subject", one.subject.includes("Rooftop 210"));
+  t("singular booking", /1 booking\b/.test(one.body) && one.subject.includes("Naboo booking —"));
+  t("plural in the subject too", many.subject.includes("Naboo bookings —"));
+  t("plural bookings", /3 bookings/.test(many.body));
+  t(
+    "it asks the two questions this page exists for",
+    /accept payment by credit card/.test(one.body) && /card fee/.test(one.body),
+  );
+  // A refusal has to be an acceptable answer, or the reply rate suffers and the
+  // "Refuses card" status never gets recorded.
+  t("a no is welcome", /bank transfer instead/.test(one.body));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -287,7 +287,9 @@ function TrackerTab({
     <Link
       to={to}
       activeOptions={{ exact: true }}
-      className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] text-slate-700 transition-colors hover:bg-slate-100 data-[status=active]:bg-naboo data-[status=active]:font-semibold data-[status=active]:text-navy"
+      // whitespace-nowrap: a two-word label wrapping inside a 32px pill breaks the row's
+      // height, and "Card tracking NA" is exactly long enough to do it.
+      className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[13px] text-slate-700 transition-colors hover:bg-slate-100 data-[status=active]:bg-naboo data-[status=active]:font-semibold data-[status=active]:text-navy"
     >
       {icon}
       {children}

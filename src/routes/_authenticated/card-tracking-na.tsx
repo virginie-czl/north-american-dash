@@ -1,42 +1,52 @@
 /**
- * Card tracking North America — one row per service provider we have an accepted
- * North American booking with, and whether they take card.
+ * Card tracking North America — a decision queue over a settled ledger.
  *
- * A flat reference table rather than a work queue: there is no per-booking detail to
- * open, so the split view the other trackers use would be an empty right-hand pane.
- * Editing happens inline, one row at a time.
- *
- * Two columns that look alike and are not: "Provider takes card" is about them,
- * derived from evidence and occasionally overridden by hand; "Naboo pays by card" is
- * about us and is always a human decision. The row worth reading is the divergence —
+ * One row per service provider we have an accepted North American booking with, and
+ * whether they take card. Two columns that look alike and are not: the provider's
+ * willingness is derived from evidence and occasionally overridden by hand; Naboo's
+ * decision to use it is always a human call. The row worth reading is the divergence —
  * they accept and we still say no — and that is the only place a written reason is
  * mandatory.
+ *
+ * The page is split because a flat table gave every row the same weight: the handful
+ * that need a call looked exactly like the ones already settled. So the rows that need
+ * a human are dealt as cards with the next move spelled out and its two buttons on it,
+ * and everything decided collapses into a quiet table underneath. The split is
+ * presentation only — `needsDecision` in card-tracking.ts is the single predicate behind
+ * the queue, its count and the KPI, and the CSV still exports every row.
  */
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Pencil, RefreshCw, SearchX, X } from "lucide-react";
+import { Check, Pencil, RefreshCw, X } from "lucide-react";
 import {
-  CARD_SCOPES,
   CARD_STATUS_LABEL,
   CSV_HEADER,
   accepts,
   approvalNote,
+  cardKpis,
+  cardOutreach,
   cardStatus,
   csvRows,
   buildRows,
+  declineNote,
   fmtAge,
-  fmtAmounts,
+  fmtAmount,
   fmtDay,
   fmtFee,
+  fmtRound,
+  hasFee,
   matchesSearch,
+  nextMove,
+  openDecisionsNote,
+  partitionRows,
+  payableNote,
+  provenance,
   scopeCounts,
-  scopeMatcher,
   sortRows,
   validateCardTerms,
   type CardEvidence,
   type CardRow,
-  type CardScopeKey,
   type CardSortKey,
   type CardStatus,
   type CardTerms,
@@ -45,7 +55,8 @@ import {
 import { getCardProviders } from "@/lib/card-tracking.functions";
 import { fetchCardEvidence, fetchCardTerms, saveCardTerms } from "@/lib/card-terms.functions";
 import { syncCardApprovals } from "@/lib/slack-cards.functions";
-import { SummaryStrip, useRegisterTrackerActions } from "@/components/tracker-chrome";
+import { useDraftEmail } from "@/lib/use-gmail";
+import { useRegisterTrackerActions } from "@/components/tracker-chrome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -84,8 +95,9 @@ function exportCsv(rows: CardRow[]) {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
+type SaveInput = Parameters<typeof saveCardTerms>[0]["data"];
+
 function CardTrackingPage() {
-  const [scope, setScope] = useState<CardScopeKey>("needs_decision");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<CardSortKey>("amount");
   const [sortDesc, setSortDesc] = useState(true);
@@ -133,9 +145,10 @@ function CardTrackingPage() {
   });
 
   const save = useMutation({
-    mutationFn: (input: Parameters<typeof saveCardTerms>[0]["data"]) =>
-      saveCardTerms({ data: input }),
+    mutationFn: (input: SaveInput) => saveCardTerms({ data: input }),
     onSuccess: (saved) => {
+      // The row leaves the queue for the ledger as soon as this lands — no animation,
+      // it just moves.
       queryClient.setQueryData<CardTerms[]>(["na-card-terms"], (prev) => {
         const rest = (prev ?? []).filter((t) => t.owner_code !== saved.owner_code);
         return [...rest, saved];
@@ -144,28 +157,41 @@ function CardTrackingPage() {
     },
   });
 
+  const draft = useDraftEmail();
+
   const rows = useMemo(() => {
     const termsByOwner = new Map((termsQuery.data ?? []).map((t) => [t.owner_code, t]));
     const evidenceByOwner = new Map<string, CardEvidence>(
       (evidenceQuery.data?.evidence ?? []).map((e) => [
         e.owner_code,
-        { slackApproved: e.slackApproved, emailVerdict: e.emailVerdict },
+        {
+          slackApproved: e.slackApproved,
+          emailVerdict: e.emailVerdict,
+          approvalCount: e.approvalCount,
+          lastApprovedAt: e.lastApprovedAt,
+        },
       ]),
     );
     return buildRows(providers, termsByOwner, evidenceByOwner);
   }, [providers, termsQuery.data, evidenceQuery.data]);
 
-  // Counts and the filter go through the same predicate table, so a chip can never
-  // claim a number the list does not show.
+  // The KPI band answers for the whole set; search narrows the two lists below it. The
+  // group counts follow what is on screen and say so when they are a subset.
+  const kpis = useMemo(() => cardKpis(rows), [rows]);
   const counts = useMemo(() => scopeCounts(rows), [rows]);
-  const shown = useMemo(() => {
-    const scoped = rows.filter(scopeMatcher(scope)).filter((r) => matchesSearch(r, search));
-    return sortRows(scoped, sortKey, sortDesc);
-  }, [rows, scope, search, sortKey, sortDesc]);
+  const { open, settled } = useMemo(() => {
+    const matching = rows.filter((r) => matchesSearch(r, search));
+    const parts = partitionRows(matching);
+    return {
+      open: sortRows(parts.open, sortKey, sortDesc),
+      settled: sortRows(parts.settled, sortKey, sortDesc),
+    };
+  }, [rows, search, sortKey, sortDesc]);
 
   const isLoading = providersQuery.isLoading || termsQuery.isLoading;
   const error = providersQuery.error ?? termsQuery.error ?? evidenceQuery.error;
   const mirrorAge = evidenceQuery.data?.syncedAgeSeconds ?? null;
+  const filtered = search.trim().length > 0;
 
   useRegisterTrackerActions(
     {
@@ -177,11 +203,14 @@ function CardTrackingPage() {
         await queryClient.invalidateQueries({ queryKey: ["na-card-terms"] });
       },
       isFetching: providersQuery.isFetching,
+      // Every row, queue and ledger together: the split is presentational, and an
+      // export that shipped half the providers would be a regression on the
+      // reconciliation it exists for.
       exports: [
-        { label: "Export CSV", onClick: () => exportCsv(shown), disabled: shown.length === 0 },
+        { label: "Export CSV", onClick: () => exportCsv(rows), disabled: rows.length === 0 },
       ],
     },
-    [providersQuery.isFetching, shown.length],
+    [providersQuery.isFetching, rows],
   );
 
   function toggleSort(key: CardSortKey) {
@@ -192,240 +221,379 @@ function CardTrackingPage() {
     }
   }
 
-  const decided = rows.filter((r) => r.terms.naboo_pays_card != null).length;
+  function markRefused(row: CardRow) {
+    save.reset();
+    // A fee cannot stand on a provider that refuses — the same rule the editor and the
+    // server both enforce — so it goes with the same click rather than failing the save.
+    save.mutate({
+      owner_code: row.provider.owner_code,
+      accepts_card: "no",
+      fee_percent: null,
+      fee_fixed: null,
+      fee_currency: null,
+      refusal_reason: row.terms.refusal_reason,
+      naboo_pays_card: row.terms.naboo_pays_card,
+      naboo_reason: row.terms.naboo_reason,
+      aliases: row.provider.aliases,
+    });
+  }
+
+  function askAboutCard(row: CardRow) {
+    const to = (row.provider.email ?? "").trim();
+    if (!to) return;
+    draft.reset();
+    draft.mutate(
+      { to, ...cardOutreach(row.provider) },
+      // The draft lands in the caller's own mailbox rather than being sent: the
+      // wording is theirs to check, and this page has no business sending mail
+      // on its own.
+      { onSuccess: (result) => window.open(result.link, "_blank", "noopener,noreferrer") },
+    );
+  }
+
+  const takeCard = counts.card_ok + counts.card_ok_if_fee;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-white">
-      <SummaryStrip
-        title="Card tracking — North America"
-        stats={[
-          { label: "Providers", value: isLoading ? "…" : String(rows.length) },
-          {
-            label: "Take card",
-            value: isLoading ? "…" : String(counts.card_ok + counts.card_ok_if_fee),
-          },
-          { label: "Refuse", value: isLoading ? "…" : String(counts.refuses) },
-          { label: "Naboo decided", value: isLoading ? "…" : `${decided} / ${rows.length}` },
-        ]}
-        alert={
-          counts.needs_decision > 0 && !isLoading ? `${counts.needs_decision} to decide` : null
-        }
-      />
-
-      {error != null && (
-        <div
-          role="alert"
-          className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-2.5 text-sm text-rose-800"
-        >
-          Failed to load: {String((error as Error).message ?? error)}
-        </div>
-      )}
-      {save.isError && (
-        <div
-          role="alert"
-          className="flex-none border-b border-rose-200 bg-rose-50 px-5 py-2.5 text-sm text-rose-800"
-        >
-          {String((save.error as Error).message ?? save.error)}
-        </div>
-      )}
-
-      {/* Toolbar */}
-      <div className="flex flex-none flex-wrap items-center gap-2 border-b border-border px-5 py-2">
-        <div className="flex flex-wrap items-center gap-1">
-          {CARD_SCOPES.map((s) => (
-            <button
-              key={s.key}
-              type="button"
-              title={s.hint}
-              onClick={() => setScope(s.key)}
-              className={`inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] transition-colors ${
-                scope === s.key
-                  ? "bg-naboo font-semibold text-navy"
-                  : "text-slate-700 hover:bg-slate-100"
-              }`}
-            >
-              {s.label}
-              <span className={scope === s.key ? "font-normal text-navy/60" : "text-slate-400"}>
-                {isLoading ? "…" : counts[s.key]}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        <Input
-          placeholder="Search provider, O- code or country…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="h-8 w-64 text-[12px]"
-        />
-
-        <div className="ml-auto flex items-center gap-2">
-          {/* Reading the mirror never calls Slack, so its age is stated rather than
-              assumed — and only this button refreshes it. */}
-          <span
-            className="text-[11.5px] text-slate-400"
-            title="Approvals mirrored from #finance-paiement-by-card"
-          >
-            Approvals {fmtAge(mirrorAge)}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5"
-            onClick={() => syncCards.mutate()}
-            disabled={syncCards.isPending}
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${syncCards.isPending ? "animate-spin" : ""}`}
-              aria-hidden="true"
+    <div className="flex min-h-0 flex-1 flex-col bg-slate-50">
+      {/* leading-[normal]: the design's vertical rhythm is authored against the browser
+          default, not the app's global 1.5 — which stretched every card, tile and table
+          row by 6–23px. The three line-heights the design does specify (the provider
+          name at 1.3, the next-move prose at 1.45, the KPI figure at 1.15) override it
+          where they belong. */}
+      <main className="flex min-h-0 min-w-[1200px] flex-1 flex-col gap-5 overflow-auto px-6 pb-7 pt-5 leading-[normal]">
+        {/* 1 — page head */}
+        <div className="flex items-end justify-between gap-6">
+          <div className="flex flex-col gap-0.5">
+            <h1 className="m-0 font-display text-[26px] font-extrabold leading-[normal] tracking-[-0.02em] text-navy">
+              Card tracking — North America
+            </h1>
+            <p className="m-0 text-[13px] text-slate-500">
+              {isLoading
+                ? "Loading providers…"
+                : `${rows.length} provider${rows.length === 1 ? "" : "s"} with an accepted booking · ${takeCard} take card · ${counts.refuses} refuse`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2.5">
+            {/* Not in the design. Kept because the real set is 447 providers, not the
+                15 the prototype was drawn on, and there is otherwise no way to find
+                one of them. It narrows both zones. */}
+            <Input
+              placeholder="Search provider, O- code or country…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-8 w-56 text-[12px]"
             />
-            {syncCards.isPending ? "Syncing…" : "Refresh card approvals"}
-          </Button>
-          {syncCards.isSuccess && !syncCards.isPending && (
-            <span className="text-[11.5px] text-slate-500">
-              {syncCards.data.synced} approval{syncCards.data.synced === 1 ? "" : "s"} across{" "}
-              {syncCards.data.providers} provider{syncCards.data.providers === 1 ? "" : "s"}
-            </span>
-          )}
-          {syncCards.isError && (
+            {/* Reading the mirror never calls Slack, so its age is stated rather than
+                assumed — and only this button refreshes it. */}
             <span
-              role="alert"
-              title={String((syncCards.error as Error).message ?? syncCards.error)}
-              className="max-w-[420px] truncate text-[11.5px] text-rose-800"
+              className="whitespace-nowrap text-[11.5px] text-slate-400"
+              title="Approvals mirrored from #finance-paiement-by-card"
             >
-              {String((syncCards.error as Error).message ?? syncCards.error)}
+              Approvals {fmtAge(mirrorAge)}
             </span>
-          )}
-          <span className="text-xs text-muted-foreground">
-            {shown.length} / {rows.length}
-          </span>
+            <Button
+              variant="naboo-ghost"
+              size="naboo"
+              onClick={() => syncCards.mutate()}
+              disabled={syncCards.isPending}
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${syncCards.isPending ? "animate-spin" : ""}`}
+                aria-hidden="true"
+              />
+              {syncCards.isPending ? "Syncing…" : "Refresh card approvals"}
+            </Button>
+          </div>
         </div>
-      </div>
 
-      {/* Table */}
-      <div className="sla-scroll">
-        <Table className="sla-table">
-          <TableHeader>
-            <TableRow>
-              <SortableHead
-                label="Provider"
-                active={sortKey === "provider"}
-                desc={sortDesc}
-                onClick={() => toggleSort("provider")}
-              />
-              <TableHead>Country</TableHead>
-              <SortableHead
-                label="Bookings"
-                active={sortKey === "bookings"}
-                desc={sortDesc}
-                onClick={() => toggleSort("bookings")}
-              />
-              <SortableHead
-                label="Amount at stake"
-                active={sortKey === "amount"}
-                desc={sortDesc}
-                onClick={() => toggleSort("amount")}
-                align="right"
-                hint="Outstanding payable, per currency. Sorted by the largest single-currency exposure — these are USD, CAD, EUR and IDR, and one total across them would mean nothing."
-              />
-              <TableHead>Provider takes card</TableHead>
-              <TableHead>Fee</TableHead>
-              <TableHead>Reason for refusal</TableHead>
-              <TableHead>Naboo pays by card</TableHead>
-              <TableHead>Why not</TableHead>
-              <TableHead>Last updated</TableHead>
-              <TableHead className="w-8" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={11} className="text-center text-xs text-muted-foreground">
-                  Loading…
-                </TableCell>
-              </TableRow>
-            ) : shown.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={11}>
-                  <div className="flex flex-col items-center gap-2 py-10 text-center">
-                    <SearchX className="h-5 w-5 text-slate-400" aria-hidden="true" />
-                    <span className="text-xs text-muted-foreground">
-                      No provider matches this filter.
-                    </span>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : (
-              shown.map((row) =>
+        {(error != null || save.isError || syncCards.isError || draft.isError) && (
+          <div
+            role="alert"
+            className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-[12.5px] text-rose-800"
+          >
+            {error != null && <div>Failed to load: {message(error)}</div>}
+            {save.isError && <div>{message(save.error)}</div>}
+            {syncCards.isError && <div>Sync failed: {message(syncCards.error)}</div>}
+            {draft.isError && <div>Could not draft the email: {message(draft.error)}</div>}
+          </div>
+        )}
+        {syncCards.isSuccess && !syncCards.isPending && (
+          <p className="m-0 text-[11.5px] text-slate-500">
+            Mirrored {syncCards.data.synced} approval{syncCards.data.synced === 1 ? "" : "s"} across{" "}
+            {syncCards.data.providers} provider{syncCards.data.providers === 1 ? "" : "s"}.
+          </p>
+        )}
+
+        {/* 2 — KPI band */}
+        <div className="grid grid-cols-4 gap-3">
+          <Kpi
+            dark
+            label="Open decisions"
+            value={isLoading ? "…" : String(kpis.open.total)}
+            valueClassName="text-naboo"
+            note={isLoading ? " " : openDecisionsNote(kpis.open)}
+          />
+          <Kpi
+            label="Payable by card"
+            value={isLoading ? "…" : String(kpis.payableByCard.total)}
+            valueClassName="text-emerald-700"
+            note={isLoading ? " " : payableNote(kpis.payableByCard)}
+          />
+          <Kpi
+            label="They accept, we decline"
+            value={isLoading ? "…" : String(kpis.weDecline.total)}
+            note={isLoading ? " " : declineNote(kpis.weDecline)}
+          />
+          <Kpi
+            // The currency is named in the label because the figure is one currency's
+            // exposure and nothing here is ever summed across currencies.
+            label={
+              kpis.largestExposure
+                ? `Largest ${kpis.largestExposure.currency} exposure`
+                : "Largest exposure"
+            }
+            value={isLoading || !kpis.largestExposure ? "—" : fmtRound(kpis.largestExposure.amount)}
+            unit={kpis.largestExposure?.currency}
+            note={
+              kpis.largestExposure
+                ? `${kpis.largestExposure.provider} · never summed across currencies`
+                : "no outstanding amount recorded"
+            }
+          />
+        </div>
+
+        {/* 3 — decision queue */}
+        <section className="flex flex-col gap-2.5">
+          <GroupHead
+            title="Needs a decision"
+            count={open.length}
+            total={filtered ? kpis.open.total : null}
+            hint="Status unknown, or they accept and nobody has said whether we pay by card"
+          />
+          {isLoading ? (
+            <p className="m-0 text-[12px] text-slate-400">Loading…</p>
+          ) : open.length === 0 ? (
+            <p className="m-0 text-[12px] text-slate-500">
+              {filtered
+                ? "No provider matching this search needs a decision."
+                : `Nothing to decide — all ${rows.length} providers are settled.`}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {open.map((row) =>
                 editing === row.provider.owner_code ? (
-                  <EditRow
+                  <div
                     key={row.provider.owner_code}
-                    row={row}
-                    pending={save.isPending}
-                    onCancel={() => {
-                      save.reset();
-                      setEditing(null);
-                    }}
-                    onSave={(input) => save.mutate(input)}
-                  />
+                    className="rounded-[10px] border border-slate-200 border-l-[3px] border-l-naboo bg-white p-4"
+                  >
+                    <TermsEditor
+                      row={row}
+                      pending={save.isPending}
+                      onCancel={() => {
+                        save.reset();
+                        setEditing(null);
+                      }}
+                      onSave={(input) => save.mutate(input)}
+                    />
+                  </div>
                 ) : (
-                  <ReadRow
+                  <QueueCard
                     key={row.provider.owner_code}
                     row={row}
-                    onEdit={() => {
+                    pending={save.isPending || draft.isPending}
+                    onDecide={() => {
                       save.reset();
                       setEditing(row.provider.owner_code);
                     }}
+                    onMarkRefused={() => markRefused(row)}
+                    onAsk={() => askAboutCard(row)}
                   />
                 ),
-              )
-            )}
-          </TableBody>
-        </Table>
-      </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* 4 — settled ledger */}
+        <section className="flex flex-col gap-2.5">
+          <GroupHead
+            title="Settled"
+            count={settled.length}
+            total={filtered ? rows.length - kpis.open.total : null}
+            hint="Nothing to chase — kept for reference and for the CSV"
+            muted
+          />
+          <div className="overflow-x-auto overflow-y-hidden rounded-xl border border-slate-200 bg-white">
+            <Table className="text-[12.5px]" wrapperClassName="overflow-visible">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <LedgerHead
+                    label="Provider"
+                    sortKey="provider"
+                    active={sortKey}
+                    desc={sortDesc}
+                    onSort={toggleSort}
+                  />
+                  <LedgerHead
+                    label="Amount at stake"
+                    sortKey="amount"
+                    active={sortKey}
+                    desc={sortDesc}
+                    onSort={toggleSort}
+                    align="right"
+                    hint="Outstanding payable, per currency. Sorted by the largest single-currency exposure — these are USD, CAD, EUR and IDR, and one total across them would mean nothing."
+                  />
+                  <LedgerHead label="Provider takes card" />
+                  <LedgerHead label="Fee" />
+                  <LedgerHead label="Naboo pays" />
+                  <LedgerHead label="Reason on file" />
+                  <LedgerHead label="Updated" />
+                  <TableHead className="w-10 bg-slate-50 border-b border-slate-200 px-4 py-2" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="px-4 py-3 text-[12px] text-slate-400">
+                      Loading…
+                    </TableCell>
+                  </TableRow>
+                ) : settled.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="px-4 py-3 text-[12px] text-slate-500">
+                      {filtered
+                        ? "No settled provider matches this search."
+                        : "Nothing settled yet — every provider is still in the queue."}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  settled.map((row) =>
+                    editing === row.provider.owner_code ? (
+                      <TableRow key={row.provider.owner_code} className="hover:bg-transparent">
+                        <TableCell
+                          colSpan={8}
+                          className="border-b border-slate-100 bg-slate-50 p-4"
+                        >
+                          <TermsEditor
+                            row={row}
+                            pending={save.isPending}
+                            onCancel={() => {
+                              save.reset();
+                              setEditing(null);
+                            }}
+                            onSave={(input) => save.mutate(input)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      <LedgerRow
+                        key={row.provider.owner_code}
+                        row={row}
+                        onEdit={() => {
+                          save.reset();
+                          setEditing(row.provider.owner_code);
+                        }}
+                      />
+                    ),
+                  )
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }
 
-function SortableHead({
+function message(error: unknown): string {
+  return String((error as Error)?.message ?? error);
+}
+
+// ── The furniture ───────────────────────────────────────────────────────────
+
+function Kpi({
   label,
-  active,
-  desc,
-  onClick,
-  align = "left",
-  hint,
+  value,
+  unit,
+  note,
+  dark = false,
+  valueClassName,
 }: {
   label: string;
-  active: boolean;
-  desc: boolean;
-  onClick: () => void;
-  align?: "left" | "right";
-  hint?: string;
+  value: string;
+  unit?: string | null;
+  note: string;
+  dark?: boolean;
+  valueClassName?: string;
 }) {
   return (
-    <TableHead className={align === "right" ? "text-right" : undefined}>
-      <button
-        type="button"
-        onClick={onClick}
-        title={hint}
-        className={`inline-flex items-center gap-1 ${active ? "text-navy" : ""}`}
+    <div
+      className={`flex flex-col gap-0.5 rounded-xl border px-[18px] py-4 ${
+        dark ? "border-navy bg-navy text-white" : "border-slate-200 bg-white"
+      }`}
+    >
+      <span
+        className={`text-[10.5px] font-semibold uppercase tracking-[0.08em] ${
+          dark ? "text-white/50" : "text-slate-500"
+        }`}
       >
         {label}
-        <span className="text-[9px] text-slate-400">{active ? (desc ? "▼" : "▲") : "↕"}</span>
-      </button>
-    </TableHead>
+      </span>
+      <span
+        className={`font-display text-[30px] font-extrabold leading-[1.15] tabular-nums ${
+          valueClassName ?? (dark ? "text-white" : "text-navy")
+        }`}
+      >
+        {value}
+        {unit && <span className="ml-1 text-[15px] font-extrabold text-slate-500">{unit}</span>}
+      </span>
+      <span className={`text-[11.5px] ${dark ? "text-white/60" : "text-slate-400"}`}>{note}</span>
+    </div>
   );
 }
 
-const STATUS_STYLE: Record<CardStatus, string> = {
-  card_ok: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  card_ok_if_fee: "border-amber-200 bg-amber-50 text-amber-800",
-  refuses: "border-rose-200 bg-rose-50 text-rose-800",
-  unknown: "border-border bg-slate-50 text-slate-500",
+function GroupHead({
+  title,
+  count,
+  total,
+  hint,
+  muted = false,
+}: {
+  title: string;
+  count: number;
+  /** The unfiltered figure, when a search is narrowing the list. */
+  total: number | null;
+  hint: string;
+  muted?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-navy">{title}</span>
+      <span
+        className={`inline-flex h-5 items-center rounded-full px-2 text-[11px] tabular-nums ${
+          muted ? "bg-slate-100 font-semibold text-slate-600" : "bg-naboo font-bold text-navy"
+        }`}
+      >
+        {count}
+        {total != null && total !== count && (
+          <span className="ml-1 font-normal opacity-60">of {total}</span>
+        )}
+      </span>
+      <span className="text-[12px] text-slate-400">{hint}</span>
+    </div>
+  );
+}
+
+const STATUS_PILL: Record<CardStatus, string> = {
+  card_ok: "bg-emerald-100 text-emerald-700",
+  card_ok_if_fee: "bg-amber-100 text-amber-800",
+  refuses: "bg-[#FFF4F4] text-rose-700",
+  unknown: "bg-slate-100 text-slate-500",
 };
 
 function StatusPill({ row }: { row: CardRow }) {
-  const source =
+  const detail =
     row.verdict.source === "slack"
       ? "Approved card in #finance-paiement-by-card"
       : row.verdict.source === "email"
@@ -434,108 +602,274 @@ function StatusPill({ row }: { row: CardRow }) {
           ? `Set by hand${row.terms.updated_by ? ` by ${row.terms.updated_by}` : ""}`
           : "Never asked — the honest default";
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <span
-        title={source}
-        className={`inline-flex items-center rounded-full border px-2 py-[2px] text-[11px] font-medium ${STATUS_STYLE[row.verdict.status]}`}
-      >
-        {CARD_STATUS_LABEL[row.verdict.status]}
-      </span>
-      {/* How strong the evidence is, not just that it exists: one approval two years
-          ago and four this quarter both read "Card OK" without this. */}
-      {approvalNote(row.evidence) && (
-        <span className="text-[11px] text-slate-500">{approvalNote(row.evidence)}</span>
-      )}
-      {/* An override has to look like one, or the next reader wonders why the
-          derived status disagrees with the evidence beside it. */}
-      {row.verdict.overridden && (
-        <span
-          title={`Manual override${row.terms.updated_by ? ` by ${row.terms.updated_by}` : ""} — the evidence says otherwise`}
-          className="rounded-full border border-border bg-white px-1.5 py-[1px] text-[10px] uppercase tracking-[0.08em] text-slate-500"
-        >
-          Override
-        </span>
-      )}
+    <span
+      title={detail}
+      className={`inline-flex items-center rounded-full px-[9px] py-[3px] text-[11px] font-medium ${STATUS_PILL[row.verdict.status]}`}
+    >
+      {CARD_STATUS_LABEL[row.verdict.status]}
     </span>
   );
 }
 
-function ReadRow({ row, onEdit }: { row: CardRow; onEdit: () => void }) {
+/** The manual-override tag. A derived status disagreeing with the evidence must say so. */
+function OverrideTag({ row }: { row: CardRow }) {
+  if (!row.verdict.overridden) return null;
+  return (
+    <span
+      title={`Manual override${row.terms.updated_by ? ` by ${row.terms.updated_by}` : ""} — the evidence says otherwise`}
+      className="ml-[5px] rounded-full border border-slate-200 bg-white px-1.5 py-[1px] text-[9.5px] uppercase tracking-[0.08em] text-slate-500"
+    >
+      Override
+    </span>
+  );
+}
+
+/** Primary amount, with the other currencies beneath. Never one figure across them. */
+function Amounts({ row, className = "" }: { row: CardRow; className?: string }) {
+  const [first, ...rest] = row.provider.amounts;
+  return (
+    <div className={`flex flex-col gap-px text-right ${className}`}>
+      <span className="whitespace-nowrap text-[13.5px] font-semibold tabular-nums">
+        {first ? fmtAmount(first.amount, first.currency) : "—"}
+      </span>
+      {rest.length > 0 && (
+        <span className="whitespace-nowrap text-[10.5px] text-slate-400 tabular-nums">
+          {rest.map((a) => fmtAmount(a.amount, a.currency)).join(" · ")}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── The queue ───────────────────────────────────────────────────────────────
+
+function QueueCard({
+  row,
+  pending,
+  onDecide,
+  onMarkRefused,
+  onAsk,
+}: {
+  row: CardRow;
+  pending: boolean;
+  onDecide: () => void;
+  onMarkRefused: () => void;
+  onAsk: () => void;
+}) {
+  const { provider } = row;
+  // Which of the two questions is open decides which pair of buttons the card carries.
+  const unasked = row.verdict.status === "unknown";
+  const email = (provider.email ?? "").trim();
+  return (
+    <div className="grid grid-cols-[250px_104px_156px_190px_1fr_auto] items-center gap-4 rounded-[10px] border border-slate-200 border-l-[3px] border-l-naboo bg-white px-4 py-3 transition-[box-shadow,border-color] duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] [&:hover]:border-navy [&:hover]:border-l-naboo [&:hover]:shadow-[0_4px_6px_rgba(16,31,52,0.06)]">
+      <div className="flex min-w-0 flex-col gap-px">
+        <span
+          className="truncate text-[13.5px] font-semibold leading-[1.3]"
+          title={provider.provider_name}
+        >
+          {provider.provider_name}
+        </span>
+        <span className="font-mono text-[10.5px] text-slate-400">
+          {provider.owner_code} · {provider.country ?? "—"}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-px">
+        <span className="text-[13px] tabular-nums">
+          {provider.bookings} booking{provider.bookings === 1 ? "" : "s"}
+        </span>
+        <span className="whitespace-nowrap text-[10.5px] text-slate-400">
+          {fmtDay(provider.latest_start)}
+        </span>
+      </div>
+
+      <Amounts row={row} />
+
+      <div className="flex flex-col items-start gap-[3px]">
+        <span className="inline-flex items-center">
+          <StatusPill row={row} />
+          <OverrideTag row={row} />
+        </span>
+        <span className="text-[10.5px] text-slate-400">{provenance(row)}</span>
+      </div>
+
+      <p className="m-0 text-pretty text-[12px] leading-[1.45] text-slate-500">{nextMove(row)}</p>
+
+      <div className="flex items-center gap-1.5">
+        {unasked ? (
+          <>
+            <Button
+              variant="naboo"
+              size="naboo-sm"
+              disabled={pending || !email}
+              title={
+                email
+                  ? `Draft an email to ${email} asking whether they take card`
+                  : "No email address recorded for this provider"
+              }
+              onClick={onAsk}
+            >
+              Ask about card
+            </Button>
+            <Button
+              variant="naboo-ghost"
+              size="naboo-sm"
+              disabled={pending}
+              title="Record that this provider does not take card"
+              onClick={onMarkRefused}
+            >
+              Mark refused
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="naboo" size="naboo-sm" disabled={pending} onClick={onDecide}>
+              Decide
+            </Button>
+            <Button variant="naboo-ghost" size="naboo-sm" asChild>
+              {/* The evidence for this row lives in a mailbox or in Slack, and neither
+                  stores a link we hold. A search for the provider in the reader's own
+                  mail is the closest honest target. */}
+              <a
+                href={threadSearchUrl(row)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Search your mailbox for correspondence with this provider"
+              >
+                Open thread
+              </a>
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function threadSearchUrl(row: CardRow): string {
+  const query = (row.provider.email ?? "").trim() || row.provider.provider_name;
+  return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query)}`;
+}
+
+// ── The ledger ──────────────────────────────────────────────────────────────
+
+function LedgerHead({
+  label,
+  sortKey,
+  active,
+  desc,
+  onSort,
+  align = "left",
+  hint,
+}: {
+  label: string;
+  sortKey?: CardSortKey;
+  active?: CardSortKey;
+  desc?: boolean;
+  onSort?: (key: CardSortKey) => void;
+  align?: "left" | "right";
+  hint?: string;
+}) {
+  const base =
+    "whitespace-nowrap border-b border-slate-200 bg-slate-50 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500";
+  return (
+    <TableHead className={`${base} ${align === "right" ? "text-right" : "text-left"}`}>
+      {sortKey && onSort ? (
+        <button
+          type="button"
+          title={hint}
+          onClick={() => onSort(sortKey)}
+          className={`inline-flex items-center gap-1 uppercase ${active === sortKey ? "text-navy" : ""}`}
+        >
+          {label}
+          <span className="text-[9px] text-slate-400">
+            {active === sortKey ? (desc ? "▼" : "▲") : "↕"}
+          </span>
+        </button>
+      ) : (
+        label
+      )}
+    </TableHead>
+  );
+}
+
+function LedgerRow({ row, onEdit }: { row: CardRow; onEdit: () => void }) {
   const { provider, terms, verdict } = row;
   const theyAccept = accepts(verdict.status);
   const weDecline = theyAccept && terms.naboo_pays_card === "no";
+  // Their reason when they refuse, ours when we do. Both are "the reason on file";
+  // which one it is follows from the two pills on the same line.
+  const reason = weDecline
+    ? terms.naboo_reason
+    : verdict.status === "refuses"
+      ? terms.refusal_reason
+      : null;
   return (
-    <TableRow className={weDecline ? "bg-amber-50/40" : undefined}>
-      <TableCell className="max-w-[220px] font-medium">
-        <span className="block truncate" title={provider.provider_name}>
-          {provider.provider_name}
+    <TableRow
+      // The warm tint marks a row where we made a choice against the provider's
+      // willingness. Hover has to beat it, or the row stops responding under the cursor.
+      className={`border-b border-slate-100 ${weDecline ? "bg-[#FFFCF2]" : ""} hover:bg-slate-50`}
+    >
+      <TableCell className="whitespace-nowrap px-4 py-[9px] align-middle">
+        <span className="font-semibold">{provider.provider_name}</span>
+        <span className="ml-2 font-mono text-[10.5px] text-slate-400">
+          {provider.owner_code} · {provider.country ?? "—"}
         </span>
-        <span className="cell-sub font-mono text-[11px]">{provider.owner_code}</span>
       </TableCell>
-      <TableCell className="cell-sub">{provider.country ?? "—"}</TableCell>
-      <TableCell>
-        <span className="tabular-nums">{provider.bookings}</span>
-        <span className="cell-sub block text-[11px]">{fmtDay(provider.latest_start)}</span>
+      <TableCell className="px-4 py-[9px] align-middle">
+        <Amounts row={row} />
       </TableCell>
-      <TableCell className="whitespace-nowrap text-right tabular-nums">
-        {fmtAmounts(provider.amounts)}
+      <TableCell className="px-4 py-[9px] align-middle">
+        <span className="inline-flex items-center whitespace-nowrap">
+          <StatusPill row={row} />
+          <OverrideTag row={row} />
+          {/* How strong the evidence is, not just that it exists: one approval two
+              years ago and four this quarter both read "Card OK" without this. */}
+          {approvalNote(row.evidence) && (
+            <span className="ml-2 text-[10.5px] text-slate-400">{approvalNote(row.evidence)}</span>
+          )}
+        </span>
       </TableCell>
-      <TableCell>
-        <StatusPill row={row} />
+      {/* A fee only means something on a provider that accepts. Elsewhere the cell
+          recedes rather than inviting the data-entry error. */}
+      <TableCell className="px-4 py-[9px] align-middle tabular-nums">
+        {theyAccept && hasFee(terms) ? fmtFee(terms) : <span className="text-slate-300">—</span>}
       </TableCell>
-      {/* A fee only means something on a provider that accepts, and a reason for
-          refusal only on one that refuses. Showing them anywhere else invites the
-          data-entry error rather than preventing it. */}
-      <TableCell className="tabular-nums">{theyAccept ? fmtFee(terms) : "—"}</TableCell>
-      <TableCell className="max-w-[200px]">
-        {verdict.status === "refuses" ? (
-          <span className="block truncate text-[12px]" title={terms.refusal_reason ?? ""}>
-            {terms.refusal_reason ?? "—"}
-          </span>
-        ) : (
-          "—"
-        )}
-      </TableCell>
-      <TableCell>
+      <TableCell className="px-4 py-[9px] align-middle">
         {terms.naboo_pays_card == null ? (
-          <span className="text-[12px] text-slate-400">Undecided</span>
+          <span className="text-[11px] text-slate-400">Undecided</span>
         ) : (
           <span
-            className={`inline-flex items-center rounded-full border px-2 py-[2px] text-[11px] font-medium ${
+            className={`inline-flex items-center rounded-full px-[9px] py-[3px] text-[11px] font-medium ${
               terms.naboo_pays_card === "yes"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                : "border-border bg-slate-50 text-slate-600"
+                ? "bg-emerald-100 text-emerald-700"
+                : "bg-slate-100 text-slate-600"
             }`}
           >
             {terms.naboo_pays_card === "yes" ? "Yes" : "No"}
           </span>
         )}
       </TableCell>
-      <TableCell className="max-w-[220px]">
-        {weDecline ? (
-          <span className="block truncate text-[12px]" title={terms.naboo_reason ?? ""}>
-            {terms.naboo_reason ?? "—"}
+      <TableCell className="max-w-[300px] px-4 py-[9px] align-middle">
+        {reason ? (
+          <span className="block truncate text-[11.5px]" title={reason}>
+            {reason}
           </span>
         ) : (
-          "—"
+          <span className="text-slate-300">—</span>
         )}
       </TableCell>
-      <TableCell className="cell-sub whitespace-nowrap text-[11px]">
-        {terms.updated_by ? (
-          <>
-            {terms.updated_by.replace(/@naboo\.app$/, "")}
-            <span className="block">{fmtDay(terms.updated_at?.slice(0, 10) ?? null)}</span>
-          </>
-        ) : (
-          "—"
-        )}
+      <TableCell className="whitespace-nowrap px-4 py-[9px] align-middle text-[10.5px] text-slate-400">
+        {terms.updated_by
+          ? `${terms.updated_by.replace(/@naboo\.app$/, "")} · ${fmtDay(terms.updated_at?.slice(0, 10) ?? null)}`
+          : "—"}
       </TableCell>
-      <TableCell>
+      <TableCell className="w-10 px-4 py-[9px] align-middle">
         <button
           type="button"
           onClick={onEdit}
           aria-label={`Edit ${provider.provider_name}`}
-          className="text-slate-400 hover:text-navy"
+          className="text-slate-400 transition-colors duration-150 hover:text-navy"
         >
           <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
@@ -543,6 +877,8 @@ function ReadRow({ row, onEdit }: { row: CardRow; onEdit: () => void }) {
     </TableRow>
   );
 }
+
+// ── The editor ──────────────────────────────────────────────────────────────
 
 type EditState = {
   accepts_card: CardYesNo | "" | "derived";
@@ -554,7 +890,15 @@ type EditState = {
   naboo_reason: string;
 };
 
-function EditRow({
+/**
+ * One editor, opened from either zone.
+ *
+ * The queue's "Decide" and the ledger's pencil are the same edit, so they are the same
+ * form: the rules it enforces — a fee promoting the status while it is typed, a
+ * mandatory reason on the divergence — are load-bearing enough that a second copy of
+ * them would be a second place to get them wrong.
+ */
+function TermsEditor({
   row,
   pending,
   onCancel,
@@ -563,17 +907,7 @@ function EditRow({
   row: CardRow;
   pending: boolean;
   onCancel: () => void;
-  onSave: (input: {
-    owner_code: string;
-    accepts_card: CardYesNo | null;
-    fee_percent: number | null;
-    fee_fixed: number | null;
-    fee_currency: string | null;
-    refusal_reason: string | null;
-    naboo_pays_card: CardYesNo | null;
-    naboo_reason: string | null;
-    aliases: string[];
-  }) => void;
+  onSave: (input: SaveInput) => void;
 }) {
   const { provider, terms } = row;
   const [state, setState] = useState<EditState>({
@@ -605,157 +939,147 @@ function EditRow({
 
   // The status as it will read once saved, so the mandatory reason follows the fee
   // being typed rather than the status the row had when it was opened.
-  const previewStatus = previewCardStatus(row, draft);
+  const previewStatus = cardStatus(row.evidence, { ...terms, ...draft }).status;
   const theyAccept = accepts(previewStatus);
   const problem = validateCardTerms(draft, previewStatus);
+  const field = "h-8 rounded-md border border-slate-300 bg-white px-2 text-[12px]";
 
   return (
-    <TableRow className="bg-slate-50/60 align-top">
-      <TableCell className="max-w-[220px] font-medium">
-        <span className="block truncate">{provider.provider_name}</span>
-        <span className="cell-sub font-mono text-[11px]">{provider.owner_code}</span>
-      </TableCell>
-      <TableCell className="cell-sub">{provider.country ?? "—"}</TableCell>
-      <TableCell className="tabular-nums">{provider.bookings}</TableCell>
-      <TableCell className="whitespace-nowrap text-right tabular-nums">
-        {fmtAmounts(provider.amounts)}
-      </TableCell>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[13.5px] font-semibold">{provider.provider_name}</span>
+        <span className="font-mono text-[10.5px] text-slate-400">{provider.owner_code}</span>
+        <span className="ml-auto text-[11px] text-slate-400">
+          Will read as {CARD_STATUS_LABEL[previewStatus]}
+        </span>
+      </div>
 
-      <TableCell>
-        <select
-          aria-label="Provider takes card"
-          value={state.accepts_card}
-          onChange={(e) =>
-            setState((s) => ({ ...s, accepts_card: e.target.value as EditState["accepts_card"] }))
-          }
-          className="h-7 w-[132px] rounded-md border border-input bg-white px-1.5 text-[12px]"
-        >
-          <option value="derived">From evidence ({CARD_STATUS_LABEL[row.verdict.status]})</option>
-          <option value="yes">Takes card</option>
-          <option value="no">Refuses card</option>
-        </select>
-      </TableCell>
+      <div className="flex flex-wrap items-end gap-4">
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+            Provider takes card
+          </span>
+          <select
+            aria-label="Provider takes card"
+            value={state.accepts_card}
+            onChange={(e) =>
+              setState((s) => ({ ...s, accepts_card: e.target.value as EditState["accepts_card"] }))
+            }
+            className={`${field} w-[190px]`}
+          >
+            <option value="derived">From evidence ({CARD_STATUS_LABEL[row.verdict.status]})</option>
+            <option value="yes">Takes card</option>
+            <option value="no">Refuses card</option>
+          </select>
+        </label>
 
-      {/* The fee is a percentage and an optional flat amount: both can apply, so
-          both are captured rather than one being folded into the other. */}
-      <TableCell>
-        {theyAccept ? (
-          <div className="flex items-center gap-1">
-            <input
-              aria-label="Fee percent"
-              value={state.fee_percent}
-              onChange={(e) => setState((s) => ({ ...s, fee_percent: e.target.value }))}
-              placeholder="0.00"
-              className="h-7 w-14 rounded-md border border-input bg-white px-1.5 text-right text-[12px] tabular-nums"
-            />
-            <span className="text-[11px] text-slate-500">%</span>
-            <span className="text-[11px] text-slate-400">+</span>
-            <input
-              aria-label="Fee fixed amount"
-              value={state.fee_fixed}
-              onChange={(e) => setState((s) => ({ ...s, fee_fixed: e.target.value }))}
-              placeholder="0.00"
-              className="h-7 w-16 rounded-md border border-input bg-white px-1.5 text-right text-[12px] tabular-nums"
-            />
-            <input
-              aria-label="Fee currency"
-              value={state.fee_currency}
-              onChange={(e) =>
-                setState((s) => ({ ...s, fee_currency: e.target.value.toUpperCase() }))
-              }
-              className="h-7 w-12 rounded-md border border-input bg-white px-1.5 text-[12px] uppercase"
-            />
-          </div>
-        ) : (
-          <span className="text-[11px] text-slate-400">n/a while they refuse</span>
+        {/* The fee is a percentage and an optional flat amount: both can apply, so
+            both are captured rather than one being folded into the other. */}
+        {theyAccept && (
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+              Fee
+            </span>
+            <span className="flex items-center gap-1">
+              <input
+                aria-label="Fee percent"
+                value={state.fee_percent}
+                onChange={(e) => setState((s) => ({ ...s, fee_percent: e.target.value }))}
+                placeholder="0.00"
+                className={`${field} w-16 text-right tabular-nums`}
+              />
+              <span className="text-[11px] text-slate-500">%</span>
+              <span className="text-[11px] text-slate-400">+</span>
+              <input
+                aria-label="Fee fixed amount"
+                value={state.fee_fixed}
+                onChange={(e) => setState((s) => ({ ...s, fee_fixed: e.target.value }))}
+                placeholder="0.00"
+                className={`${field} w-20 text-right tabular-nums`}
+              />
+              <input
+                aria-label="Fee currency"
+                value={state.fee_currency}
+                onChange={(e) =>
+                  setState((s) => ({ ...s, fee_currency: e.target.value.toUpperCase() }))
+                }
+                className={`${field} w-14 uppercase`}
+              />
+            </span>
+          </label>
         )}
-      </TableCell>
 
-      <TableCell>
-        {previewStatus === "refuses" ? (
-          <input
-            aria-label="Reason for refusal"
-            value={state.refusal_reason}
-            onChange={(e) => setState((s) => ({ ...s, refusal_reason: e.target.value }))}
-            placeholder="Their reason"
-            className="h-7 w-[180px] rounded-md border border-input bg-white px-1.5 text-[12px]"
-          />
-        ) : (
-          <span className="text-[11px] text-slate-400">n/a</span>
+        {previewStatus === "refuses" && (
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+              Their reason
+            </span>
+            <input
+              aria-label="Reason for refusal"
+              value={state.refusal_reason}
+              onChange={(e) => setState((s) => ({ ...s, refusal_reason: e.target.value }))}
+              placeholder="Why they refuse"
+              className={`${field} w-[240px]`}
+            />
+          </label>
         )}
-      </TableCell>
 
-      <TableCell>
-        <select
-          aria-label="Naboo pays by card"
-          value={state.naboo_pays_card}
-          onChange={(e) =>
-            setState((s) => ({ ...s, naboo_pays_card: e.target.value as CardYesNo | "" }))
-          }
-          className="h-7 w-[104px] rounded-md border border-input bg-white px-1.5 text-[12px]"
-        >
-          <option value="">Undecided</option>
-          <option value="yes">Yes</option>
-          <option value="no">No</option>
-        </select>
-      </TableCell>
+        <label className="flex flex-col gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+            Naboo pays by card
+          </span>
+          <select
+            aria-label="Naboo pays by card"
+            autoFocus
+            value={state.naboo_pays_card}
+            onChange={(e) =>
+              setState((s) => ({ ...s, naboo_pays_card: e.target.value as CardYesNo | "" }))
+            }
+            className={`${field} w-[130px]`}
+          >
+            <option value="">Undecided</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </label>
 
-      <TableCell>
-        {theyAccept && state.naboo_pays_card === "no" ? (
-          <input
-            aria-label="Why Naboo does not pay by card"
-            value={state.naboo_reason}
-            onChange={(e) => setState((s) => ({ ...s, naboo_reason: e.target.value }))}
-            placeholder="Required — why not?"
-            className={`h-7 w-[200px] rounded-md border bg-white px-1.5 text-[12px] ${
-              state.naboo_reason.trim() ? "border-input" : "border-rose-300"
-            }`}
-          />
-        ) : (
-          <span className="text-[11px] text-slate-400">n/a</span>
+        {theyAccept && state.naboo_pays_card === "no" && (
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+              Why not
+            </span>
+            <input
+              aria-label="Why Naboo does not pay by card"
+              value={state.naboo_reason}
+              onChange={(e) => setState((s) => ({ ...s, naboo_reason: e.target.value }))}
+              placeholder="Required — why not?"
+              className={`${field} w-[300px] ${state.naboo_reason.trim() ? "" : "border-rose-300"}`}
+            />
+          </label>
         )}
-      </TableCell>
 
-      <TableCell className="cell-sub text-[11px]">
-        {problem && <span className="block max-w-[200px] text-rose-700">{problem}</span>}
-      </TableCell>
-
-      <TableCell>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Save"
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            variant="naboo"
+            size="naboo"
             disabled={pending || problem != null}
             onClick={() => onSave({ ...draft, aliases: provider.aliases })}
-            className="text-emerald-700 disabled:text-slate-300"
           >
-            <Check className="h-4 w-4" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label="Cancel"
-            onClick={onCancel}
-            className="text-slate-400 hover:text-navy"
-          >
-            <X className="h-4 w-4" aria-hidden="true" />
-          </button>
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            Save
+          </Button>
+          <Button variant="naboo-ghost" size="naboo" onClick={onCancel}>
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+            Cancel
+          </Button>
         </div>
-      </TableCell>
-    </TableRow>
-  );
-}
+      </div>
 
-/**
- * The status this row will have once the draft is saved.
- *
- * Derived from the same function the table uses, with the draft standing in for the
- * stored terms: typing a fee has to promote the row to "Card OK if fee" while it is
- * being typed, and clearing it has to demote it, otherwise the mandatory-reason rule
- * fires on a status the editor is no longer showing.
- */
-function previewCardStatus(
-  row: CardRow,
-  draft: { accepts_card: CardYesNo | null; fee_percent: number | null; fee_fixed: number | null },
-): CardStatus {
-  return cardStatus(row.evidence, { ...row.terms, ...draft }).status;
+      {problem && (
+        <p role="alert" className="m-0 text-[11.5px] text-rose-700">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
 }

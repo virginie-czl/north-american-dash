@@ -334,6 +334,201 @@ export function buildRows(
   });
 }
 
+// ── The queue and the ledger ────────────────────────────────────────────────
+
+/**
+ * Does this row still need a human?
+ *
+ * Two shapes: nobody has established whether the provider takes card, or they do and
+ * nobody has said whether we will use it. Everything else has been decided and belongs
+ * in the ledger.
+ *
+ * This is the page's spine — the queue, the count beside it and the KPI all call it, so
+ * they cannot disagree about what "open" means. The scope predicate below delegates
+ * here for the same reason.
+ */
+export function needsDecision(row: CardRow): boolean {
+  return (
+    row.verdict.status === "unknown" ||
+    (accepts(row.verdict.status) && row.terms.naboo_pays_card == null)
+  );
+}
+
+/** The two zones, in one pass. */
+export function partitionRows(rows: CardRow[]): { open: CardRow[]; settled: CardRow[] } {
+  const open: CardRow[] = [];
+  const settled: CardRow[] = [];
+  for (const row of rows) (needsDecision(row) ? open : settled).push(row);
+  return { open, settled };
+}
+
+export type CardExposure = { currency: string; amount: number; provider: string };
+
+export type CardKpis = {
+  /** Open decisions, split by which of the two questions is unanswered. */
+  open: { total: number; neverAsked: number; waitingOnUs: number };
+  payableByCard: { total: number; withFee: number };
+  weDecline: { total: number; withReason: number };
+  /**
+   * The largest single exposure inside one named currency.
+   *
+   * The currency is chosen by how many providers carry it, never by size. Picking the
+   * biggest number on the page would compare currencies, which is the one thing this
+   * data cannot survive: BizAway's 281,000,000 IDR wins that comparison outright and
+   * means far less than a six-figure CAD balance. A count is not a comparison of value,
+   * so the card lands on the currency the market actually trades in and says which one
+   * it is — and a second currency, if it is ever wanted, gets its own card.
+   */
+  largestExposure: CardExposure | null;
+};
+
+/** The currency the most providers are owed in. Ties broken by name, for stability. */
+export function dominantCurrency(rows: CardRow[]): string | null {
+  const providersPerCurrency = new Map<string, number>();
+  for (const row of rows) {
+    for (const currency of new Set(row.provider.amounts.map((a) => a.currency))) {
+      providersPerCurrency.set(currency, (providersPerCurrency.get(currency) ?? 0) + 1);
+    }
+  }
+  let best: { currency: string; providers: number } | null = null;
+  for (const [currency, providers] of [...providersPerCurrency].sort((a, b) =>
+    a[0].localeCompare(b[0]),
+  )) {
+    if (best == null || providers > best.providers) best = { currency, providers };
+  }
+  return best?.currency ?? null;
+}
+
+export function cardKpis(rows: CardRow[]): CardKpis {
+  const open = rows.filter(needsDecision);
+  const payable = rows.filter((r) => accepts(r.verdict.status));
+  const decline = payable.filter((r) => r.terms.naboo_pays_card === "no");
+
+  const currency = dominantCurrency(rows);
+  let largest: CardExposure | null = null;
+  for (const row of rows) {
+    for (const a of row.provider.amounts) {
+      if (a.currency !== currency) continue;
+      if (largest == null || Math.abs(a.amount) > Math.abs(largest.amount)) {
+        largest = { currency: a.currency, amount: a.amount, provider: row.provider.provider_name };
+      }
+    }
+  }
+
+  return {
+    open: {
+      total: open.length,
+      neverAsked: open.filter((r) => r.verdict.status === "unknown").length,
+      waitingOnUs: open.filter((r) => accepts(r.verdict.status)).length,
+    },
+    payableByCard: {
+      total: payable.length,
+      withFee: payable.filter((r) => hasFee(r.terms)).length,
+    },
+    weDecline: {
+      total: decline.length,
+      withReason: decline.filter((r) => (r.terms.naboo_reason ?? "").trim().length > 0).length,
+    },
+    largestExposure: largest,
+  };
+}
+
+/** "4 never asked · 2 waiting on us" — the shape of the backlog, not just its size. */
+export function openDecisionsNote(open: CardKpis["open"]): string {
+  if (open.total === 0) return "nothing waiting on anyone";
+  const parts: string[] = [];
+  if (open.neverAsked > 0) parts.push(`${open.neverAsked} never asked`);
+  if (open.waitingOnUs > 0) parts.push(`${open.waitingOnUs} waiting on us`);
+  return parts.join(" · ");
+}
+
+/** How many of the accepting providers charge for it. */
+export function payableNote(payable: CardKpis["payableByCard"]): string {
+  if (payable.total === 0) return "none established yet";
+  if (payable.withFee === 0) return "none of them charge a fee";
+  return `${payable.withFee} of them charge a fee`;
+}
+
+/**
+ * Whether the declines are on the record.
+ *
+ * A written reason is mandatory on this divergence, so the honest reading of this note
+ * is a check that the rule held — it should say all of them, always.
+ */
+export function declineNote(decline: CardKpis["weDecline"]): string {
+  if (decline.total === 0) return "nothing declined that they would accept";
+  if (decline.withReason === decline.total) {
+    return decline.total === 2 ? "both with a written reason" : "all with a written reason";
+  }
+  return `${decline.withReason} of ${decline.total} with a written reason`;
+}
+
+/**
+ * The next move, in prose, for a row in the queue.
+ *
+ * Deliberately a sentence and not a status: the status says where the row is, this says
+ * what to do about it. Null for a settled row, which has no next move.
+ */
+export function nextMove(row: CardRow): string | null {
+  if (!needsDecision(row)) return null;
+  if (row.verdict.status === "unknown") {
+    return "Never asked — no Slack approval, nothing in the email scan.";
+  }
+  const pct = row.terms.fee_percent ?? 0;
+  if (pct > 0) {
+    const fee = Number(pct.toFixed(2)).toString();
+    return `They accept at ${fee}% — decide whether the fee is worth it or wire instead.`;
+  }
+  if (hasFee(row.terms)) return "Fee recorded, nobody has said yes or no on our side.";
+  return "They take card at no fee — nobody has said yes or no on our side.";
+}
+
+/** Where the status came from, in three or four words. */
+export function provenance(row: CardRow): string {
+  switch (row.verdict.source) {
+    case "slack":
+      return "Approved card in Slack";
+    case "email":
+      return "From the email scan";
+    case "manual":
+      return "Set by hand";
+    default:
+      return "Never asked";
+  }
+}
+
+/**
+ * The card question, as an email to the provider.
+ *
+ * Pure so the wording is reviewable without a mailbox. Sent through the same Gmail
+ * draft path the other trackers use, so it lands in the sender's own drafts for a read
+ * before it goes.
+ */
+export function cardOutreach(provider: Pick<CardProvider, "provider_name" | "bookings">): {
+  subject: string;
+  body: string;
+} {
+  return {
+    subject: `Card payment for your upcoming Naboo booking${
+      provider.bookings > 1 ? "s" : ""
+    } — ${provider.provider_name}`,
+    body: `Hi,
+
+Hope you're doing well! ☀️
+
+We are settling ${pluralise(provider.bookings, "booking")} with you and would like to pay by corporate credit card if that works on your side.
+
+Two questions:
+
+• Do you accept payment by credit card?
+• If you do, is there a card fee — a percentage, a flat amount, or both?
+
+If card is not an option we will arrange a bank transfer instead, so either answer is fine — we just need to know which.
+
+Thanks so much!`,
+  };
+}
+
 // ── Scopes ──────────────────────────────────────────────────────────────────
 
 export type CardScopeKey =
@@ -355,9 +550,8 @@ export const CARD_SCOPES: Array<{
     key: "needs_decision",
     label: "Needs a decision",
     hint: "Status unknown, or they accept and nobody has decided whether we pay by card",
-    match: (r) =>
-      r.verdict.status === "unknown" ||
-      (accepts(r.verdict.status) && r.terms.naboo_pays_card == null),
+    // The queue, the count and the KPI all read this through needsDecision above.
+    match: needsDecision,
   },
   {
     key: "card_ok",
@@ -487,6 +681,16 @@ export function fmtAmount(amount: number, currency?: string | null): string {
     maximumFractionDigits: 2,
   });
   return currency ? `${text} ${currency}` : text;
+}
+
+/**
+ * A headline figure: grouped, no cents.
+ *
+ * The KPI band is read at a glance and two decimal places on a six-figure balance are
+ * noise there. Every other amount on the page keeps its cents.
+ */
+export function fmtRound(amount: number): string {
+  return Math.round(amount).toLocaleString("en-US");
 }
 
 /** Every currency, listed. "—" when nothing is outstanding. */
