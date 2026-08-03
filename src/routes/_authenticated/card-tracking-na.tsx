@@ -237,6 +237,8 @@ function CardTrackingPage() {
       naboo_pays_card: row.terms.naboo_pays_card,
       naboo_reason: row.terms.naboo_reason,
       aliases: row.provider.aliases,
+      provider_name: row.provider.provider_name,
+      venue_types: row.provider.venue_types,
     });
   }
 
@@ -276,7 +278,7 @@ function CardTrackingPage() {
             </p>
           </div>
           <div className="flex items-center gap-2.5">
-            {/* Not in the design. Kept because the real set is 447 providers, not the
+            {/* Not in the design. Kept because the real set is 450 providers, not the
                 15 the prototype was drawn on, and there is otherwise no way to find
                 one of them. It narrows both zones. */}
             <Input
@@ -602,7 +604,9 @@ function StatusPill({ row }: { row: CardRow }) {
         ? "Explicit acceptance or refusal in the email scan"
         : row.verdict.source === "manual"
           ? `Set by hand${row.terms.updated_by ? ` by ${row.terms.updated_by}` : ""}`
-          : "Never asked — the honest default";
+          : row.verdict.source === "airline"
+            ? "An airline: they take card as a matter of course and do not surcharge a corporate booking. Assumed, not asked — set it by hand if this one is different."
+            : "Never asked — the honest default";
   return (
     <span
       title={detail}
@@ -1100,7 +1104,14 @@ function TermsEditor({
             variant="naboo"
             size="naboo"
             disabled={pending || problem != null}
-            onClick={() => onSave({ ...draft, aliases: provider.aliases })}
+            onClick={() =>
+              onSave({
+                ...draft,
+                aliases: provider.aliases,
+                provider_name: provider.provider_name,
+                venue_types: provider.venue_types,
+              })
+            }
           >
             <Check className="h-3.5 w-3.5" aria-hidden="true" />
             Save

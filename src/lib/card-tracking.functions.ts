@@ -43,7 +43,11 @@ SELECT
   MAX(CAST(e.start_date AS STRING)) AS start_date,
   -- Carried for display only. 435 of the 447 providers here are CREDIT_CARD, which
   -- is the method we intend to use — never evidence that the provider accepts one.
-  ANY_VALUE(rm.partner_payment_method) AS payment_method
+  ANY_VALUE(rm.partner_payment_method) AS payment_method,
+  -- HOTEL, ACTIVITY, TRANSPORT… The one classification this data carries, and half of
+  -- what identifies an airline: see isAirline in card-tracking.ts. Aggregated per
+  -- provider in TypeScript, because a provider can be booked under several.
+  ANY_VALUE(rm.venue_type) AS venue_type
 FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
 JOIN \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
   ON e.client_request_readable_id = rm.client_request_readable_id

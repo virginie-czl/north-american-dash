@@ -162,17 +162,27 @@ export const fetchCardEvidence = createServerFn({ method: "POST" })
   );
 
 export const saveCardTerms = createServerFn({ method: "POST" })
-  .validator((input: CardTermsInput & { aliases?: string[] }) => ({
-    owner_code: ownerCode(input?.owner_code),
-    accepts_card: yesNo(input?.accepts_card),
-    fee_percent: money(input?.fee_percent),
-    fee_fixed: money(input?.fee_fixed),
-    fee_currency: text(input?.fee_currency, 8)?.toUpperCase() ?? null,
-    refusal_reason: text(input?.refusal_reason),
-    naboo_pays_card: yesNo(input?.naboo_pays_card),
-    naboo_reason: text(input?.naboo_reason),
-    aliases: (input?.aliases ?? []).slice(0, 40).map((a) => String(a ?? "")),
-  }))
+  .validator(
+    (
+      input: CardTermsInput & {
+        aliases?: string[];
+        provider_name?: string;
+        venue_types?: string[];
+      },
+    ) => ({
+      owner_code: ownerCode(input?.owner_code),
+      accepts_card: yesNo(input?.accepts_card),
+      fee_percent: money(input?.fee_percent),
+      fee_fixed: money(input?.fee_fixed),
+      fee_currency: text(input?.fee_currency, 8)?.toUpperCase() ?? null,
+      refusal_reason: text(input?.refusal_reason),
+      naboo_pays_card: yesNo(input?.naboo_pays_card),
+      naboo_reason: text(input?.naboo_reason),
+      aliases: (input?.aliases ?? []).slice(0, 40).map((a) => String(a ?? "")),
+      provider_name: String(input?.provider_name ?? "").slice(0, 200),
+      venue_types: (input?.venue_types ?? []).slice(0, 20).map((v) => String(v ?? "")),
+    }),
+  )
   .handler(async ({ data }): Promise<CardTerms> => {
     const { requireTracker } = await import("./session.server");
     const session = await requireTracker("na-cards");
@@ -190,6 +200,11 @@ export const saveCardTerms = createServerFn({ method: "POST" })
     // the status and never to lower it: an alias whose facts say "refused" lands in
     // the same place as no evidence at all, so a wrong or missing alias can only ask
     // for a reason that was not needed — never waive one that was.
+    //
+    // The provider's name and classification arrive the same way and under the same
+    // rule. `isAirline` can only ever turn "unknown" into "Card OK", which is the
+    // direction that *demands* a written reason for a decline, so a client claiming to
+    // be an airline can only make this check stricter — never let a bare "no" through.
     const approvals = await sql<{ owner_code: string }[]>`
       SELECT owner_code FROM slack_card_approvals WHERE upper(owner_code) = ${data.owner_code}
     `;
@@ -205,10 +220,15 @@ export const saveCardTerms = createServerFn({ method: "POST" })
         emailAccepted = (hits[0]?.n ?? 0) > 0;
       }
     }
+    const { isAirline } = await import("./card-tracking");
     const status = cardStatus(
       {
         slackApproved: approvals.length > 0,
         emailVerdict: emailAccepted ? "accepted" : "unknown",
+        airline: isAirline({
+          provider_name: data.provider_name,
+          venue_types: data.venue_types.map((v) => v.trim().toUpperCase()),
+        }),
       },
       {
         ...emptyTerms(data.owner_code),

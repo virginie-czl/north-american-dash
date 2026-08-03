@@ -1,5 +1,6 @@
 import {
   aggregateProviders,
+  AIRLINE_CARRIERS,
   buildRows,
   cardKpis,
   cardOutreach,
@@ -16,6 +17,7 @@ import {
   fmtFee,
   fmtRound,
   hasFee,
+  isAirline,
   matchesSearch,
   nabooPays,
   needsDecision,
@@ -774,6 +776,155 @@ console.log("\n[nabooPays]");
   t("the export states the automatic yes", csvRows([free])[0][12] === "yes (automatic)");
   t("and a typed one plainly", csvRows([declined])[0][12] === "no");
   t("the reason travels with the decline", csvRows([declined])[0][13] === "Over the card limit");
+}
+
+// ── Airlines ────────────────────────────────────────────────────────────────
+// There is no field for "airline". The names and classifications below are the real
+// forty transport providers on accepted North American bookings, pulled from
+// vw_reconciliation_master — which is the only way to know that the rule separates
+// them, because half the carriers have no airline word in their name and the category
+// on its own contains Uber, Via Rail, a freight forwarder and Naboo's own entity.
+console.log("\n[isAirline]");
+{
+  const airline = (name, types = ["TRANSPORT"]) =>
+    isAirline({ provider_name: name, venue_types: types });
+
+  const CARRIERS = [
+    "Air Canada",
+    "Air Transat",
+    "American Airlines",
+    "Delta Air Lines",
+    "Delta Canada",
+    "IBERIA",
+    "JetBlue Airways",
+    "Norwegian Airlines",
+    "Porter Airlines",
+    "Ryanair DAC",
+    "Southwest Airline",
+    "United Airlines",
+    "WestJet",
+  ];
+  for (const name of CARRIERS) t(`airline: ${name}`, airline(name), "missed");
+
+  // The other twenty-seven transport providers. Every one of these would have been
+  // handed an automatic yes by a rule that read the category alone.
+  const NOT_CARRIERS = [
+    "Bauer's Intelligent Transportation",
+    "BizAway",
+    "Blacklane",
+    "Booking.com Canada",
+    "Bus Bank",
+    "Catch Transportation",
+    "Charter Up",
+    "Dulles Executive Sedan",
+    "Execucar",
+    "Geodis FF Canada Ltd.",
+    "H24 connect",
+    "Happy Shuttle Cancun",
+    "HireGo",
+    "Integrity Transportation",
+    "Jacquet Autocars",
+    "LOULOUBUS",
+    "Minicabride",
+    "NABOO GROUP",
+    "Napa Shuttles & Limousines",
+    "Novilmor SL",
+    "Odyssee Transport",
+    "Red Oak Transportation",
+    "The Coach Company",
+    "Top Limousine Service",
+    "Tour Rider",
+    "Uber Mexico",
+    "Via Rail Canada",
+  ];
+  for (const name of NOT_CARRIERS) t(`not an airline: ${name}`, !airline(name), "false positive");
+
+  // The category is half the rule, and the half that keeps the name test safe.
+  t(
+    "a hotel is never an airline, whatever it is called",
+    !airline("Airways Inn & Suites", ["HOTEL"]),
+  );
+  t("nor a restaurant", !airline("The Air Lounge", ["RESTAURANT"]));
+  t("nor a provider with no classification at all", !airline("Air Canada", []));
+  // Delta Hotels exists and is classified as a hotel; the bare carrier name is only
+  // ever read inside transport.
+  t(
+    "a bare carrier name outside transport is ignored",
+    !airline("Delta Hotels by Marriott", ["HOTEL"]),
+  );
+  t(
+    "but counts when the provider is booked as transport too",
+    airline("Delta Canada", ["HOTEL", "TRANSPORT"]),
+  );
+  t("an unnamed provider is not guessed at", !airline(""));
+  t(
+    "the carrier list is lower case, as the test expects",
+    AIRLINE_CARRIERS.every((c) => c === c.toLowerCase()),
+  );
+}
+
+console.log("\n[an airline needs no chasing]");
+{
+  const provider = (name, types) =>
+    aggregateProviders([row({ provider_name: name, venue_type: types })]);
+  const build = (name, type, tt = {}) =>
+    buildRows(provider(name, type), new Map([["O-A001", terms(tt)]]), new Map())[0];
+
+  const air = build("Air Canada", "TRANSPORT");
+  t("an airline reads as Card OK with no evidence at all", air.verdict.status === "card_ok");
+  t("credited to the category, not to an approval", air.verdict.source === "airline");
+  t("and never flagged as somebody's override", air.verdict.overridden === false);
+  t("the provenance line says why", provenance(air) === "Airlines take card");
+  // The whole point of the request: no fee, so our own answer follows automatically.
+  t("Naboo pays by card, automatically", rowNabooPays(air).value === "yes");
+  t("said to be automatic", rowNabooPays(air).source === "automatic");
+  t("so it never enters the queue", !needsDecision(air));
+
+  const coach = build("The Coach Company", "TRANSPORT");
+  t("a coach company is still unknown", coach.verdict.status === "unknown");
+  t("and still needs asking", needsDecision(coach));
+
+  // Anything actually known about the airline outranks the assumption.
+  const refused = buildRows(
+    provider("Air Canada", "TRANSPORT"),
+    new Map(),
+    new Map([["O-A001", ev({ emailVerdict: "refused" })]]),
+  )[0];
+  t("an airline that refused in writing is a refuser", refused.verdict.status === "refuses");
+  t("credited to the scan", refused.verdict.source === "email");
+
+  const approved = buildRows(
+    provider("Air Canada", "TRANSPORT"),
+    new Map(),
+    new Map([["O-A001", ev({ slackApproved: true })]]),
+  )[0];
+  t(
+    "a real approval is credited to Slack, not to the category",
+    approved.verdict.source === "slack",
+  );
+
+  const byHand = build("Air Canada", "TRANSPORT", {
+    accepts_card: "no",
+    refusal_reason: "Group fares by invoice only",
+  });
+  t("a human can override the assumption", byHand.verdict.status === "refuses");
+  t("and it reads as an override", byHand.verdict.overridden === true);
+
+  // A surcharging airline: recording a fee withdraws the automatic yes, exactly as it
+  // does for every other provider.
+  const withFee = build("Air Canada", "TRANSPORT", { fee_percent: 2 });
+  t("a fee promotes the status", withFee.verdict.status === "card_ok_if_fee");
+  t("and hands the decision back to a human", needsDecision(withFee));
+
+  // A decline on an airline still owes a reason, and the rule is reached through the
+  // derived status rather than a stored one.
+  t(
+    "declining an airline demands a written reason",
+    validateCardTerms(
+      { ...terms(), accepts_card: null, naboo_pays_card: "no", naboo_reason: null },
+      air.verdict.status,
+    ) != null,
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

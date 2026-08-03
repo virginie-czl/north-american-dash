@@ -91,6 +91,16 @@ export type CardEvidence = {
   approvalCount?: number;
   /** ISO day. */
   lastApprovedAt?: string | null;
+  /**
+   * The provider is an airline.
+   *
+   * Not evidence about this provider at all — a category, from which acceptance is
+   * inferred. Airlines take card as a matter of course and do not surcharge a corporate
+   * booking, so asking Air Canada whether they accept Visa is a question nobody should
+   * spend a morning on. It ranks below every real signal (see `cardStatus`), so an
+   * approval or a refusal about *this* airline still decides the row.
+   */
+  airline?: boolean;
 };
 
 export const NO_EVIDENCE: CardEvidence = { slackApproved: false, emailVerdict: "unknown" };
@@ -105,7 +115,7 @@ export const CARD_STATUS_LABEL: Record<CardStatus, string> = {
 };
 
 /** Where the status came from, so an override is never mistaken for evidence. */
-export type CardStatusSource = "manual" | "slack" | "email" | "none";
+export type CardStatusSource = "manual" | "slack" | "email" | "airline" | "none";
 
 export type CardVerdict = {
   status: CardStatus;
@@ -151,6 +161,10 @@ export function cardStatus(evidence: CardEvidence, terms: CardTerms | null): Car
   }
   if (evidence.emailVerdict === "refused") {
     return { status: "refuses", source: "email", overridden: false };
+  }
+  // Last, so anything actually known about this provider outranks the category.
+  if (evidence.airline) {
+    return { status: withFee("card_ok"), source: "airline", overridden: false };
   }
   // The honest default. Most providers have never been asked.
   return { status: "unknown", source: "none", overridden: false };
@@ -200,6 +214,8 @@ export type CardQuoteRow = {
   start_date: string | null;
   /** Carried for display only — never read as acceptance. */
   payment_method: string | null;
+  /** HOTEL, ACTIVITY, TRANSPORT, RESTAURANT… as classified on the quote. */
+  venue_type: string | null;
 };
 
 export type CardAmount = { currency: string; amount: number };
@@ -223,6 +239,8 @@ export type CardProvider = {
    */
   amounts: CardAmount[];
   payment_methods: string[];
+  /** Every venue type this provider has been booked under. */
+  venue_types: string[];
 };
 
 function round2(n: number): number {
@@ -243,6 +261,7 @@ export function aggregateProviders(rows: CardQuoteRow[]): CardProvider[] {
       refs: Set<string>;
       aliases: Set<string>;
       methods: Set<string>;
+      types: Set<string>;
       quotes: Set<string>;
     }
   >();
@@ -264,11 +283,13 @@ export function aggregateProviders(rows: CardQuoteRow[]): CardProvider[] {
           latest_start: null,
           amounts: [],
           payment_methods: [],
+          venue_types: [],
         },
         amounts: new Map(),
         refs: new Set(),
         aliases: new Set(),
         methods: new Set(),
+        types: new Set(),
         quotes: new Set(),
       };
       byOwner.set(code, entry);
@@ -286,6 +307,7 @@ export function aggregateProviders(rows: CardQuoteRow[]): CardProvider[] {
     if (!entry.p.email && r.email) entry.p.email = r.email.trim() || null;
     if (r.event_ref) entry.refs.add(r.event_ref);
     if (r.payment_method) entry.methods.add(r.payment_method);
+    if (r.venue_type) entry.types.add(r.venue_type.trim().toUpperCase());
     if (r.start_date && (entry.p.latest_start == null || r.start_date > entry.p.latest_start)) {
       entry.p.latest_start = r.start_date;
     }
@@ -309,6 +331,7 @@ export function aggregateProviders(rows: CardQuoteRow[]): CardProvider[] {
     p.event_refs = [...entry.refs].sort();
     p.aliases = [...entry.aliases].sort();
     p.payment_methods = [...entry.methods].sort();
+    p.venue_types = [...entry.types].sort();
     p.amounts = [...entry.amounts]
       .map(([currency, amount]) => ({ currency, amount: round2(amount) }))
       // Zero is not an exposure; dropping it keeps "amount at stake" readable.
@@ -319,6 +342,62 @@ export function aggregateProviders(rows: CardQuoteRow[]): CardProvider[] {
     out.push(p);
   }
   return out.sort((a, b) => a.provider_name.localeCompare(b.provider_name));
+}
+
+// ── Airlines ────────────────────────────────────────────────────────────────
+
+/**
+ * Carriers whose name carries no airline word at all.
+ *
+ * Half the ones we book do not: WestJet, IBERIA, Ryanair, Air Transat's "Transat", and
+ * Delta's Canadian entity, which is recorded simply as "Delta Canada". A pattern alone
+ * would have quietly missed four of the thirteen airlines in this data, and a missed
+ * airline is a row somebody chases for no reason. Kept as a plain list because that is
+ * what it is — extend it when a new carrier turns up.
+ *
+ * "delta" leans on the TRANSPORT scope below: Delta Hotels is a Marriott brand and is
+ * classified as a hotel, so it can never reach this list.
+ */
+export const AIRLINE_CARRIERS = [
+  "westjet",
+  "iberia",
+  "ryanair",
+  "transat",
+  "delta",
+  "jetblue",
+  "aeromexico",
+  "lufthansa",
+  "klm",
+  "easyjet",
+  "porter airlines",
+];
+
+/** "Airlines", "Airways", or "Air" as a word — Air Canada, Delta Air Lines. */
+const AIRLINE_WORDS = /\bair\s?lines?\b|\bairways\b|\bair\b/;
+
+/**
+ * Is this provider an airline?
+ *
+ * There is no field for it. `venue_type` is the closest the data comes, and TRANSPORT
+ * is far wider than airlines: of the forty transport providers on accepted North
+ * American bookings, twenty-seven are coaches, limousines, shuttles, Uber, Via Rail, a
+ * freight forwarder, a travel agency — and NABOO GROUP's own entity. Treating the
+ * category as a proxy would have assumed card acceptance for all of them, including
+ * ourselves.
+ *
+ * So it is the two together: classified as transport **and** named like a carrier. The
+ * scope is what makes the name test safe — measured across all 450 providers, every
+ * airline-sounding name in this data is a transport provider, so no hotel or restaurant
+ * can match, and it is what lets a bare "delta" be an airline here and nowhere else.
+ *
+ * A wrong yes is correctable by hand — the manual override outranks this — and shows in
+ * the ledger as an assumption rather than as somebody's decision.
+ */
+export function isAirline(provider: Pick<CardProvider, "provider_name" | "venue_types">): boolean {
+  if (!provider.venue_types.includes("TRANSPORT")) return false;
+  const name = (provider.provider_name ?? "").toLowerCase();
+  if (!name) return false;
+  return AIRLINE_WORDS.test(name) || AIRLINE_CARRIERS.some((carrier) => name.includes(carrier));
 }
 
 // ── The row as the page sees it ─────────────────────────────────────────────
@@ -337,7 +416,12 @@ export function buildRows(
 ): CardRow[] {
   return providers.map((provider) => {
     const terms = termsByOwner.get(provider.owner_code) ?? emptyTerms(provider.owner_code);
-    const evidence = evidenceByOwner.get(provider.owner_code) ?? NO_EVIDENCE;
+    // The airline flag belongs to the provider, not to the evidence lookup, so it is
+    // folded in here rather than travelling over the wire from the server.
+    const evidence: CardEvidence = {
+      ...(evidenceByOwner.get(provider.owner_code) ?? NO_EVIDENCE),
+      airline: isAirline(provider),
+    };
     return { provider, terms, verdict: cardStatus(evidence, terms), evidence };
   });
 }
@@ -539,6 +623,8 @@ export function provenance(row: CardRow): string {
       return "From the email scan";
     case "manual":
       return "Set by hand";
+    case "airline":
+      return "Airlines take card";
     default:
       return "Never asked";
   }
