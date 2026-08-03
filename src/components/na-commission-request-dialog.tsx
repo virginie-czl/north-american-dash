@@ -16,6 +16,12 @@ export type NaCommissionTarget = {
   partnerName: string | null;
   address: string;
   contactName: string | null;
+  /**
+   * The event manager, copied in. Same derivation as the address a client statement
+   * tells the reader to write to, so the person who owns the booking sees the chase
+   * and is on the thread when the counterparty replies.
+   */
+  cc?: string | null;
   subject: string;
   body: string;
   mode: "commission" | "refund" | "combined" | "client";
@@ -66,6 +72,7 @@ export function NaCommissionRequestDialog({
         k,
         edits[k] ?? {
           to: t.address,
+          ...(t.cc ? { cc: t.cc } : {}),
           subject: t.subject,
           body: t.body,
           // Travels with the message so the server can claim the ask in the ledger
@@ -162,7 +169,10 @@ export function NaCommissionRequestDialog({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13px] font-semibold">{t.partnerName ?? "—"}</span>
-                    <span className="block truncate text-[11.5px] text-slate-500">{t.address}</span>
+                    <span className="block truncate text-[11.5px] text-slate-500">
+                      {t.address}
+                      {t.cc && <span className="text-slate-400"> · cc {t.cc}</span>}
+                    </span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-2">
                       <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-[1px] text-[10px] font-medium text-slate-600">
                         {t.eventRef}
@@ -239,6 +249,12 @@ export function NaCommissionRequestDialog({
                   <div className="space-y-2 border-t border-border bg-slate-50 px-5 py-3">
                     <div className="text-[11px] text-slate-500">
                       <span className="font-medium">To:</span> {t.address}
+                      {message.cc && (
+                        <>
+                          {" · "}
+                          <span className="font-medium">Cc:</span> {message.cc}
+                        </>
+                      )}
                     </div>
                     <input
                       value={message.subject}

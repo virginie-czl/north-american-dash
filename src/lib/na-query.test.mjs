@@ -232,5 +232,56 @@ console.log("\n[the two partner branches and their empty array agree]");
   t("commission_doc_count is in all three", rmFields.includes("commission_doc_count"));
 }
 
+// ── A booking is as many jobs as it owes ────────────────────────────────────
+// Marketplace NA used to pick one move per booking by precedence, so a booking with a
+// provider to pay *and* a commission to claw back showed only the claim: the payment
+// vanished from "Ours to move" and the only way to find it was to open the booking.
+// The three sides are collected independently now.
+console.log("\n[the move list]");
+{
+  const page = readFileSync(
+    new URL("../routes/_authenticated/tracking-north-america.tsx", import.meta.url),
+    "utf8",
+  );
+  t("the derivation returns a list", /const movesFor = useCallback\(/.test(page));
+  t("and its type says so", /recovery: NaClientRecovery\): Move\[\]/.test(page));
+  t(
+    "the three sides are collected, not raced",
+    /\[claimMove\(\), payMove\(\), clientMove\(\)\]\.filter/.test(page),
+  );
+  // The claim and the payment are the pair that used to hide each other.
+  t("the claim is its own collector", /const claimMove = \(\): Move \| null =>/.test(page));
+  t("the payment is its own collector", /const payMove = \(\): Move \| null =>/.test(page));
+  t("the client side is one question", /const clientMove = \(\): Move \| null =>/.test(page));
+  // Two collectors can reach the same pill; one job should be one line.
+  t("duplicate pills are collapsed", /`\$\{m\.group\}::\$\{m\.label\}`/.test(page));
+
+  // Every chip asks the whole list, so a booking counts in each category it belongs to
+  // rather than only in the one its winner happened to name.
+  t("needs-a-move asks every move", /moves\.some\(\(m\) => needsAMove\(m\.group\)\)/.test(page));
+  t(
+    "so does the commission chip",
+    /moves\.some\(\(m\) => m\.headlineLabel\.includes\("commission"\)\)/.test(page),
+  );
+  t(
+    "and the refund chip",
+    /moves\.some\(\(m\) => m\.headlineLabel\.includes\("refund to recover"\)\)/.test(page),
+  );
+  t(
+    "and the client-refund chip",
+    /moves\.some\(\(m\) => m\.headlineLabel\.includes\("client to refund"\)\)/.test(page),
+  );
+
+  // The list groups by move, so one booking can appear under two headings.
+  t("the grouping walks the moves", /for \(const move of item\.moves\) \{/.test(page));
+  t(
+    "a booking can be listed twice in one group",
+    /key=\{`\$\{ref\}::\$\{move\.label\}`\}/.test(page),
+  );
+  // The no-cash payment and a client balance both speak for the client; the labels
+  // have to differ or the dedupe above would drop one of them.
+  t("the two client labels are distinct", /label: "Client to pay first"/.test(page));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

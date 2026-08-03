@@ -93,6 +93,7 @@ import {
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { syncCardApprovals } from "@/lib/slack-cards.functions";
 import { parseNaInvoices, parseNaClientReceipts } from "@/lib/na.functions";
+import { emContact } from "@/lib/em-email";
 import {
   GROUP_META,
   GROUP_ORDER,
@@ -797,6 +798,19 @@ function NaPage() {
     return plans;
   }, [sorted]);
 
+  /**
+   * The event manager's mailbox, for the copy on a recovery ask.
+   *
+   * Same derivation as the address a client statement tells the reader to write to
+   * (emContact), with one difference: when the name cannot be turned into a mailbox
+   * that function falls back to finance@, and finance is already the one sending these
+   * — so no copy is added rather than one nobody reads.
+   */
+  const ccFor = useCallback((r: NaRow): string | null => {
+    const contact = emContact(r.em_referent);
+    return contact.derived ? contact.email : null;
+  }, []);
+
   const composePlan = useCallback(
     (plan: RecoveryPlan, detail: NaCommissionDetail | null): NaCommissionTarget | null => {
       const composed =
@@ -811,11 +825,12 @@ function NaPage() {
         partnerName: plan.partner.name,
         address: plan.contact.address,
         contactName: plan.contact.name,
+        cc: ccFor(plan.row),
         ...composed,
         mode: plan.mode,
       };
     },
-    [],
+    [ccFor],
   );
 
   // Without the detail: enough to count the asks, show the buttons and check the
@@ -887,12 +902,13 @@ function NaPage() {
         partnerName: r.company_name,
         address: contact.address,
         contactName: contact.name,
+        cc: ccFor(r),
         ...composed,
         mode: "client",
       });
     }
     return targets;
-  }, [sorted]);
+  }, [sorted, ccFor]);
 
   const clientRecoveryCount = useMemo(
     () => sorted.filter(({ recovery }) => recovery.eligible).length,
@@ -964,198 +980,240 @@ function NaPage() {
   // Presentation only. Amounts, tags, email actions and the commission/refund
   // dialogs all come from the same hooks and helpers as the previous layout.
 
-  // One move per booking, derived from the same helpers the partner cards use so
-  // the pills, the scope counts and the dialog agree.
-  const moveFor = useCallback(
-    (r: NaRow, ps: ReturnType<typeof parseNaPartners>, recovery: NaClientRecovery): Move => {
+  /**
+   * Every move a booking is waiting on, not just the most urgent one.
+   *
+   * A booking is routinely two jobs at once: one provider to pay and another to claw a
+   * commission back from. Returning a single winner hid the loser completely — the
+   * payment vanished from "Ours to move" because the claim outranked it, and the only
+   * way to find it was to open the booking and read the partner cards. So the three
+   * sides are collected independently and the booking appears under each group it owes
+   * something to, with its own figure on each line.
+   *
+   * The partner claim and the partner payment are genuinely independent; the client
+   * side is one question with several answers, so it yields at most one move. Derived
+   * from the same helpers the partner cards use, so the pills, the chip counts and the
+   * dialog still agree.
+   */
+  const movesFor = useCallback(
+    (r: NaRow, ps: ReturnType<typeof parseNaPartners>, recovery: NaClientRecovery): Move[] => {
       const ccy = ps.find((p) => p.currency)?.currency ?? r.currency_client;
       const fmt = (v: number) => `${fmtAmount(v)} ${ccyLabel(ccy)}`;
       const live = ps.filter((p) => !p.is_provision);
 
       if (live.length === 0) {
-        return {
-          group: "blocked",
-          label: "No partner line",
-          headline: "—",
-          headlineLabel: "nothing priced",
-        };
+        return [
+          {
+            group: "blocked",
+            label: "No partner line",
+            headline: "—",
+            headlineLabel: "nothing priced",
+          },
+        ];
       }
 
       // Commission and refund are two different claims: one is revenue we never
       // collected, the other is cash we paid out by mistake. They go out as
       // different emails to different counterparties, so they are never merged
       // into a single "to recover" figure.
-      const claw = rowClawbackSplit(ps);
-      const commissionDue = [...claw.commission.values()].reduce((a, b) => a + b, 0);
-      const refundDue = [...claw.refund.values()].reduce((a, b) => a + b, 0);
-      if (commissionDue > 0.01 || refundDue > 0.01) {
-        const both = commissionDue > 0.01 && refundDue > 0.01;
-        // Chasing a commission or a refund before the dust settles is premature:
-        // amounts still move in the fortnight after an event.
-        const age = daysSinceEvent(r);
-        if (age != null && age < 14) {
-          return {
-            group: "waiting",
-            label: "Nothing to do yet — pending",
-            headline: both
-              ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
-              : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
-            headlineLabel: `pending ${14 - age}d ${ccyLabel(ccy)}`,
-          };
-        }
-        const headline = both
-          ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
-          : fmt(commissionDue > 0.01 ? commissionDue : refundDue);
-        const headlineLabel = both
-          ? `commission + refund ${ccyLabel(ccy)}`
-          : commissionDue > 0.01
-            ? `commission to recover ${ccyLabel(ccy)}`
-            : `refund to recover ${ccyLabel(ccy)}`;
-        // The email has gone out to everyone it was owed to, so the next move is
-        // theirs: the money comes back or it does not. Leaving it under "Ours to move"
-        // read as an email nobody had sent, which is how the same provider got chased
-        // twice. The figure and its caption do not change, so the Commission and Refund
-        // chips still count this booking.
-        const chase = partnerChase.get(r.readable_id ?? "");
-        if (fullyChased(chase)) {
-          return { group: "partner", label: chasedLabel(chase!), headline, headlineLabel };
-        }
-        return {
-          group: "ours",
-          label: both
-            ? `Recover ${fmt(commissionDue)} commission + ${fmt(refundDue)} refund`
+      const claimMove = (): Move | null => {
+        const claw = rowClawbackSplit(ps);
+        const commissionDue = [...claw.commission.values()].reduce((a, b) => a + b, 0);
+        const refundDue = [...claw.refund.values()].reduce((a, b) => a + b, 0);
+        if (commissionDue > 0.01 || refundDue > 0.01) {
+          const both = commissionDue > 0.01 && refundDue > 0.01;
+          // Chasing a commission or a refund before the dust settles is premature:
+          // amounts still move in the fortnight after an event.
+          const age = daysSinceEvent(r);
+          if (age != null && age < 14) {
+            return {
+              group: "waiting",
+              label: "Nothing to do yet — pending",
+              headline: both
+                ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
+                : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
+              headlineLabel: `pending ${14 - age}d ${ccyLabel(ccy)}`,
+            };
+          }
+          const headline = both
+            ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
+            : fmt(commissionDue > 0.01 ? commissionDue : refundDue);
+          const headlineLabel = both
+            ? `commission + refund ${ccyLabel(ccy)}`
             : commissionDue > 0.01
-              ? `Recover ${fmt(commissionDue)} commission`
-              : `Recover ${fmt(refundDue)} refund`,
-          headline,
-          headlineLabel,
-        };
-      }
-
-      const toPay = rowPartnerToPay(r, ps);
-      const payTotal = [...toPay.values()].reduce((a, b) => a + b, 0);
-      if (payTotal > 0.01) {
-        // Whose move it is depends on whether we can actually pay yet.
-        const actions = live.map((p) =>
-          actionFor(
-            r.readable_id ?? "",
-            {
-              name: p.name,
-              email: p.email,
-              amount_due: p.outstanding,
-              vat_raw: null,
-              tax_identifier: null,
-              country: null,
-              cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
-            },
-            true,
-            { taxTracked: false },
-          ),
-        );
-        // Having the means is not enough: the booking must actually hold enough
-        // client cash to settle at least one provider, otherwise the next move is
-        // the client's.
-        const cash = availableCash(r, live);
-        const coversSomeone = live.some(
-          (p) => (p.outstanding ?? 0) > 0.01 && cash + 0.01 >= (p.outstanding ?? 0),
-        );
-        const canPay = actions.some((a) => a.code === "ours_pay") && coversSomeone;
-        const waiting = actions.some((a) => a.code === "await_reply");
-        if (canPay) {
+              ? `commission to recover ${ccyLabel(ccy)}`
+              : `refund to recover ${ccyLabel(ccy)}`;
+          // The email has gone out to everyone it was owed to, so the next move is
+          // theirs: the money comes back or it does not. Leaving it under "Ours to move"
+          // read as an email nobody had sent, which is how the same provider got chased
+          // twice. The figure and its caption do not change, so the Commission and Refund
+          // chips still count this booking.
+          const chase = partnerChase.get(r.readable_id ?? "");
+          if (fullyChased(chase)) {
+            return { group: "partner", label: chasedLabel(chase!), headline, headlineLabel };
+          }
           return {
             group: "ours",
-            label: "Pay the partner",
-            headline: fmt(payTotal),
-            headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            label: both
+              ? `Recover ${fmt(commissionDue)} commission + ${fmt(refundDue)} refund`
+              : commissionDue > 0.01
+                ? `Recover ${fmt(commissionDue)} commission`
+                : `Recover ${fmt(refundDue)} refund`,
+            headline,
+            headlineLabel,
           };
         }
-        if (waiting) {
+        return null;
+      };
+
+      const payMove = (): Move | null => {
+        const toPay = rowPartnerToPay(r, ps);
+        const payTotal = [...toPay.values()].reduce((a, b) => a + b, 0);
+        if (payTotal > 0.01) {
+          // Whose move it is depends on whether we can actually pay yet.
+          const actions = live.map((p) =>
+            actionFor(
+              r.readable_id ?? "",
+              {
+                name: p.name,
+                email: p.email,
+                amount_due: p.outstanding,
+                vat_raw: null,
+                tax_identifier: null,
+                country: null,
+                cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
+              },
+              true,
+              { taxTracked: false },
+            ),
+          );
+          // Having the means is not enough: the booking must actually hold enough
+          // client cash to settle at least one provider, otherwise the next move is
+          // the client's.
+          const cash = availableCash(r, live);
+          const coversSomeone = live.some(
+            (p) => (p.outstanding ?? 0) > 0.01 && cash + 0.01 >= (p.outstanding ?? 0),
+          );
+          const canPay = actions.some((a) => a.code === "ours_pay") && coversSomeone;
+          const waiting = actions.some((a) => a.code === "await_reply");
+          if (canPay) {
+            return {
+              group: "ours",
+              label: "Pay the partner",
+              headline: fmt(payTotal),
+              headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            };
+          }
+          if (waiting) {
+            return {
+              group: "waiting",
+              label: "Waiting on a reply",
+              headline: fmt(payTotal),
+              headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            };
+          }
+          // We hold the means but not the cash: nothing moves until the client pays,
+          // so this is their move even though a provider is owed.
+          if (!coversSomeone) {
+            // Named "first" so it reads distinctly from the client branch's own
+            // "Client to pay": this line carries what the *provider* is owed, and the
+            // other carries what the client owes, and a booking can now show both.
+            return {
+              group: "client",
+              label: "Client to pay first",
+              headline: fmt(payTotal),
+              headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            };
+          }
           return {
-            group: "waiting",
-            label: "Waiting on a reply",
+            group: "partner",
+            label: "Ask for details",
             headline: fmt(payTotal),
             headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
           };
         }
-        // We hold the means but not the cash: nothing moves until the client pays,
-        // so this is their move even though a provider is owed.
-        if (!coversSomeone) {
-          return {
-            group: "client",
-            label: "Client to pay",
-            headline: fmt(payTotal),
-            headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
-          };
-        }
-        return {
-          group: "partner",
-          label: "Ask for details",
-          headline: fmt(payTotal),
-          headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
-        };
-      }
+        return null;
+      };
 
       // A client balance that has aged past both grace periods is a recovery we
       // act on, not a wait: the email exists, the figures are settled, someone
       // has to send it. Before that it is just an invoice out in the world.
-      if (recovery.eligible) {
-        const rc = recovery.currency;
-        return {
-          group: "client",
-          label: `Recover ${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)} from the client`,
-          headline: `${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)}`,
-          headlineLabel: `client to recover ${ccyLabel(rc)}`,
-        };
-      }
-
-      if ((r.balance_ccy ?? 0) > 0.01) {
-        // Named as pending while the dust settles, so the list never reads as a
-        // chase that nobody is sending.
-        const waitLeft =
-          recovery.outstanding > 0.01 && recovery.daysSinceEvent != null
-            ? Math.max(
-                RECOVERY_GRACE_DAYS - recovery.daysSinceEvent,
-                recovery.daysSinceInvoice != null
-                  ? RECOVERY_GRACE_DAYS - recovery.daysSinceInvoice
-                  : 0,
-              )
-            : 0;
-        return {
-          group: "client",
-          label: waitLeft > 0 ? `Client to pay — chase in ${waitLeft}d` : "Client to pay",
-          headline: `${fmtAmount(r.balance_ccy)} ${ccyLabel(r.currency_client)}`,
-          headlineLabel: `client outstanding ${ccyLabel(r.currency_client)}`,
-        };
-      }
-
-      // A negative balance means the client paid more than we invoiced: we owe
-      // them the difference. Same fortnight of grace as the partner recoveries —
-      // a late invoice often closes the gap on its own.
-      const clientCredit = -(r.balance_ccy ?? 0);
-      if (clientCredit > 0.01) {
-        const age = daysSinceEvent(r);
-        if (age != null && age < 14) {
+      const clientMove = (): Move | null => {
+        if (recovery.eligible) {
+          const rc = recovery.currency;
           return {
-            group: "waiting",
-            label: "Nothing to do yet — pending",
-            headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
-            headlineLabel: `pending ${14 - age}d ${ccyLabel(r.currency_client)}`,
+            group: "client",
+            label: `Recover ${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)} from the client`,
+            headline: `${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)}`,
+            headlineLabel: `client to recover ${ccyLabel(rc)}`,
           };
         }
-        return {
-          group: "ours",
-          label: `Refund the client ${fmtAmount(clientCredit)}`,
-          headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
-          headlineLabel: `client to refund ${ccyLabel(r.currency_client)}`,
-        };
-      }
 
-      return {
-        group: "done",
-        label: "Nothing to do",
-        headline: fmt(0),
-        headlineLabel: `settled ${ccyLabel(ccy)}`,
+        if ((r.balance_ccy ?? 0) > 0.01) {
+          // Named as pending while the dust settles, so the list never reads as a
+          // chase that nobody is sending.
+          const waitLeft =
+            recovery.outstanding > 0.01 && recovery.daysSinceEvent != null
+              ? Math.max(
+                  RECOVERY_GRACE_DAYS - recovery.daysSinceEvent,
+                  recovery.daysSinceInvoice != null
+                    ? RECOVERY_GRACE_DAYS - recovery.daysSinceInvoice
+                    : 0,
+                )
+              : 0;
+          return {
+            group: "client",
+            label: waitLeft > 0 ? `Client to pay — chase in ${waitLeft}d` : "Client to pay",
+            headline: `${fmtAmount(r.balance_ccy)} ${ccyLabel(r.currency_client)}`,
+            headlineLabel: `client outstanding ${ccyLabel(r.currency_client)}`,
+          };
+        }
+
+        // A negative balance means the client paid more than we invoiced: we owe
+        // them the difference. Same fortnight of grace as the partner recoveries —
+        // a late invoice often closes the gap on its own.
+        const clientCredit = -(r.balance_ccy ?? 0);
+        if (clientCredit > 0.01) {
+          const age = daysSinceEvent(r);
+          if (age != null && age < 14) {
+            return {
+              group: "waiting",
+              label: "Nothing to do yet — pending",
+              headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
+              headlineLabel: `pending ${14 - age}d ${ccyLabel(r.currency_client)}`,
+            };
+          }
+          return {
+            group: "ours",
+            label: `Refund the client ${fmtAmount(clientCredit)}`,
+            headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
+            headlineLabel: `client to refund ${ccyLabel(r.currency_client)}`,
+          };
+        }
+
+        return null;
       };
+
+      const moves = [claimMove(), payMove(), clientMove()].filter((m): m is Move => m != null);
+      // Two collectors can land on the same pill — the no-cash payment and a client
+      // balance both speak for the client. One job, one line.
+      const seen = new Set<string>();
+      const distinct = moves.filter((m) => {
+        const key = `${m.group}::${m.label}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (distinct.length > 0) return distinct;
+
+      return [
+        {
+          group: "done",
+          label: "Nothing to do",
+          headline: fmt(0),
+          headlineLabel: `settled ${ccyLabel(ccy)}`,
+        },
+      ];
     },
     [actionFor, partnerChase],
   );
@@ -1164,19 +1222,19 @@ function NaPage() {
     () =>
       filtered.map((item) => ({
         ...item,
-        move: moveFor(item.row, item.partners, item.recovery),
+        moves: movesFor(item.row, item.partners, item.recovery),
       })),
-    [filtered, moveFor],
+    [filtered, movesFor],
   );
 
   // One predicate per scope, shared by the filter and the chip counts below so a
   // chip can never claim a number the list does not show.
   const SCOPE_TEST: Record<typeof scope, (x: (typeof withMove)[number]) => boolean> = useMemo(
     () => ({
-      move: (x) => needsAMove(x.move.group),
-      commission: (x) => x.move.headlineLabel.includes("commission"),
-      refund: (x) => x.move.headlineLabel.includes("refund to recover"),
-      client_refund: (x) => x.move.headlineLabel.includes("client to refund"),
+      move: (x) => x.moves.some((m) => needsAMove(m.group)),
+      commission: (x) => x.moves.some((m) => m.headlineLabel.includes("commission")),
+      refund: (x) => x.moves.some((m) => m.headlineLabel.includes("refund to recover")),
+      client_refund: (x) => x.moves.some((m) => m.headlineLabel.includes("client to refund")),
       // Keyed off the recovery itself, not the move label: a booking can owe us a
       // client balance *and* carry a partner claim, and only one of those can be
       // the headline. The chip has to agree with the Client recovery button.
@@ -1201,11 +1259,17 @@ function NaPage() {
   );
 
   const groups = useMemo(() => {
-    const byGroup = new Map<MoveGroup, typeof scoped>();
+    // One entry per booking *and move*: the booking with a payment and a claim is a
+    // line under "Ours to move" for the payment and another for the claim, each with
+    // its own figure. Anything else hides half the work.
+    type Line = (typeof scoped)[number] & { move: Move };
+    const byGroup = new Map<MoveGroup, Line[]>();
     for (const item of scoped) {
-      const list = byGroup.get(item.move.group) ?? [];
-      list.push(item);
-      byGroup.set(item.move.group, list);
+      for (const move of item.moves) {
+        const list = byGroup.get(move.group) ?? [];
+        list.push({ ...item, move });
+        byGroup.set(move.group, list);
+      }
     }
     return GROUP_ORDER.filter((g) => (byGroup.get(g)?.length ?? 0) > 0).map((g) => ({
       key: g,
@@ -1436,7 +1500,9 @@ function NaPage() {
                     const isSel = selRef === ref;
                     return (
                       <button
-                        key={ref}
+                        // A booking can hold two jobs in the same group — the payment
+                        // and the claim are both ours — so the ref alone is not unique.
+                        key={`${ref}::${move.label}`}
                         type="button"
                         onClick={() => {
                           setSelectedRef(ref);

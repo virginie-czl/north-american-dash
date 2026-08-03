@@ -118,11 +118,15 @@ export async function findContactThreads(
   return results;
 }
 
-function buildMime(to: string, subject: string, body: string): string {
+function buildMime(to: string, subject: string, body: string, cc?: string | null): string {
   // Subject is RFC 2047 encoded so accents survive.
   const encodedSubject = `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
   const mime = [
     `To: ${to}`,
+    // A copy for the event manager, when the caller asks for one. Cc rather than Bcc
+    // on purpose: the counterparty should see who else is on the thread, and a reply
+    // to all reaches the person who knows the booking.
+    ...(cc ? [`Cc: ${cc}`] : []),
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
@@ -138,11 +142,12 @@ export async function createDraft(
   to: string,
   subject: string,
   body: string,
+  cc?: string | null,
 ): Promise<{ draftId: string; link: string }> {
   const draft = await gmail<{ id: string; message?: { id: string } }>(email, "/drafts", {
     method: "POST",
     // insertSignature=true asks Gmail to append the user's configured signature.
-    body: { message: { raw: buildMime(to, subject, body) }, insertSignature: true },
+    body: { message: { raw: buildMime(to, subject, body, cc) }, insertSignature: true },
   });
   return {
     draftId: draft.id,
@@ -155,11 +160,12 @@ export async function sendMessage(
   to: string,
   subject: string,
   body: string,
+  cc?: string | null,
 ): Promise<{ messageId: string; threadId: string }> {
   const sent = await gmail<{ id: string; threadId: string }>(email, "/messages/send", {
     method: "POST",
     // insertSignature=true asks Gmail to append the user's configured signature.
-    body: { raw: buildMime(to, subject, body), insertSignature: true },
+    body: { raw: buildMime(to, subject, body, cc), insertSignature: true },
   });
   return { messageId: sent.id, threadId: sent.threadId };
 }

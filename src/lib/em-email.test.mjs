@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { emEmail, emContact, FINANCE_MAILBOX } from "./em-email.ts";
 
 let pass = 0,
@@ -71,6 +72,48 @@ console.log("\n[emContact]");
 
   const none = emContact(null);
   t("no manager at all falls back too", none.email === FINANCE_MAILBOX && none.derived === false);
+}
+
+// ── The copy on a recovery email ────────────────────────────────────────────
+// The manager who owns the booking is copied on every recovery ask, derived exactly
+// the way the client statement derives who to write to — with one difference, pinned
+// below: a fallback to finance@ is right for a statement footnote and pointless as a
+// copy, because finance is who sends these.
+console.log("\n[the recovery copy]");
+{
+  const page = readFileSync(
+    new URL("../routes/_authenticated/tracking-north-america.tsx", import.meta.url),
+    "utf8",
+  );
+  t(
+    "the page derives it from the manager",
+    /const contact = emContact\(r\.em_referent\)/.test(page),
+  );
+  t("and only when it is a real mailbox", /contact\.derived \? contact\.email : null/.test(page));
+  t("the partner ask carries it", /cc: ccFor\(plan\.row\)/.test(page));
+  t("the client ask carries it too", /cc: ccFor\(r\)/.test(page));
+
+  const gmail = readFileSync(new URL("./gmail.server.ts", import.meta.url), "utf8");
+  // Cc, not Bcc: the counterparty should see who else is on the thread.
+  t("the header is a visible copy", /\[`Cc: \$\{cc\}`\]/.test(gmail));
+  t("and only when there is one", /\.\.\.\(cc \? \[`Cc: /.test(gmail));
+  t(
+    "both the draft and the send carry it",
+    (gmail.match(/buildMime\(to, subject, body, cc\)/g) ?? []).length === 2,
+  );
+
+  const fns = readFileSync(new URL("./gmail.functions.ts", import.meta.url), "utf8");
+  t("a copy that is not an address is dropped", /rawCc\.includes\("@"\)/.test(fns));
+  t("more than one is dropped", /!\/\[,;\]\/\.test\(rawCc\)/.test(fns));
+  t(
+    "and so is a copy of the recipient",
+    /rawCc\.toLowerCase\(\) !== to\.toLowerCase\(\)/.test(fns),
+  );
+  // Only the server knows who is sending, so that is where a self-copy is dropped.
+  t(
+    "nobody is copied on their own email",
+    /message\.cc\.toLowerCase\(\) !== session\.email\.toLowerCase\(\)/.test(fns),
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

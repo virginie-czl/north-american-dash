@@ -287,6 +287,12 @@ export type OutgoingMessage = {
   subject: string;
   body: string;
   /**
+   * One address to copy in — the booking's event manager on a recovery ask, derived
+   * the same way the client statement derives who to write to. One, not a list: this
+   * is a courtesy copy, not a distribution.
+   */
+  cc?: string | null;
+  /**
    * Set on recovery asks. It is what lets a send be recorded in the shared
    * ledger — and refused when that ask has already gone out.
    */
@@ -320,10 +326,19 @@ function validateBatch(input: { messages: OutgoingMessage[]; mode: "draft" | "se
               recipient_name: typeof rec.recipient_name === "string" ? rec.recipient_name : null,
             }
           : undefined;
+      const to = typeof m?.to === "string" ? m.to.trim() : "";
+      // A copy is dropped rather than allowed to break the send: an address that is
+      // not one, more than one of them, or the recipient again.
+      const rawCc = typeof m?.cc === "string" ? m.cc.trim() : "";
+      const cc =
+        rawCc.includes("@") && !/[,;]/.test(rawCc) && rawCc.toLowerCase() !== to.toLowerCase()
+          ? rawCc
+          : null;
       return {
-        to: typeof m?.to === "string" ? m.to.trim() : "",
+        to,
         subject: typeof m?.subject === "string" ? m.subject.trim() : "",
         body: typeof m?.body === "string" ? m.body.trim() : "",
+        ...(cc ? { cc } : {}),
         ...(recovery?.event_ref ? { recovery } : {}),
       };
     })
@@ -407,12 +422,22 @@ export const sendPartnerRequests = createServerFn({ method: "POST" })
         }
       }
 
+      // Copying yourself is noise, and only the server knows for certain who is
+      // sending.
+      const cc =
+        message.cc && message.cc.toLowerCase() !== session.email.toLowerCase() ? message.cc : null;
       try {
         if (data.mode === "draft") {
-          const draft = await createDraft(session.email, message.to, message.subject, message.body);
+          const draft = await createDraft(
+            session.email,
+            message.to,
+            message.subject,
+            message.body,
+            cc,
+          );
           results.push({ to: message.to, ...eventRef, ok: true, link: draft.link });
         } else {
-          await sendMessage(session.email, message.to, message.subject, message.body);
+          await sendMessage(session.email, message.to, message.subject, message.body, cc);
           results.push({ to: message.to, ...eventRef, ok: true });
         }
       } catch (error) {
