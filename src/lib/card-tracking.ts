@@ -101,6 +101,15 @@ export type CardEvidence = {
    * approval or a refusal about *this* airline still decides the row.
    */
   airline?: boolean;
+  /**
+   * A card has already been created for this provider, at no fee.
+   *
+   * The strongest evidence there is, and the only kind that is a fact rather than an
+   * inference: a Slack approval is a decision to issue a card, an email verdict is what
+   * somebody wrote, and a card that exists has been used. It therefore ranks above both
+   * in `cardStatus` — see CARDS_CREATED for where the list comes from.
+   */
+  cardCreated?: boolean;
 };
 
 export const NO_EVIDENCE: CardEvidence = { slackApproved: false, emailVerdict: "unknown" };
@@ -115,7 +124,7 @@ export const CARD_STATUS_LABEL: Record<CardStatus, string> = {
 };
 
 /** Where the status came from, so an override is never mistaken for evidence. */
-export type CardStatusSource = "manual" | "slack" | "email" | "airline" | "none";
+export type CardStatusSource = "manual" | "card" | "slack" | "email" | "airline" | "none";
 
 export type CardVerdict = {
   status: CardStatus;
@@ -152,6 +161,10 @@ export function cardStatus(evidence: CardEvidence, terms: CardTerms | null): Car
   }
   if (t.accepts_card === "no") {
     return { status: "refuses", source: "manual", overridden: true };
+  }
+  // Above Slack: an approval says a card should be issued, this says one was.
+  if (evidence.cardCreated) {
+    return { status: withFee("card_ok"), source: "card", overridden: false };
   }
   if (evidence.slackApproved) {
     return { status: withFee("card_ok"), source: "slack", overridden: false };
@@ -372,6 +385,175 @@ export const AIRLINE_CARRIERS = [
   "porter airlines",
 ];
 
+/**
+ * Providers a card has already been created for, at no fee.
+ *
+ * The list is finance's own — the cards actually issued to service providers, given as
+ * booking/provider pairs and reduced here to the 136 distinct owner codes in them. A
+ * created card is the strongest thing this page can know: an approval in Slack is a
+ * decision to issue one, and this is one that exists and has been used. So it decides the
+ * status ahead of both Slack and the email scan, and because there is no fee the row
+ * answers its own second question — see `nabooPays`, which turns "Card OK and no fee" into
+ * a standing yes without asking anybody to confirm it.
+ *
+ * In code rather than in `provider_card_terms` for two reasons. It is evidence, not a
+ * decision, and evidence belongs with the other derivations where it is reviewable in a
+ * diff and cannot be half-applied by a failed migration. And it stays overridable: a
+ * stored `accepts_card` or `naboo_pays_card` still wins, so if one of these providers
+ * later refuses a card or Pliant declines them, the human answer holds.
+ *
+ * A recorded fee also still wins. Any provider here with a fee in `provider_card_terms`
+ * shows as "Card OK if fee" and returns to the queue as a judgement — which is right: the
+ * claim below is "a card was created at no fee", and a fee on file contradicts it.
+ *
+ * Sorted, six to a line, so adding one is a one-line diff and a duplicate is visible.
+ */
+export const CARDS_CREATED: string[] = [
+  "O-A014",
+  "O-A0357",
+  "O-A6468",
+  "O-A6587",
+  "O-A6655",
+  "O-A6801",
+  "O-A6993",
+  "O-A8518",
+  "O-A8866",
+  "O-A8982",
+  "O-A9998",
+  "O-B0181",
+  "O-B0183",
+  "O-B0306",
+  "O-B0446",
+  "O-B0753",
+  "O-B0939",
+  "O-B1073",
+  "O-B1429",
+  "O-B1466",
+  "O-B1523",
+  "O-B1649",
+  "O-B1977",
+  "O-B2163",
+  "O-B2550",
+  "O-B2923",
+  "O-B3137",
+  "O-B3398",
+  "O-B3843",
+  "O-B3846",
+  "O-B4363",
+  "O-B4399",
+  "O-B4494",
+  "O-B9120",
+  "O-B9240",
+  "O-B9275",
+  "O-B9366",
+  "O-B9418",
+  "O-B9530",
+  "O-B9591",
+  "O-B9625",
+  "O-B9695",
+  "O-B9721",
+  "O-B9776",
+  "O-C3411",
+  "O-C3452",
+  "O-C3454",
+  "O-C9683",
+  "O-C9690",
+  "O-C9780",
+  "O-D4721",
+  "O-D7927",
+  "O-D7928",
+  "O-D9031",
+  "O-D9126",
+  "O-D9146",
+  "O-E4896",
+  "O-E4913",
+  "O-E4925",
+  "O-E8821",
+  "O-E9369",
+  "O-E9427",
+  "O-E9606",
+  "O-F3850",
+  "O-F3958",
+  "O-F3962",
+  "O-F4045",
+  "O-F4050",
+  "O-F4140",
+  "O-F4248",
+  "O-F4261",
+  "O-F4262",
+  "O-F4271",
+  "O-F4318",
+  "O-F4325",
+  "O-F4381",
+  "O-F4406",
+  "O-F4411",
+  "O-F4415",
+  "O-F8275",
+  "O-F8278",
+  "O-F8286",
+  "O-F8373",
+  "O-F8522",
+  "O-F8539",
+  "O-F8554",
+  "O-F8884",
+  "O-F8926",
+  "O-F8929",
+  "O-F8980",
+  "O-F9027",
+  "O-F9156",
+  "O-F9157",
+  "O-F9187",
+  "O-F9276",
+  "O-F9350",
+  "O-F9380",
+  "O-F9709",
+  "O-F9851",
+  "O-F9936",
+  "O-F9937",
+  "O-F9943",
+  "O-G0090",
+  "O-G0276",
+  "O-G0938",
+  "O-G1539",
+  "O-G1629",
+  "O-G1858",
+  "O-G1860",
+  "O-G1861",
+  "O-G1862",
+  "O-G1863",
+  "O-G1942",
+  "O-G2013",
+  "O-G2018",
+  "O-G2080",
+  "O-G2372",
+  "O-G4053",
+  "O-I637",
+  "O-J050",
+  "O-Q105",
+  "O-Q448",
+  "O-Q568",
+  "O-Q911",
+  "O-R360",
+  "O-U611",
+  "O-U667",
+  "O-U733",
+  "O-V468",
+  "O-V588",
+  "O-V653",
+  "O-V839",
+  "O-V849",
+  "O-W438",
+  "O-X265",
+  "O-X801",
+];
+
+const CREATED_CARD_SET = new Set(CARDS_CREATED);
+
+/** Has a card already been created for this provider? Owner code, exactly as BigQuery gives it. */
+export function hasCreatedCard(ownerCode: string | null | undefined): boolean {
+  return CREATED_CARD_SET.has((ownerCode ?? "").trim());
+}
+
 /** "Airlines", "Airways", or "Air" as a word — Air Canada, Delta Air Lines. */
 const AIRLINE_WORDS = /\bair\s?lines?\b|\bairways\b|\bair\b/;
 
@@ -421,6 +603,7 @@ export function buildRows(
     const evidence: CardEvidence = {
       ...(evidenceByOwner.get(provider.owner_code) ?? NO_EVIDENCE),
       airline: isAirline(provider),
+      cardCreated: hasCreatedCard(provider.owner_code),
     };
     return { provider, terms, verdict: cardStatus(evidence, terms), evidence };
   });
@@ -617,6 +800,8 @@ export function nextMove(row: CardRow): string | null {
 /** Where the status came from, in three or four words. */
 export function provenance(row: CardRow): string {
   switch (row.verdict.source) {
+    case "card":
+      return "Card already created";
     case "slack":
       return "Approved card in Slack";
     case "email":

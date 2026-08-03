@@ -18,6 +18,8 @@ import {
   fmtRound,
   hasFee,
   isAirline,
+  CARDS_CREATED,
+  hasCreatedCard,
   matchesSearch,
   nabooPays,
   needsDecision,
@@ -925,6 +927,74 @@ console.log("\n[an airline needs no chasing]");
       air.verdict.status,
     ) != null,
   );
+}
+
+// ── A card that already exists ──────────────────────────────────────────────
+// Finance's own list of cards issued to service providers, at no fee. It is the only
+// evidence here that is a fact rather than an inference — the card exists — so it outranks
+// an approval, and "no fee" means the row answers its own second question.
+console.log("\n[a card already created]");
+{
+  const known = CARDS_CREATED[0];
+  const build = (code, tt = {}, evidence = null) =>
+    buildRows(
+      aggregateProviders([row({ owner_code: code })]),
+      new Map([[code, { ...terms(tt), owner_code: code }]]),
+      evidence ? new Map([[code, evidence]]) : new Map(),
+    )[0];
+
+  const card = build(known);
+  t("a provider with a card reads as Card OK", card.verdict.status === "card_ok");
+  t("credited to the card, not to an approval", card.verdict.source === "card");
+  t("and not flagged as somebody's override", card.verdict.overridden === false);
+  t("the provenance line says why", provenance(card) === "Card already created");
+  // The point of the request: the card was created at no fee, so our own answer follows.
+  t("Naboo pays by card, automatically", rowNabooPays(card).value === "yes");
+  t("said to be automatic", rowNabooPays(card).source === "automatic");
+  t("so it never enters the queue", !needsDecision(card));
+
+  const other = build("O-NOTINLIST");
+  t("a provider with no card is still unknown", other.verdict.status === "unknown");
+  t("and still needs asking", needsDecision(other));
+
+  // The list is evidence, and evidence loses to a person who knows better.
+  const refused = build(known, { accepts_card: "no", refusal_reason: "Pliant declined them" });
+  t("a human can still say they refuse", refused.verdict.status === "refuses");
+  t("and it reads as an override", refused.verdict.overridden === true);
+  const declined = build(known, { naboo_pays_card: "no", naboo_reason: "Over the card limit" });
+  t("and can still decline to use the card", rowNabooPays(declined).value === "no");
+  t("on their own word, not the list's", rowNabooPays(declined).source === "manual");
+
+  // A fee on file contradicts "created at no fee", so the fee wins and it is a judgement.
+  const withFee = build(known, { fee_percent: 2.5 });
+  t("a recorded fee promotes the status", withFee.verdict.status === "card_ok_if_fee");
+  t("and hands the decision back", needsDecision(withFee));
+
+  // An approval about this provider is the same conclusion; the card is the better reason.
+  const approved = build(known, {}, ev({ slackApproved: true }));
+  t("a card outranks a Slack approval", approved.verdict.source === "card");
+  // And it outranks an older refusal in the scan, exactly as a Slack approval already
+  // does: a card that exists is later and more concrete than something once written in an
+  // email. Saying "they refuse anyway" is a human's job, and the override above does it.
+  const written = build(known, {}, ev({ emailVerdict: "refused" }));
+  t("and an older written refusal", written.verdict.source === "card");
+  t(
+    "which is how a Slack approval already behaves",
+    cardStatus(ev({ slackApproved: true, emailVerdict: "refused" }), null).source === "slack",
+  );
+
+  t("the list holds no duplicates", new Set(CARDS_CREATED).size === CARDS_CREATED.length);
+  t(
+    "and every entry is an owner code",
+    CARDS_CREATED.every((c) => /^O-[A-Z0-9]{3,6}$/.test(c)),
+    CARDS_CREATED.filter((c) => !/^O-[A-Z0-9]{3,6}$/.test(c)).join(", "),
+  );
+  t(
+    "sorted, so a duplicate is visible in a diff",
+    [...CARDS_CREATED].sort().join() === CARDS_CREATED.join(),
+  );
+  t("membership ignores stray spacing", hasCreatedCard(` ${known} `));
+  t("and nothing matches an empty code", !hasCreatedCard("") && !hasCreatedCard(null));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
