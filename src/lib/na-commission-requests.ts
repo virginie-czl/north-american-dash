@@ -308,7 +308,7 @@ Hope you're doing well!
 I've just finished reconciling the ${client} program and wanted to send you everything in one place rather than in pieces. There are two items open on our side — the commission we're owed, and an overpayment on the invoice.
 
 1) Commission
-• Commission due incl. tax: ${fmtMoney(commission, ccy)}
+${commissionBlock(partner, commission, detail)}
 
 2) Overpayment
 • Total invoice due: ${fmtMoney(invoiceDue(partner), ccy)}

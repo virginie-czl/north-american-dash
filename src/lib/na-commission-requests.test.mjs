@@ -295,6 +295,45 @@ t(
 t("combined has commission amount", combined.body.includes("100.00 USD"), combined.body);
 t("combined has overpayment amount", combined.body.includes("50.00 USD"), combined.body);
 
+// The bug this covers: composeNaCombinedRequest used to print a bare commission
+// figure and never called commissionBlock at all, so a partner with both a
+// commission and a refund never got the itemised breakdown the commission-only
+// email already had — regardless of whether real detail was fetched for them.
+const combinedWithDetail = composeNaCombinedRequest(
+  row,
+  combinedPartner,
+  naContactFor(combinedPartner),
+  {
+    event_ref: "C-V885",
+    house_code: "H-0001",
+    disbursements: [],
+    commissionable: [
+      {
+        label: "Room Rental",
+        base_ht: 1350,
+        qty: 1,
+        unit: "GROUP",
+        unit_excl_tax: 1350,
+        rate_pct: 7,
+      },
+    ],
+    commissionable_base_ht: 1350,
+    commission_ht: 94.5,
+    commission_ttc: 94.5,
+  },
+);
+t(
+  "combined shows the commissionable base when detail is available",
+  combinedWithDetail.body.includes("Commissionable base: 1,350.00"),
+  combinedWithDetail.body,
+);
+t("and the rate", combinedWithDetail.body.includes("Commission rate: 7%"), combinedWithDetail.body);
+t(
+  "still under the Commission heading, not a bare figure",
+  combinedWithDetail.body.includes("1) Commission\n• Commissionable"),
+  combinedWithDetail.body,
+);
+
 // ── Two different partners on the same booking never bleed into each other ──
 console.log("\n[isolation across partners]");
 
