@@ -426,8 +426,22 @@ export const DOCUMENT_CSS = `
   color: #9CA3AF;
 }
 
-/* Content is inset so it never runs under either band. */
-.naboo-doc main { padding: 94px 44px 48px }
+/* Per-page clearance for the two bands.
+   A fixed element paints on every sheet but reserves no space in the flow, so from the
+   second page onwards the content ran underneath both bands: on C-R893 the commission
+   documents table's own total row printed behind the header and could not be read at
+   all. Page margins would reserve the space, but the design fixes the bands flush to
+   the sheet and the page box carries margin: 0 and nothing else — and Chromium
+   ignores the renderer's own margins once the CSS declares one, so that is not a way
+   out either. A table's header and footer groups do repeat on every page and do reserve
+   their height, which is the whole job of these two empty rows. */
+.naboo-doc .page-frame { width: 100%; border-collapse: collapse; margin: 0 }
+.naboo-doc .page-frame > thead > tr > td { height: 94px; padding: 0; border: none }
+.naboo-doc .page-frame > tfoot > tr > td { height: 48px; padding: 0; border: none }
+.naboo-doc .page-frame > tbody > tr > td { padding: 0; border: none; vertical-align: top }
+
+/* Content is inset from the sheet's edges; the frame above handles top and bottom. */
+.naboo-doc main { padding: 0 44px }
 
 .naboo-doc h1 {
   margin: 0;
@@ -503,6 +517,9 @@ export const DOCUMENT_CSS = `
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
+  /* A heading alone at the foot of a page, its table overleaf, reads as a section
+     with nothing in it. */
+  break-after: avoid;
 }
 .naboo-doc .section-head h2 {
   margin: 0;
@@ -525,17 +542,26 @@ export const DOCUMENT_CSS = `
   text-align: left;
 }
 .naboo-doc tbody td { padding: 7px 0; border-bottom: 1px solid #E5E7EB; font-size: 13px }
+/* A line and the figures it carries belong on the same page. */
+.naboo-doc tbody tr { break-inside: avoid }
 /* Columns need their own gutter: the reference column is long enough to squeeze
    the dates until they touch the next cell. */
 .naboo-doc thead th, .naboo-doc tbody td { padding-right: 16px }
 .naboo-doc th.amount, .naboo-doc td.amount {
   text-align: right;
-  white-space: nowrap;
   padding-right: 0;
   padding-left: 12px;
 }
-.naboo-doc td.amount { font-weight: 500 }
+/* Figures never break; their headings may. Held on one line, "Commission excl. tax"
+   and "Commission incl. tax" are 130px of forced column width each, and four money
+   columns of that beside a service name pushed the services table 164px past the
+   right edge of the sheet, where the last column was simply cut off. */
+.naboo-doc td.amount { white-space: nowrap; font-weight: 500 }
+/* A reference is one token and must not be broken. A service name is free text from
+   the pricing line and must be allowed to wrap — "Unlimited Tea/Coffee served with
+   Madeleines on arrival" on a single line is what made the table too wide. */
 .naboo-doc td.ref { font-weight: 500; white-space: nowrap }
+.naboo-doc td.name { font-weight: 500 }
 .naboo-doc td.day, .naboo-doc td.method { white-space: nowrap }
 .naboo-doc td.reference { color: #374151; font-size: 12px }
 .naboo-doc .chip {
@@ -836,6 +862,10 @@ export function documentShell(options: DocumentShellOptions): string {
   <span>Naboo Group · ${esc(options.contactEmail)}</span>
   <span>${esc(options.footerLabel ?? options.kind)} ${ref} · ${esc(generated)}</span>
 </footer>
+<table class="page-frame" role="presentation">
+<thead><tr><td aria-hidden="true"></td></tr></thead>
+<tfoot><tr><td aria-hidden="true"></td></tr></tfoot>
+<tbody><tr><td>
 <main>
   <h1>${esc(options.kind)} <span class="ref">· ${ref}</span></h1>
 
@@ -856,6 +886,8 @@ ${options.bodyHtml}
     ${options.footnoteHtml}
   </p>
 </main>
+</td></tr></tbody>
+</table>
 </div>`;
 }
 

@@ -288,7 +288,10 @@ function quantityLabel(s: CommissionService): string {
   // line is counted in; anything else keeps the recorded word.
   const noun = unit === "GROUP" || unit === "INDIVIDUAL" || !unit ? "nights" : unit.toLowerCase();
   const price = s.unit_excl_tax == null ? "—" : fmtMoney(s.unit_excl_tax);
-  return `${fmtMoney(qty).replace(/\.00$/, "")} ${noun} × ${price}`;
+  // The multiplication sign belongs to the price, not to the count: bound to it with a
+  // non-breaking space, a narrow column wraps as "20 nights / × 12.00" rather than
+  // leaving a dangling "×" at the end of the first line.
+  return `${fmtMoney(qty).replace(/\.00$/, "")} ${noun} ×\u00A0${price}`;
 }
 
 function serviceRow(s: CommissionService, taxRatio: number): string {
@@ -296,7 +299,7 @@ function serviceRow(s: CommissionService, taxRatio: number): string {
   const commissionHt = round2((base * (s.rate_pct ?? 0)) / 100);
   const commissionTtc = round2(commissionHt * taxRatio);
   return `<tr>
-  <td class="ref">${esc(s.service)}</td>
+  <td class="name">${esc(s.service)}</td>
   <td>${esc(quantityLabel(s))}</td>
   <td class="amount num">${esc(fmtMoney(base))}</td>
   <td class="amount num">${esc(`${s.rate_pct ?? "—"}%`)}</td>

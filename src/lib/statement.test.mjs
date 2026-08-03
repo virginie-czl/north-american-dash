@@ -276,6 +276,25 @@ console.log("\n[buildStatementHtml]");
   t("the re-issued invoice is listed", html.includes("NABI-FR26-02497"));
   t("no commission note could be listed", !html.includes("NABCO"));
   t("escapes the values it interpolates", !html.includes("<script"));
+
+  // ── The two bands need space reserved on every sheet, not only the first ──
+  // A fixed band paints on each page but occupies no room in the flow, so the content
+  // ran under both: on C-R893 the commission documents table's own total row printed
+  // behind the header, unreadable. These two empty rows are a table header and footer
+  // group, the one thing Chromium both repeats per page and reserves height for.
+  t("the content is wrapped in a page frame", html.includes('<table class="page-frame"'));
+  t("the frame is furniture, not data", html.includes('role="presentation"'));
+  const frame = html.slice(html.indexOf("page-frame"));
+  t("it reserves the top band on every page", /<thead><tr><td aria-hidden="true">/.test(frame));
+  t("and the bottom band too", /<tfoot><tr><td aria-hidden="true">/.test(frame));
+  // The bands are painted by the fixed elements, so they must stay outside the frame,
+  // or they would scroll with the content instead of repeating.
+  t(
+    "the bands stay outside it",
+    html.indexOf("running-header") < html.indexOf("page-frame") &&
+      html.indexOf("running-footer") < html.indexOf("page-frame"),
+  );
+  t("the document body is inside it", frame.indexOf("<main>") < frame.indexOf("</table>"));
 }
 
 // ── The stylesheet ──────────────────────────────────────────────────────────
@@ -303,6 +322,54 @@ console.log("\n[DOCUMENT_CSS]");
   t(
     "the running bands repeat as page furniture",
     /\.naboo-doc \.running-header \{[\s\S]*?position: fixed/.test(DOCUMENT_CSS),
+  );
+  // The frame's spacer rows are what keep the content off them, page after page.
+  t(
+    "the top band's height is reserved",
+    /\.page-frame > thead > tr > td \{[^}]*height: 94px/.test(DOCUMENT_CSS),
+  );
+  t(
+    "the bottom band's height is reserved",
+    /\.page-frame > tfoot > tr > td \{[^}]*height: 48px/.test(DOCUMENT_CSS),
+  );
+  // The clearance now comes from the frame; leaving it on `main` as well would inset
+  // the first page twice.
+  t(
+    "main carries no vertical padding of its own",
+    /\.naboo-doc main \{ padding: 0 44px \}/.test(DOCUMENT_CSS),
+  );
+  t(
+    "the frame is not styled as one of the document's tables",
+    /\.naboo-doc \.page-frame \{[^}]*margin: 0/.test(DOCUMENT_CSS) &&
+      /\.page-frame > tbody > tr > td \{[^}]*border: none/.test(DOCUMENT_CSS),
+  );
+
+  // ── Nothing may be wider than the sheet ────────────────────────────────────
+  // Four money columns whose headings could not wrap, beside a service name that
+  // could not either, made the services table 164px wider than the page: the last
+  // column was cut off at the paper's edge. Figures still never break.
+  t("figures never break", /\.naboo-doc td\.amount \{[^}]*white-space: nowrap/.test(DOCUMENT_CSS));
+  t(
+    "their headings may",
+    !/th\.amount[^{]*\{[^}]*white-space:\s*nowrap/.test(DOCUMENT_CSS) &&
+      !/\.naboo-doc th[^.{]*\{[^}]*white-space:\s*nowrap/.test(DOCUMENT_CSS),
+  );
+  t(
+    "a reference is still one token",
+    /\.naboo-doc td\.ref \{[^}]*white-space: nowrap/.test(DOCUMENT_CSS),
+  );
+  t(
+    "free text has a class of its own that wraps",
+    /\.naboo-doc td\.name \{[^}]*\}/.test(DOCUMENT_CSS) &&
+      !/\.naboo-doc td\.name \{[^}]*nowrap/.test(DOCUMENT_CSS),
+  );
+  t(
+    "a heading is not left alone at the foot of a page",
+    /\.section-head \{[^}]*break-after: avoid/.test(DOCUMENT_CSS),
+  );
+  t(
+    "a line and its figures stay on one page",
+    /\.naboo-doc tbody tr \{ break-inside: avoid \}/.test(DOCUMENT_CSS),
   );
   // An unscoped `main` or `table` rule would restyle the tracker around the page.
   const selectors = DOCUMENT_CSS.split("\n")

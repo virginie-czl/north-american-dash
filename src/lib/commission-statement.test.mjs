@@ -208,7 +208,15 @@ console.log("\n[buildCommissionStatementHtml]");
   t("client is never printed twice", !html.includes("Altman Solon · Altman Solon"));
   t("two tiles, not three", html.includes("tiles tiles-2"));
   t("provider codes", html.includes("H-A9319 · O-X801"));
-  t("quantity reads in nights", html.includes("297 nights × 169.00"), html.slice(0, 0));
+  // The multiplication sign is bound to the price so a narrow column breaks after the
+  // count — "20 nights / × 12.00" — rather than leaving a dangling sign on line one.
+  t("quantity reads in nights", html.includes("297 nights ×\u00A0169.00"));
+  t("the sign cannot be left stranded", !/\u00D7 \d/.test(html));
+  // A service name is free text from the pricing line, not a reference: it must be in
+  // the wrapping class. Held on one line, "Unlimited Tea/Coffee served with Madeleines
+  // on arrival" was what pushed this table off the right edge of the sheet.
+  t("the service name is allowed to wrap", html.includes('<td class="name">Guestrooms</td>'));
+  t("no service name sits in the nowrap reference class", !/<td class="ref">Guestrooms/.test(html));
   t("base", html.includes("50,193.00"));
   t("rate", html.includes("7%"));
   t("commission excl. and incl. tax both appear", html.split("3,513.51").length - 1 >= 4);
