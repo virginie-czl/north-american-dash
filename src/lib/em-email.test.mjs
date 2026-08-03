@@ -99,7 +99,8 @@ console.log("\n[the recovery copy]");
   t("and only when there is one", /\.\.\.\(cc \? \[`Cc: /.test(gmail));
   t(
     "both the draft and the send carry it",
-    (gmail.match(/buildMime\(to, subject, body, cc\)/g) ?? []).length === 2,
+    (gmail.match(/buildMime\(to, subject, composeHtmlBody\(body, signature\), cc\)/g) ?? [])
+      .length === 2,
   );
 
   const fns = readFileSync(new URL("./gmail.functions.ts", import.meta.url), "utf8");

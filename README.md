@@ -22,7 +22,8 @@ statuses, PO first-emission dates) lives in a small Postgres store attached in V
    annotations exported from the previous version.
 5. **Optional — Gmail** — add `TOKEN_ENCRYPTION_KEY` (`openssl rand -base64 32`),
    then add these scopes to the OAuth client's consent screen:
-   `gmail.readonly` and `gmail.compose`. Add
+   `gmail.readonly`, `gmail.compose` and `gmail.settings.basic` (the last one reads
+   the sender's signature — see below). Add
    `https://<domain>/api/gmail/callback` to the authorized redirect URIs.
    With an *Internal* consent screen no Google security assessment is required.
    Each user connects their own mailbox from the account menu; sign-in never
@@ -36,6 +37,15 @@ event drawer, *Email history* shows whether each partner was contacted and wheth
 they replied, and *Reminder* drafts or sends a message. Reads only happen when the
 user clicks, searches are narrowed to the partner addresses on that event, and
 sending is one recipient at a time behind a confirmation step.
+
+**Every draft and send carries the sender's own signature**, fetched live from
+`users.settings.sendAs` and stitched onto the body as HTML (`src/lib/email-signature.ts`
+does the merge, pure and unit-tested; `gmail.server.ts#getSignatureHtml` fetches it).
+There is no Gmail API flag that inserts it for you — `insertSignature` on
+`drafts.create` / `messages.send` looks like it should exist and is silently a no-op
+on both. Reading the signature needs the `gmail.settings.basic` scope: anyone who
+connected Gmail before it was added must disconnect and reconnect once to grant it;
+until they do, sends fail soft to no signature rather than failing outright.
 
 ## Develop / deploy
 
