@@ -16,9 +16,13 @@
  *     direction, which is why CardEvidence carries no refusal from Slack at all.
  *
  * The provider's willingness and Naboo's decision are two different questions and
- * never collapse into one value: `cardStatus` answers the first, `naboo_pays_card`
- * the second. The interesting row is the divergence — they accept and we still say
- * no — and that is the one place a written reason is mandatory.
+ * never collapse into one value: `cardStatus` answers the first, `nabooPays` the
+ * second. The interesting row is the divergence — they accept and we still say no —
+ * and that is the one place a written reason is mandatory.
+ *
+ * Only one of the two is ever assumed. A provider who takes card **at no fee** is
+ * answered yes without being asked, because there is nothing to weigh: see `nabooPays`.
+ * The provider's own willingness is never assumed in either direction.
  */
 
 // ── The manual layer ────────────────────────────────────────────────────────
@@ -37,7 +41,11 @@ export type CardTerms = {
   fee_currency: string | null;
   /** Why the provider refuses — their reason, not ours. */
   refusal_reason: string | null;
-  /** Naboo's own decision. Null means nobody has decided yet. */
+  /**
+   * Naboo's own decision, as stored. Null means nobody has typed one — which is not
+   * the same as undecided: read it through `nabooPays`, which answers yes for a
+   * provider who takes card at no fee.
+   */
   naboo_pays_card: CardYesNo | null;
   /** Required when they accept and we decline. */
   naboo_reason: string | null;
@@ -334,14 +342,53 @@ export function buildRows(
   });
 }
 
+// ── Naboo's own answer ──────────────────────────────────────────────────────
+
+export type NabooDecisionSource = "manual" | "automatic" | "none";
+
+export type NabooDecision = {
+  value: CardYesNo | null;
+  source: NabooDecisionSource;
+};
+
+/**
+ * Whether Naboo pays this provider by card, and on whose word.
+ *
+ * A provider who takes card at no fee is not a decision. Paying by card costs us
+ * nothing there and is the outcome this whole page exists to increase, so **yes** is
+ * the standing answer and nobody is asked to confirm it. `card_ok` already carries
+ * "and no fee": recording a fee promotes the status to `card_ok_if_fee`, which turns
+ * the question from "why not?" into "is it worth it?" — a judgement, left to a human.
+ *
+ * A stored value always wins, in both directions. That includes a stored **no** on a
+ * fee-free provider, which is the divergence this page is built to surface — over the
+ * card limit, or Pliant refused them before — and it still demands a written reason.
+ * Nothing here writes to the database: the default is derived on every read, so a fee
+ * arriving later withdraws it rather than leaving a stale "yes" behind that looks like
+ * somebody's decision.
+ */
+export function nabooPays(
+  status: CardStatus,
+  terms: Pick<CardTerms, "naboo_pays_card">,
+): NabooDecision {
+  if (terms.naboo_pays_card != null) return { value: terms.naboo_pays_card, source: "manual" };
+  if (status === "card_ok") return { value: "yes", source: "automatic" };
+  return { value: null, source: "none" };
+}
+
+/** The same answer for a whole row. */
+export function rowNabooPays(row: CardRow): NabooDecision {
+  return nabooPays(row.verdict.status, row.terms);
+}
+
 // ── The queue and the ledger ────────────────────────────────────────────────
 
 /**
  * Does this row still need a human?
  *
- * Two shapes: nobody has established whether the provider takes card, or they do and
- * nobody has said whether we will use it. Everything else has been decided and belongs
- * in the ledger.
+ * Two shapes: nobody has established whether the provider takes card, or they take it
+ * for a fee and nobody has weighed that fee. A fee-free provider answers itself — see
+ * `nabooPays` — and everything else has been decided, so both go to the ledger.
  *
  * This is the page's spine — the queue, the count beside it and the KPI all call it, so
  * they cannot disagree about what "open" means. The scope predicate below delegates
@@ -350,7 +397,7 @@ export function buildRows(
 export function needsDecision(row: CardRow): boolean {
   return (
     row.verdict.status === "unknown" ||
-    (accepts(row.verdict.status) && row.terms.naboo_pays_card == null)
+    (accepts(row.verdict.status) && rowNabooPays(row).value == null)
   );
 }
 
@@ -402,7 +449,7 @@ export function dominantCurrency(rows: CardRow[]): string | null {
 export function cardKpis(rows: CardRow[]): CardKpis {
   const open = rows.filter(needsDecision);
   const payable = rows.filter((r) => accepts(r.verdict.status));
-  const decline = payable.filter((r) => r.terms.naboo_pays_card === "no");
+  const decline = payable.filter((r) => rowNabooPays(r).value === "no");
 
   const currency = dominantCurrency(rows);
   let largest: CardExposure | null = null;
@@ -479,8 +526,8 @@ export function nextMove(row: CardRow): string | null {
     const fee = Number(pct.toFixed(2)).toString();
     return `They accept at ${fee}% — decide whether the fee is worth it or wire instead.`;
   }
-  if (hasFee(row.terms)) return "Fee recorded, nobody has said yes or no on our side.";
-  return "They take card at no fee — nobody has said yes or no on our side.";
+  // A fee-free provider is answered by nabooPays and never arrives here.
+  return "Fee recorded, nobody has said yes or no on our side.";
 }
 
 /** Where the status came from, in three or four words. */
@@ -549,7 +596,7 @@ export const CARD_SCOPES: Array<{
   {
     key: "needs_decision",
     label: "Needs a decision",
-    hint: "Status unknown, or they accept and nobody has decided whether we pay by card",
+    hint: "Status unknown, or they charge a fee and nobody has weighed it",
     // The queue, the count and the KPI all read this through needsDecision above.
     match: needsDecision,
   },
@@ -575,7 +622,7 @@ export const CARD_SCOPES: Array<{
     key: "we_decline",
     label: "We decline",
     hint: "They take card and we have decided not to",
-    match: (r) => accepts(r.verdict.status) && r.terms.naboo_pays_card === "no",
+    match: (r) => accepts(r.verdict.status) && rowNabooPays(r).value === "no",
   },
   {
     key: "all",
@@ -762,6 +809,19 @@ export const CSV_HEADER = [
   "Last updated at",
 ];
 
+/**
+ * The answer as the CSV states it.
+ *
+ * The effective value, because a reconciliation that read "" for a provider we do pay
+ * by card would be wrong — and marked, because "who decided this?" has a different
+ * answer when nobody did.
+ */
+function nabooPaysCell(row: CardRow): string {
+  const decision = rowNabooPays(row);
+  if (decision.value == null) return "";
+  return decision.source === "automatic" ? `${decision.value} (automatic)` : decision.value;
+}
+
 export function csvRows(rows: CardRow[]): string[][] {
   return rows.map((r) => [
     r.provider.provider_name,
@@ -776,7 +836,7 @@ export function csvRows(rows: CardRow[]): string[][] {
     r.terms.fee_fixed == null ? "" : String(r.terms.fee_fixed),
     r.terms.fee_currency ?? "",
     r.terms.refusal_reason ?? "",
-    r.terms.naboo_pays_card ?? "",
+    nabooPaysCell(r),
     r.terms.naboo_reason ?? "",
     r.terms.updated_by ?? "",
     r.terms.updated_at ?? "",

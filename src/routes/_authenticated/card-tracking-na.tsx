@@ -37,11 +37,13 @@ import {
   fmtRound,
   hasFee,
   matchesSearch,
+  nabooPays,
   nextMove,
   openDecisionsNote,
   partitionRows,
   payableNote,
   provenance,
+  rowNabooPays,
   scopeCounts,
   sortRows,
   validateCardTerms,
@@ -796,7 +798,8 @@ function LedgerHead({
 function LedgerRow({ row, onEdit }: { row: CardRow; onEdit: () => void }) {
   const { provider, terms, verdict } = row;
   const theyAccept = accepts(verdict.status);
-  const weDecline = theyAccept && terms.naboo_pays_card === "no";
+  const pays = rowNabooPays(row);
+  const weDecline = theyAccept && pays.value === "no";
   // Their reason when they refuse, ours when we do. Both are "the reason on file";
   // which one it is follows from the two pills on the same line.
   const reason = weDecline
@@ -835,18 +838,30 @@ function LedgerRow({ row, onEdit }: { row: CardRow; onEdit: () => void }) {
       <TableCell className="px-4 py-[9px] align-middle tabular-nums">
         {theyAccept && hasFee(terms) ? fmtFee(terms) : <span className="text-slate-300">—</span>}
       </TableCell>
-      <TableCell className="px-4 py-[9px] align-middle">
-        {terms.naboo_pays_card == null ? (
+      <TableCell className="whitespace-nowrap px-4 py-[9px] align-middle">
+        {pays.value == null ? (
           <span className="text-[11px] text-slate-400">Undecided</span>
         ) : (
-          <span
-            className={`inline-flex items-center rounded-full px-[9px] py-[3px] text-[11px] font-medium ${
-              terms.naboo_pays_card === "yes"
-                ? "bg-emerald-100 text-emerald-700"
-                : "bg-slate-100 text-slate-600"
-            }`}
-          >
-            {terms.naboo_pays_card === "yes" ? "Yes" : "No"}
+          <span className="inline-flex items-center">
+            <span
+              className={`inline-flex items-center rounded-full px-[9px] py-[3px] text-[11px] font-medium ${
+                pays.value === "yes"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {pays.value === "yes" ? "Yes" : "No"}
+            </span>
+            {/* Nobody typed this one. Said out loud, because the Updated column is
+                empty beside it and the next reader would otherwise wonder. */}
+            {pays.source === "automatic" && (
+              <span
+                title="They take card at no fee, so yes is the standing answer — nobody was asked. Set it by hand to override."
+                className="ml-[5px] rounded-full border border-slate-200 bg-white px-1.5 py-[1px] text-[9.5px] uppercase tracking-[0.08em] text-slate-500"
+              >
+                Automatic
+              </span>
+            )}
           </span>
         )}
       </TableCell>
@@ -942,6 +957,9 @@ function TermsEditor({
   const previewStatus = cardStatus(row.evidence, { ...terms, ...draft }).status;
   const theyAccept = accepts(previewStatus);
   const problem = validateCardTerms(draft, previewStatus);
+  // Follows the fee as it is typed: clearing a fee makes the row answer itself, adding
+  // one hands the question back.
+  const automatic = nabooPays(previewStatus, { naboo_pays_card: null }).source === "automatic";
   const field = "h-8 rounded-md border border-slate-300 bg-white px-2 text-[12px]";
 
   return (
@@ -1035,9 +1053,11 @@ function TermsEditor({
             onChange={(e) =>
               setState((s) => ({ ...s, naboo_pays_card: e.target.value as CardYesNo | "" }))
             }
-            className={`${field} w-[130px]`}
+            className={`${field} w-[190px]`}
           >
-            <option value="">Undecided</option>
+            {/* Leaving it blank is not the same as leaving it undecided on a fee-free
+                provider: it hands the row back to the standing yes. */}
+            <option value="">{automatic ? "Automatic (Yes — no fee)" : "Undecided"}</option>
             <option value="yes">Yes</option>
             <option value="no">No</option>
           </select>

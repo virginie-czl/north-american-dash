@@ -17,6 +17,7 @@ import {
   fmtRound,
   hasFee,
   matchesSearch,
+  nabooPays,
   needsDecision,
   nextMove,
   NO_EVIDENCE,
@@ -25,6 +26,7 @@ import {
   payableNote,
   peakAmount,
   provenance,
+  rowNabooPays,
   scopeCounts,
   scopeMatcher,
   sortRows,
@@ -320,9 +322,11 @@ console.log("\n[scopes]");
       `${counts[scope.key]} vs ${shown}`,
     );
   }
+  // O-5 accepts with no fee and nothing stored, so it answers itself — see nabooPays.
+  // Only the provider nobody has asked is left needing a human.
   t(
-    "needs a decision: the unknown plus the undecided acceptor",
-    counts.needs_decision === 2,
+    "needs a decision: the unknown one, and not the fee-free acceptor",
+    counts.needs_decision === 1,
     counts.needs_decision,
   );
   t("we decline: only the divergence", counts.we_decline === 1);
@@ -524,8 +528,13 @@ console.log("\n[needsDecision]");
 
   t("never asked is open", needsDecision(build({}, {})));
   t(
-    "they accept and nobody has answered is open",
-    needsDecision(build({}, { slackApproved: true })),
+    "they accept for a fee and nobody has weighed it is open",
+    needsDecision(build({ fee_percent: 2 }, { slackApproved: true })),
+  );
+  // The rule this page runs on: no fee, no question.
+  t(
+    "they accept at no fee and it answers itself",
+    !needsDecision(build({}, { slackApproved: true })),
   );
   t(
     "they accept and we said yes is settled",
@@ -659,8 +668,8 @@ console.log("\n[nextMove and provenance]");
       "Fee recorded, nobody has said yes or no on our side.",
   );
   t(
-    "accepted with no fee still needs an answer",
-    /no fee/.test(nextMove(build({}, { slackApproved: true }))),
+    "a fee-free acceptor never reaches the queue, so it has no next move",
+    nextMove(build({}, { slackApproved: true })) === null,
   );
   t(
     "a settled row has no next move",
@@ -688,6 +697,83 @@ console.log("\n[cardOutreach]");
   // A refusal has to be an acceptable answer, or the reply rate suffers and the
   // "Refuses card" status never gets recorded.
   t("a no is welcome", /bank transfer instead/.test(one.body));
+}
+
+// ── Naboo's own answer ──────────────────────────────────────────────────────
+// A provider who takes card at no fee is not a decision: paying by card costs nothing
+// there, so yes is the standing answer and nobody is asked. A fee turns it into a
+// judgement, and a stored value always wins in both directions.
+console.log("\n[nabooPays]");
+{
+  t("no fee, no question", nabooPays("card_ok", { naboo_pays_card: null }).value === "yes");
+  t(
+    "and it says nobody typed it",
+    nabooPays("card_ok", { naboo_pays_card: null }).source === "automatic",
+  );
+  // The divergence this page exists for has to survive the default.
+  t("a stored no wins", nabooPays("card_ok", { naboo_pays_card: "no" }).value === "no");
+  t("and reads as a human's", nabooPays("card_ok", { naboo_pays_card: "no" }).source === "manual");
+  t(
+    "a stored yes is not relabelled automatic",
+    nabooPays("card_ok", { naboo_pays_card: "yes" }).source === "manual",
+  );
+  // A fee is a judgement, so nothing is assumed.
+  t(
+    "a fee is nobody's default",
+    nabooPays("card_ok_if_fee", { naboo_pays_card: null }).value === null,
+  );
+  t(
+    "a refusing provider is not paid by card by default",
+    nabooPays("refuses", { naboo_pays_card: null }).value === null,
+  );
+  t(
+    "an unknown provider is not either",
+    nabooPays("unknown", { naboo_pays_card: null }).value === null,
+  );
+}
+{
+  const build = (tt, e) =>
+    buildRows(
+      aggregateProviders([row()]),
+      new Map([["O-A001", terms(tt)]]),
+      new Map([["O-A001", ev(e)]]),
+    )[0];
+  const free = build({}, { slackApproved: true });
+  const withFee = build({ fee_percent: 2 }, { slackApproved: true });
+
+  t("a fee-free accepted provider leaves the queue", !needsDecision(free));
+  t("the answer on it is yes", rowNabooPays(free).value === "yes");
+  t("one that charges stays in the queue", needsDecision(withFee));
+  // Recording a fee has to withdraw the default rather than leave a stale yes: the
+  // status demotes to card_ok_if_fee and the row comes back for a human.
+  t("a fee arriving hands the question back", rowNabooPays(withFee).value === null);
+  // A manual override to "yes" on the provider side, still no fee: same standing answer.
+  t(
+    "an override with no fee also answers itself",
+    !needsDecision(build({ accepts_card: "yes" }, {})),
+  );
+
+  // The declining row is not swept up by the default.
+  const declined = build(
+    { naboo_pays_card: "no", naboo_reason: "Over the card limit" },
+    { slackApproved: true },
+  );
+  t("a decline is still a decline", rowNabooPays(declined).value === "no");
+  t("and still settled", !needsDecision(declined));
+  t(
+    "the decline KPI counts it, and not the automatic yeses",
+    cardKpis([free, declined]).weDecline.total === 1,
+  );
+  t(
+    "the we-decline chip agrees",
+    CARD_SCOPES.find((s) => s.key === "we_decline").match(declined) &&
+      !CARD_SCOPES.find((s) => s.key === "we_decline").match(free),
+  );
+  // The CSV is what finance reconciles with: it must state the answer, and mark the
+  // ones nobody gave.
+  t("the export states the automatic yes", csvRows([free])[0][12] === "yes (automatic)");
+  t("and a typed one plainly", csvRows([declined])[0][12] === "no");
+  t("the reason travels with the decline", csvRows([declined])[0][13] === "Over the card limit");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
