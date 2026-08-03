@@ -1,4 +1,5 @@
 import { extractFacts } from "./email-facts.ts";
+import { cardOutreach } from "./card-tracking.ts";
 const ME = "shayma.ndiaye@naboo.app";
 const cases = [
   [
@@ -236,5 +237,101 @@ if (fail) process.exitCode = 1;
   }
 
   console.log(`\n[card explicit] ${p} passed, ${f} failed`);
+  if (f) process.exitCode = 1;
+}
+
+// --- Asked, then a reply that never says yes: resolves to refused ---
+{
+  let p = 0,
+    f = 0;
+  const t = (n, c, g = "") => {
+    if (c) {
+      p++;
+      console.log("  ✓", n);
+    } else {
+      f++;
+      console.log("  ✗", n, g);
+    }
+  };
+  const asked = {
+    outbound: true,
+    at: "2026-04-05T09:00:00Z",
+    from: ME,
+    subject: "Card payment for your upcoming booking",
+    body: cardOutreach({ provider_name: "Traiteur X", bookings: 1 }).body,
+  };
+  const facts = (reply) => extractFacts([asked, reply], ME);
+
+  const bankOnly = facts({
+    outbound: false,
+    at: "2026-04-06T09:00:00Z",
+    from: "a@b.ca",
+    subject: "Re",
+    body: "Bonjour, voici notre IBAN : FR76 3000 6000 0112 3456 7890 189. Cordialement.",
+  });
+  t(
+    "bank details with no card mention, after asking → refused",
+    bankOnly.cardPayment === "refused" && bankOnly.cardDecidedAt === "2026-04-06T09:00:00Z",
+    JSON.stringify(bankOnly),
+  );
+  t("flags the implicit signal", bankOnly.signals.includes("card:refused_implicit"));
+
+  const offTopic = facts({
+    outbound: false,
+    at: "2026-04-06T09:00:00Z",
+    from: "a@b.ca",
+    subject: "Re",
+    body: "Thanks, see you at the event!",
+  });
+  t(
+    "a reply about something else entirely, after asking → refused",
+    offTopic.cardPayment === "refused",
+    offTopic.cardPayment,
+  );
+
+  const paymentLink = facts({
+    outbound: false,
+    at: "2026-04-06T09:00:00Z",
+    from: "a@b.ca",
+    subject: "Re",
+    body: "Sure! Here is our payment link: https://buy.stripe.com/abc123",
+  });
+  t(
+    "a payment link, after asking → accepted",
+    paymentLink.cardPayment === "accepted",
+    paymentLink.cardPayment,
+  );
+
+  const noReplyYet = extractFacts([asked], ME);
+  t(
+    "asked, no reply yet → still unknown",
+    noReplyYet.cardPayment === "unknown",
+    noReplyYet.cardPayment,
+  );
+
+  const neverAsked = extractFacts(
+    [
+      {
+        outbound: false,
+        at: "2026-04-06T09:00:00Z",
+        from: "a@b.ca",
+        subject: "Facture",
+        body: "Bonjour, voici notre IBAN : FR76 3000 6000 0112 3456 7890 189. Cordialement.",
+      },
+    ],
+    ME,
+  );
+  t(
+    "bank details with no prior card ask → still unknown",
+    neverAsked.cardPayment === "unknown",
+    neverAsked.cardPayment,
+  );
+
+  t("our own outreach template is recognised as asking about card", (() => {
+    const outboundOnly = extractFacts([asked], ME);
+    return outboundOnly.signals.includes("card:asked");
+  })());
+
+  console.log(`\n[card silence] ${p} passed, ${f} failed`);
   if (f) process.exitCode = 1;
 }

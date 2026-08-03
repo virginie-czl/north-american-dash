@@ -8,6 +8,16 @@
  *
  * Direction matters: vocabulary in a message *we* sent means "asked", the same
  * vocabulary (or an identifier) coming *from* the partner means "received".
+ *
+ * Card is the one fact that also reads silence. Everywhere else, not finding the
+ * vocabulary just leaves the state at its default — but once we have directly
+ * asked a partner whether they take card, a reply that neither says yes nor sends
+ * a way to charge one (a payment link) *is* the answer: bank details, a shrug, a
+ * reply about something else entirely all mean no in practice, because a partner
+ * who takes card says so or sends the link. So a reply after the ask that carries
+ * no explicit acceptance resolves to `refused`, not `unknown` — see the bottom of
+ * `extractFacts`. Silence with **no reply at all** stays `unknown`: they have not
+ * been given the chance to answer yet.
  */
 
 export type AskState = "not_asked" | "asked" | "received";
@@ -49,8 +59,19 @@ const ASK_BANK =
 const ASK_TAX =
   /num[ée]ros?\s+(de\s+)?(tva|tps|tvq|gst|qst|hst)|\b(tps|tvq|gst|qst|hst)\b\s*(\/|et|and)?\s*(tps|tvq|gst|qst|hst)?\s*(number|num[ée]ro)?|tax\s+(id|number|information|info|details)|\bw-?9\b|\bw-?8\s?ben\b|business\s+number|num[ée]ro\s+d('|’)entreprise|\bNEQ\b|num[ée]ro\s+de\s+taxes?/i;
 
-const ASK_CARD =
-  /(paiement|pay(er|é|ment)?|r[èe]glement|r[ée]gler)\s+(par\s+)?(carte|cb|credit\s+card)|(carte|credit\s+card)\s+(de\s+)?(cr[ée]dit|bancaire)?\s*(possible|accept)/i;
+const ASK_CARD_PATTERNS = [
+  // French
+  /(paiement|pay(er|é|ment)?|r[èe]glement|r[ée]gler)\s+(par\s+)?(carte|cb|credit\s+card)/i,
+  /(carte|credit\s+card)\s+(de\s+)?(cr[ée]dit|bancaire)?\s*(possible|accept)/i,
+  // English — order-flexible, since "accept ... card" and "card ... accepted" are
+  // both common and the French patterns above assume the French word order.
+  /\b(accept|take)s?\b[^.!?\n]{0,40}(payment\s+(by|via|with)\s+)?(credit\s+cards?|\bcards?\b)/i,
+  /\bpay\b[^.!?\n]{0,10}(by|via|with)[^.!?\n]{0,20}(credit\s+cards?|\bcards?\b)/i,
+];
+
+function asksAboutCard(text: string): boolean {
+  return ASK_CARD_PATTERNS.some((re) => re.test(text));
+}
 
 // --- High-confidence identifier formats -------------------------------------
 
@@ -96,11 +117,26 @@ const CARD_NO =
   /(n'accept|n’accept|pas\s+accept|refus|impossible|malheureusement|ne\s+prenons\s+pas|do\s+not\s+accept|don'?t\s+accept|cannot\s+accept|unable\s+to\s+accept|virement\s+(uniquement|seulement|obligatoire)|only\s+(by\s+)?(bank\s+)?transfer|transfer\s+only|ch[èe]que\s+uniquement)/i;
 
 /**
+ * A hosted payment page — the one thing that is stronger evidence than words: a
+ * partner cannot send a link that charges a card without being able to take one.
+ * Scoped to the gateways Naboo's partners actually use, not a bare "http" test,
+ * so an unrelated link in the same message (a quote, a brochure) never counts.
+ */
+const PAYMENT_LINK =
+  /https?:\/\/\S*(buy\.stripe\.com|invoice\.stripe\.com|checkout\.stripe\.com|paypal\.me|paypal\.com\/(invoice|checkoutnow)|squareup\.com|checkout\.square\.site|square\.link)\S*|\b(payment|checkout)\s+link\b|\blien\s+de\s+paiement\b/i;
+
+/**
  * Looks for the card verdict in sentences that mention a card. A refusal wins over
  * an acceptance in the same sentence, and acceptance requires one of the explicit
  * patterns above rather than any nearby positive word.
+ *
+ * A payment link decides the message on its own, checked over the whole text rather
+ * than sentence by sentence — the link is rarely in the same sentence as the word
+ * "card" at all ("Here's the link: https://buy.stripe.com/..."), so the per-sentence
+ * `CARD_WORD` gate below would otherwise miss it.
  */
 function cardVerdict(text: string): CardState {
+  if (PAYMENT_LINK.test(text)) return "accepted";
   const sentences = text.split(/(?<=[.!?\n])/);
   let verdict: CardState = "unknown";
   for (const sentence of sentences) {
@@ -137,6 +173,10 @@ export function extractFacts(messages: MessageInput[], selfAddress: string): Ext
     signals: [],
   };
   const signals = new Set<string>();
+  // The earliest time we asked about card — used below to find a reply that had the
+  // chance to answer but didn't say yes. Earliest, not latest: a partner who never
+  // accepted across a whole thread of asks and replies is still a no.
+  let cardAskedAt: string | null = null;
 
   for (const m of messages) {
     const text = `${m.subject}\n${m.body}`;
@@ -157,7 +197,10 @@ export function extractFacts(messages: MessageInput[], selfAddress: string): Ext
         facts.taxAskedBy = m.from || selfAddress;
         signals.add("tax:asked");
       }
-      if (ASK_CARD.test(text)) signals.add("card:asked");
+      if (asksAboutCard(text)) {
+        signals.add("card:asked");
+        if (cardAskedAt == null || m.at < cardAskedAt) cardAskedAt = m.at;
+      }
     } else {
       if (newer(facts.repliedAt, m.at)) facts.repliedAt = m.at;
 
@@ -181,6 +224,24 @@ export function extractFacts(messages: MessageInput[], selfAddress: string): Ext
         facts.cardDecidedAt = m.at;
         signals.add(`card:${verdict}`);
       }
+    }
+  }
+
+  // Nothing explicit was said either way, but they were asked directly and have
+  // since replied — bank details, a different topic, no answer at all on card. In
+  // practice that reply is the no: a partner who takes card says so or sends a link,
+  // so anything else, once asked, resolves the same way. Silence with no reply yet
+  // is left at `unknown` — they have not had the chance to answer.
+  if (facts.cardPayment === "unknown" && cardAskedAt != null) {
+    const repliesAfterAsk = messages
+      .filter((m) => !m.outbound && m.at > cardAskedAt!)
+      .map((m) => m.at)
+      .sort();
+    const lastReply = repliesAfterAsk[repliesAfterAsk.length - 1];
+    if (lastReply != null) {
+      facts.cardPayment = "refused";
+      facts.cardDecidedAt = lastReply;
+      signals.add("card:refused_implicit");
     }
   }
 

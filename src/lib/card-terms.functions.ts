@@ -76,10 +76,11 @@ export const fetchCardTerms = createServerFn({ method: "GET" }).handler(
  *
  * Slack approvals are matched on the owner code, which is exact. The Gmail scan is
  * keyed by booking and by a slug of the partner's *name*, so the caller has to say
- * which names belong to which provider — hence the aliases. A provider counts as
- * accepting if any one of their bookings recorded an acceptance, and as refusing
- * only if one recorded a refusal and none recorded an acceptance: a yes on any
- * booking outlives a no on an older one.
+ * which names belong to which provider — hence the aliases. A provider can have one
+ * verdict per booking, and they are not equally current: the most recently decided
+ * one wins, full stop, in either direction. An old acceptance does not outlive a
+ * fresh refusal — a provider that took card two years ago and declined it last week
+ * is a provider that currently declines it, and the reverse holds just as well.
  *
  * Reading this never calls Slack. The mirror is refreshed by the button alone.
  */
@@ -123,24 +124,33 @@ export async function loadCardEvidence(
         SELECT EXTRACT(EPOCH FROM (now() - MAX(synced_at)))::int AS age FROM slack_card_approvals
       `;
 
-    const facts = await sql<{ partner_key: string; card_payment: string }[]>`
-        SELECT partner_key, card_payment FROM partner_email_facts
+    const facts = await sql<
+      { partner_key: string; card_payment: string; card_decided_at: Date | null }[]
+    >`
+        SELECT partner_key, card_payment, card_decided_at FROM partner_email_facts
         WHERE card_payment <> 'unknown'
       `;
     const { partnerKey } = await import("./annotations.functions");
-    const verdictByKey = new Map<string, Set<string>>();
+    const decidedByKey = new Map<string, Array<{ card_payment: string; card_decided_at: Date | null }>>();
     for (const f of facts) {
-      const set = verdictByKey.get(f.partner_key) ?? new Set<string>();
-      set.add(f.card_payment);
-      verdictByKey.set(f.partner_key, set);
+      const arr = decidedByKey.get(f.partner_key) ?? [];
+      arr.push({ card_payment: f.card_payment, card_decided_at: f.card_decided_at });
+      decidedByKey.set(f.partner_key, arr);
     }
 
     const evidence = data.providers.map((p) => {
-      const verdicts = new Set<string>();
+      // The most recently decided verdict across every alias and every booking wins —
+      // never "any acceptance ever", which would let a stale yes outrank a fresh no.
+      let latest: { card_payment: string; card_decided_at: Date } | null = null;
       for (const alias of p.aliases) {
         const key = partnerKey(alias);
         if (!key) continue;
-        for (const v of verdictByKey.get(key) ?? []) verdicts.add(v);
+        for (const f of decidedByKey.get(key) ?? []) {
+          if (!f.card_decided_at) continue;
+          if (!latest || f.card_decided_at > latest.card_decided_at) {
+            latest = { card_payment: f.card_payment, card_decided_at: f.card_decided_at };
+          }
+        }
       }
       const cards = approved.get(p.owner_code);
       return {
@@ -148,11 +158,7 @@ export async function loadCardEvidence(
         slackApproved: cards != null,
         approvalCount: cards?.count,
         lastApprovedAt: cards?.lastAt ?? null,
-        emailVerdict: verdicts.has("accepted")
-          ? ("accepted" as const)
-          : verdicts.has("refused")
-            ? ("refused" as const)
-            : ("unknown" as const),
+        emailVerdict: (latest?.card_payment as "accepted" | "refused" | undefined) ?? ("unknown" as const),
       };
     });
 

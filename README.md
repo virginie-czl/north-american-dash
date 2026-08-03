@@ -322,10 +322,10 @@ Verified by printing: one page, 612 × 792 pts, with C-P222 at
 3,513.51.
 
 
-### Card acceptance: two sources, both explicit
+### Card acceptance: two sources, and one rule about silence
 
-A card verdict decides whether a partner is ever asked for an IBAN, so it has to be
-earned. Two independent sources, in order of strength:
+A card verdict decides whether a partner is ever asked for an IBAN, so acceptance has
+to be earned. Two independent sources, in order of strength:
 
 1. **An approved credit card request in #finance-paiement-by-card** (`C09GQEKBEAX`).
    The Finance Bot posts a structured message per request; only
@@ -333,11 +333,21 @@ earned. Two independent sources, in order of strength:
    refusals are ignored. Matching is on the **`O-` owner code**, so it is exact with
    no name fuzzing (`src/lib/slack-cards.server.ts`, 11 tests). This means a Pliant
    card was actually issued, which is stronger evidence than any email.
-2. **An explicit yes in the partner's own reply.** Loose keyword matching produced
-   false positives — "le paiement par carte serait possible mais je dois vérifier"
-   and our own question echoed back both read as acceptance. Acceptance now needs a
-   directed affirmative ("oui … carte", "nous acceptons la carte", "card works for
-   us"); 15 tests cover the phrases that must and must not count.
+2. **The partner's own reply**, read two ways:
+   - An explicit yes, or a payment link (Stripe, PayPal, Square — a partner cannot
+     send one without being able to charge a card), reads as acceptance. Loose
+     keyword matching produced false positives — "le paiement par carte serait
+     possible mais je dois vérifier" and our own question echoed back both read as
+     acceptance under it — so a bare mention of "carte"/"card" is not enough; 15
+     tests cover the phrases that must and must not count.
+   - Once we have directly asked whether they take card, a reply that does neither —
+     bank details, a different topic, no answer on card at all — **is** the refusal.
+     A partner who takes card says so or sends the link; anything else, once asked,
+     means no in practice. A thread with no reply yet stays `unknown`.
+
+Both live in `src/lib/email-facts.ts` (`extractFacts`, `cardVerdict`); the fresher of
+two verdicts across a partner's bookings wins in either direction — an old
+acceptance does not outlive a recent refusal, or the reverse.
 
 Requires `SLACK_BOT_TOKEN` with `channels:history`. Without it the Slack source is
 skipped and the email signal still works — the page does not break.
