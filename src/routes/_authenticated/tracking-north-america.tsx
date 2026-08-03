@@ -45,7 +45,14 @@ import {
 import { partnerKey } from "@/lib/annotations.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useGmailConnection, useFactScan, useRecoveryLog } from "@/lib/use-gmail";
-import { recoveryKey, recoverySentLabel, type RecoverySend } from "@/lib/recovery-log";
+import {
+  chaseProgress,
+  chasedLabel,
+  fullyChased,
+  recoveryKey,
+  recoverySentLabel,
+  type RecoverySend,
+} from "@/lib/recovery-log";
 import {
   useAddComment,
   useCommentSummaries,
@@ -904,6 +911,21 @@ function NaPage() {
     () => commissionRefundTargets.filter((t) => !sentFor(t)),
     [commissionRefundTargets, sentFor],
   );
+  // How far each booking's partner chase has got, from the same plans the buttons and
+  // the dialog work from. Once every provider with a claim has been written to, the
+  // booking is no longer ours to move — see moveFor.
+  const partnerChase = useMemo(
+    () =>
+      chaseProgress(
+        recoveryPlans.map((plan) => ({
+          eventRef: plan.eventRef,
+          address: plan.contact.address,
+          mode: plan.mode,
+        })),
+        recoveryLog,
+      ),
+    [recoveryPlans, recoveryLog],
+  );
   const unsentClientTargets = useMemo(
     () => clientRecoveryTargets.filter((t) => !sentFor(t)),
     [clientRecoveryTargets, sentFor],
@@ -981,6 +1003,23 @@ function NaPage() {
             headlineLabel: `pending ${14 - age}d ${ccyLabel(ccy)}`,
           };
         }
+        const headline = both
+          ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
+          : fmt(commissionDue > 0.01 ? commissionDue : refundDue);
+        const headlineLabel = both
+          ? `commission + refund ${ccyLabel(ccy)}`
+          : commissionDue > 0.01
+            ? `commission to recover ${ccyLabel(ccy)}`
+            : `refund to recover ${ccyLabel(ccy)}`;
+        // The email has gone out to everyone it was owed to, so the next move is
+        // theirs: the money comes back or it does not. Leaving it under "Ours to move"
+        // read as an email nobody had sent, which is how the same provider got chased
+        // twice. The figure and its caption do not change, so the Commission and Refund
+        // chips still count this booking.
+        const chase = partnerChase.get(r.readable_id ?? "");
+        if (fullyChased(chase)) {
+          return { group: "partner", label: chasedLabel(chase!), headline, headlineLabel };
+        }
         return {
           group: "ours",
           label: both
@@ -988,14 +1027,8 @@ function NaPage() {
             : commissionDue > 0.01
               ? `Recover ${fmt(commissionDue)} commission`
               : `Recover ${fmt(refundDue)} refund`,
-          headline: both
-            ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
-            : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
-          headlineLabel: both
-            ? `commission + refund ${ccyLabel(ccy)}`
-            : commissionDue > 0.01
-              ? `commission to recover ${ccyLabel(ccy)}`
-              : `refund to recover ${ccyLabel(ccy)}`,
+          headline,
+          headlineLabel,
         };
       }
 
@@ -1124,7 +1157,7 @@ function NaPage() {
         headlineLabel: `settled ${ccyLabel(ccy)}`,
       };
     },
-    [actionFor],
+    [actionFor, partnerChase],
   );
 
   const withMove = useMemo(

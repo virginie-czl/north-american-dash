@@ -51,6 +51,59 @@ export function recoveryIndex(rows: RecoverySend[]): Map<string, RecoverySend> {
   return map;
 }
 
+/**
+ * How far a booking's chase has got.
+ *
+ * `targets` is how many counterparties on the booking have a claim worth an email;
+ * `sent` is how many of them have had one. A booking is only chased when every one of
+ * them has: two providers owing a commission and one email sent still leaves an email
+ * to write, and writing it is our move, not theirs.
+ */
+export type ChaseProgress = {
+  targets: number;
+  sent: number;
+  /** ISO timestamp of the most recent send, for the label. */
+  lastSentAt: string | null;
+};
+
+/**
+ * Chase progress per booking, from the plans and the shared ledger.
+ *
+ * Fed the same plans the buttons and the dialog work from, so a booking cannot be
+ * labelled "chased" while a button still offers to chase it — the two disagreeing is
+ * how somebody sends a second copy.
+ */
+export function chaseProgress(
+  plans: Array<{ eventRef: string; address: string; mode: RecoveryMode | RecoveryScope | string }>,
+  ledger: Map<string, RecoverySend> | null | undefined,
+): Map<string, ChaseProgress> {
+  const byEvent = new Map<string, ChaseProgress>();
+  for (const plan of plans) {
+    const entry = byEvent.get(plan.eventRef) ?? { targets: 0, sent: 0, lastSentAt: null };
+    entry.targets += 1;
+    const send = ledger?.get(recoveryKey(plan.eventRef, plan.address, plan.mode));
+    if (send) {
+      entry.sent += 1;
+      if (entry.lastSentAt == null || send.sent_at > entry.lastSentAt) {
+        entry.lastSentAt = send.sent_at;
+      }
+    }
+    byEvent.set(plan.eventRef, entry);
+  }
+  return byEvent;
+}
+
+/** Every counterparty with a claim on this booking has been written to. */
+export function fullyChased(progress: ChaseProgress | null | undefined): boolean {
+  return progress != null && progress.targets > 0 && progress.sent >= progress.targets;
+}
+
+/** `Chased 03/08/26` — the pill on a booking whose email has gone out. */
+export function chasedLabel(progress: ChaseProgress): string {
+  if (!progress.lastSentAt) return "Chased";
+  return `Chased ${sentDay(progress.lastSentAt)}`;
+}
+
 /** Who sent it, as short as it can be said without becoming ambiguous. */
 export function recoverySender(send: RecoverySend): string {
   const name = send.sent_by_name?.trim();
@@ -59,9 +112,9 @@ export function recoverySender(send: RecoverySend): string {
   return local || send.sent_by;
 }
 
-export function recoverySentDay(send: RecoverySend): string {
-  const t = Date.parse(send.sent_at);
-  if (Number.isNaN(t)) return send.sent_at.slice(0, 10);
+export function sentDay(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso.slice(0, 10);
   try {
     return new Date(t).toLocaleDateString("en-GB", {
       day: "2-digit",
@@ -69,8 +122,12 @@ export function recoverySentDay(send: RecoverySend): string {
       year: "2-digit",
     });
   } catch {
-    return send.sent_at.slice(0, 10);
+    return iso.slice(0, 10);
   }
+}
+
+export function recoverySentDay(send: RecoverySend): string {
+  return sentDay(send.sent_at);
 }
 
 /** The label a disabled button carries once the email has gone out. */
