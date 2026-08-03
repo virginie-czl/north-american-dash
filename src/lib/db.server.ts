@@ -225,6 +225,33 @@ const SCHEMA_STATEMENTS = [
      generated_by text,
      PRIMARY KEY (event_ref, partner_key)
    )`,
+
+  // The task board.
+  //
+  // Only what the board knows that the trackers do not: where a card sits, who has it,
+  // and anything typed on it. A derived task with nobody's hand on it has no row here at
+  // all — the tracker is still the authority on whether the work is open, and a table of
+  // copies would be a second answer to that question waiting to disagree.
+  //
+  // `manual` is the one bit that changes the meaning of the row: a manual task's title
+  // is the task, while a derived one's title is a snapshot kept only so the card can
+  // still be named after the tracker stops reporting it.
+  `CREATE TABLE IF NOT EXISTS tracker_tasks (
+     key text PRIMARY KEY,
+     manual boolean NOT NULL DEFAULT false,
+     column_key text NOT NULL DEFAULT 'todo',
+     assignee text,
+     note text,
+     due date,
+     title text,
+     tracker text,
+     ref text,
+     created_by text,
+     created_at timestamptz NOT NULL DEFAULT now(),
+     updated_by text,
+     updated_at timestamptz NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS tracker_tasks_column_idx ON tracker_tasks (column_key)`,
 ];
 
 /** Applies the schema once per instance. Every statement is idempotent. */

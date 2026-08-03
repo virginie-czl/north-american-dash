@@ -61,6 +61,30 @@ GROUP BY owner_code, quote_id
 
 const CACHE_KEY = "na-card-providers";
 
+/**
+ * The provider list, cache and all.
+ *
+ * Separate from the server function so the task board can ask for the same list without
+ * going back through HTTP or copying the query — one query, one cache, one answer.
+ * The gate stays on the callers: this function reads data and does not decide who may.
+ */
+export async function loadCardProviders(
+  force = false,
+): Promise<{ providers: CardProvider[]; cachedAgeSeconds: number | null }> {
+  const { readCache, writeCache, cacheAge } = await import("./query-cache.server");
+  if (!force) {
+    const hit = await readCache<CardProvider[]>(CACHE_KEY);
+    if (hit) return { providers: hit, cachedAgeSeconds: await cacheAge(CACHE_KEY) };
+  }
+
+  const { runBigQuery } = await import("./bigquery.server");
+  const { aggregateProviders } = await import("./card-tracking");
+  const rows = (await runBigQuery(QUERY)) as unknown as CardQuoteRow[];
+  const providers = aggregateProviders(rows);
+  await writeCache(CACHE_KEY, providers);
+  return { providers, cachedAgeSeconds: 0 };
+}
+
 export const getCardProviders = createServerFn({ method: "GET" })
   .validator((input?: { force?: boolean }) => ({ force: input?.force === true }))
   .handler(
@@ -68,18 +92,6 @@ export const getCardProviders = createServerFn({ method: "GET" })
       // Financial data: same gate as every other query in this repo.
       const { requireTracker } = await import("./session.server");
       await requireTracker("na-cards");
-
-      const { readCache, writeCache, cacheAge } = await import("./query-cache.server");
-      if (!data.force) {
-        const hit = await readCache<CardProvider[]>(CACHE_KEY);
-        if (hit) return { providers: hit, cachedAgeSeconds: await cacheAge(CACHE_KEY) };
-      }
-
-      const { runBigQuery } = await import("./bigquery.server");
-      const { aggregateProviders } = await import("./card-tracking");
-      const rows = (await runBigQuery(QUERY)) as unknown as CardQuoteRow[];
-      const providers = aggregateProviders(rows);
-      await writeCache(CACHE_KEY, providers);
-      return { providers, cachedAgeSeconds: 0 };
+      return loadCardProviders(data.force);
     },
   );

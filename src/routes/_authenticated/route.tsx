@@ -5,6 +5,7 @@ import {
   Droplets,
   DollarSign,
   Globe,
+  ListChecks,
   LogOut,
   Mail,
   MailX,
@@ -145,6 +146,11 @@ function TopBar() {
             Card tracking NA
           </TrackerTab>
         )}
+        {/* Not gated: the board has no data of its own, and every feed on it is gated
+            on the server by the same check its own tracker page uses. */}
+        <TrackerTab to="/tasks" icon={<ListChecks className="h-4 w-4" aria-hidden="true" />}>
+          Tasks
+        </TrackerTab>
       </nav>
 
       <div className="ml-auto flex items-center gap-2">

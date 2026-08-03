@@ -83,6 +83,83 @@ export const fetchCardTerms = createServerFn({ method: "GET" }).handler(
  *
  * Reading this never calls Slack. The mirror is refreshed by the button alone.
  */
+export type CardEvidenceResult = {
+  evidence: Array<{ owner_code: string } & CardEvidence>;
+  syncedAgeSeconds: number | null;
+};
+
+/**
+ * The evidence for a set of providers.
+ *
+ * Separate from the server function so the task board can reach the same answer without
+ * a second copy of the matching rules — the Slack code match and the alias-keyed email
+ * scan are exactly the kind of thing that drifts when duplicated. Reading this never
+ * calls Slack; the mirror is refreshed by its own button alone.
+ */
+export async function loadCardEvidence(
+  providers: Array<{ owner_code: string; aliases: string[] }>,
+): Promise<CardEvidenceResult> {
+  {
+    const data = { providers };
+    const { db } = await import("./db.server");
+    const sql = await db();
+
+    const approvals = await sql<
+      { owner_code: string; approval_count: number | null; approved_at: Date | null }[]
+    >`
+        SELECT owner_code, approval_count, approved_at FROM slack_card_approvals
+      `;
+    const approved = new Map(
+      approvals.map((a) => [
+        a.owner_code.trim().toUpperCase(),
+        {
+          count: Number(a.approval_count ?? 1),
+          lastAt: a.approved_at ? a.approved_at.toISOString().slice(0, 10) : null,
+        },
+      ]),
+    );
+
+    const ageRows = await sql<{ age: number | null }[]>`
+        SELECT EXTRACT(EPOCH FROM (now() - MAX(synced_at)))::int AS age FROM slack_card_approvals
+      `;
+
+    const facts = await sql<{ partner_key: string; card_payment: string }[]>`
+        SELECT partner_key, card_payment FROM partner_email_facts
+        WHERE card_payment <> 'unknown'
+      `;
+    const { partnerKey } = await import("./annotations.functions");
+    const verdictByKey = new Map<string, Set<string>>();
+    for (const f of facts) {
+      const set = verdictByKey.get(f.partner_key) ?? new Set<string>();
+      set.add(f.card_payment);
+      verdictByKey.set(f.partner_key, set);
+    }
+
+    const evidence = data.providers.map((p) => {
+      const verdicts = new Set<string>();
+      for (const alias of p.aliases) {
+        const key = partnerKey(alias);
+        if (!key) continue;
+        for (const v of verdictByKey.get(key) ?? []) verdicts.add(v);
+      }
+      const cards = approved.get(p.owner_code);
+      return {
+        owner_code: p.owner_code,
+        slackApproved: cards != null,
+        approvalCount: cards?.count,
+        lastApprovedAt: cards?.lastAt ?? null,
+        emailVerdict: verdicts.has("accepted")
+          ? ("accepted" as const)
+          : verdicts.has("refused")
+            ? ("refused" as const)
+            : ("unknown" as const),
+      };
+    });
+
+    return { evidence, syncedAgeSeconds: ageRows[0]?.age ?? null };
+  }
+}
+
 export const fetchCardEvidence = createServerFn({ method: "POST" })
   .validator((input: { providers: Array<{ owner_code: string; aliases: string[] }> }) => ({
     providers: (input?.providers ?? []).slice(0, 2000).map((p) => ({
@@ -92,74 +169,11 @@ export const fetchCardEvidence = createServerFn({ method: "POST" })
       aliases: (p.aliases ?? []).slice(0, 40).map((a) => String(a ?? "")),
     })),
   }))
-  .handler(
-    async ({
-      data,
-    }): Promise<{
-      evidence: Array<{ owner_code: string } & CardEvidence>;
-      syncedAgeSeconds: number | null;
-    }> => {
-      const { requireTracker } = await import("./session.server");
-      await requireTracker("na-cards");
-
-      const { db } = await import("./db.server");
-      const sql = await db();
-
-      const approvals = await sql<
-        { owner_code: string; approval_count: number | null; approved_at: Date | null }[]
-      >`
-        SELECT owner_code, approval_count, approved_at FROM slack_card_approvals
-      `;
-      const approved = new Map(
-        approvals.map((a) => [
-          a.owner_code.trim().toUpperCase(),
-          {
-            count: Number(a.approval_count ?? 1),
-            lastAt: a.approved_at ? a.approved_at.toISOString().slice(0, 10) : null,
-          },
-        ]),
-      );
-
-      const ageRows = await sql<{ age: number | null }[]>`
-        SELECT EXTRACT(EPOCH FROM (now() - MAX(synced_at)))::int AS age FROM slack_card_approvals
-      `;
-
-      const facts = await sql<{ partner_key: string; card_payment: string }[]>`
-        SELECT partner_key, card_payment FROM partner_email_facts
-        WHERE card_payment <> 'unknown'
-      `;
-      const { partnerKey } = await import("./annotations.functions");
-      const verdictByKey = new Map<string, Set<string>>();
-      for (const f of facts) {
-        const set = verdictByKey.get(f.partner_key) ?? new Set<string>();
-        set.add(f.card_payment);
-        verdictByKey.set(f.partner_key, set);
-      }
-
-      const evidence = data.providers.map((p) => {
-        const verdicts = new Set<string>();
-        for (const alias of p.aliases) {
-          const key = partnerKey(alias);
-          if (!key) continue;
-          for (const v of verdictByKey.get(key) ?? []) verdicts.add(v);
-        }
-        const cards = approved.get(p.owner_code);
-        return {
-          owner_code: p.owner_code,
-          slackApproved: cards != null,
-          approvalCount: cards?.count,
-          lastApprovedAt: cards?.lastAt ?? null,
-          emailVerdict: verdicts.has("accepted")
-            ? ("accepted" as const)
-            : verdicts.has("refused")
-              ? ("refused" as const)
-              : ("unknown" as const),
-        };
-      });
-
-      return { evidence, syncedAgeSeconds: ageRows[0]?.age ?? null };
-    },
-  );
+  .handler(async ({ data }): Promise<CardEvidenceResult> => {
+    const { requireTracker } = await import("./session.server");
+    await requireTracker("na-cards");
+    return loadCardEvidence(data.providers);
+  });
 
 export const saveCardTerms = createServerFn({ method: "POST" })
   .validator(

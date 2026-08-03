@@ -147,10 +147,21 @@ FROM base
 ORDER BY start_date DESC NULLS LAST, readable_id DESC
 `;
 
+/** Same rows, callable from another server function — see loadCardProviders. */
+export async function loadCommissionRows(): Promise<CommissionRow[]> {
+  return runCommissionQuery();
+}
+
 export const getCommissionRows = createServerFn({ method: "GET" }).handler(
   async (): Promise<CommissionRow[]> => {
     const { requireTracker } = await import("./session.server");
     await requireTracker("na");
+    return runCommissionQuery();
+  },
+);
+
+async function runCommissionQuery(): Promise<CommissionRow[]> {
+  {
     const { runBigQuery } = await import("./bigquery.server");
     const rows = await runBigQuery(QUERY);
     return (rows as unknown as CommissionRow[]).map((r) => ({
@@ -167,5 +178,5 @@ export const getCommissionRows = createServerFn({ method: "GET" }).handler(
           }))
         : [],
     }));
-  },
-);
+  }
+}
