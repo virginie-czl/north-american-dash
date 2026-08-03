@@ -1,8 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAccessWatch } from "@/lib/use-access-watch";
 
 const searchSchema = z.object({
   error: z.string().optional(),
@@ -26,84 +28,25 @@ function AuthPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    // Only from the bare sign-in screen. Arriving with a status means the app already
+    // knows why this person is not inside, and bouncing them through "/" would only
+    // send them straight back here.
+    if (status) return;
     fetch("/api/auth/me", { credentials: "include" }).then((res) => {
       if (res.ok) navigate({ to: "/" });
     });
-  }, [navigate]);
+  }, [navigate, status]);
 
   function handleGoogle() {
     setLoading(true);
     window.location.href = "/api/auth/google";
   }
 
-  if (status === "no-tracker") {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-navy px-4">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="font-display text-xl font-bold">Aucun tracker attribué</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              Votre accès est validé, mais aucun tracker ne vous a encore été attribué. Un
-              administrateur doit cocher les pages auxquelles vous avez droit.
-            </p>
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={() => {
-                window.location.href = "/";
-              }}
-            >
-              Réessayer
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
+  if (status === "pending" || status === "no-tracker") {
+    return <WaitingCard waitingFor={status === "pending" ? "approval" : "trackers"} />;
   }
 
-  if (status === "pending" || status === "blocked") {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-navy px-4">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle className="font-display text-xl font-bold">
-              {status === "pending" ? "Accès en attente de validation" : "Accès refusé"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm text-muted-foreground">
-            {status === "pending" ? (
-              <>
-                <p>
-                  Votre compte a bien été reconnu. Un administrateur doit valider votre accès une
-                  seule fois : votre demande vient d'être enregistrée.
-                </p>
-                <p>
-                  Une fois validée, vous entrerez directement à chaque connexion — vous n'aurez plus
-                  rien à demander.
-                </p>
-              </>
-            ) : (
-              <p>
-                Votre accès à cet outil a été refusé ou révoqué. Contactez l'équipe Finance si vous
-                pensez qu'il s'agit d'une erreur.
-              </p>
-            )}
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={() => {
-                window.location.href = "/auth";
-              }}
-            >
-              Retour
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  if (status === "blocked") return <RefusedCard />;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-navy px-4">
@@ -137,5 +80,117 @@ function AuthPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function Shell({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-navy px-4">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle className="font-display text-xl font-bold">{title}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground">{children}</CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function RefusedCard() {
+  return (
+    <Shell title="Accès refusé">
+      <p>
+        Votre accès à cet outil a été refusé ou révoqué. Contactez l'équipe Finance si vous pensez
+        qu'il s'agit d'une erreur.
+      </p>
+      <Button
+        variant="outline"
+        className="w-full"
+        onClick={() => {
+          window.location.href = "/auth";
+        }}
+      >
+        Retour
+      </Button>
+    </Shell>
+  );
+}
+
+/**
+ * The two ways of being outside the door with nothing to do about it: waiting for an
+ * admin to approve the account, and waiting for one to tick which pages it may open.
+ *
+ * Both watch for the decision and let themselves in the moment it lands, so nobody has
+ * to sit refreshing a page or guess when to try again. The screen keeps a manual button
+ * anyway — a person who has just been told "it's done" on Slack should not have to wait
+ * out a poll interval to believe it.
+ */
+function WaitingCard({ waitingFor }: { waitingFor: "approval" | "trackers" }) {
+  const watch = useAccessWatch(true, waitingFor === "approval" ? "pending" : "approved");
+
+  // The decision can be a refusal, and the waiting identity can expire while the tab
+  // sits open overnight. Both are answers, and neither is this screen.
+  if (watch.status === "blocked") return <RefusedCard />;
+  if (watch.status === "signed-out") {
+    return (
+      <Shell title="Session expirée">
+        <p>
+          Nous ne savons plus qui vous êtes — reconnectez-vous, puis laissez cette page ouverte le
+          temps qu'un administrateur valide votre accès.
+        </p>
+        <Button
+          className="w-full border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
+          onClick={() => {
+            window.location.href = "/api/auth/google";
+          }}
+        >
+          Se reconnecter
+        </Button>
+      </Shell>
+    );
+  }
+
+  // Approved, but no page ticked yet: the account is in, the door still is not.
+  const approvedWithoutTrackers = watch.status === "approved" && !watch.ready;
+  const awaitingTrackers = waitingFor === "trackers" || approvedWithoutTrackers;
+
+  return (
+    <Shell title={awaitingTrackers ? "Aucun tracker attribué" : "Accès en attente de validation"}>
+      {awaitingTrackers ? (
+        <p>
+          {approvedWithoutTrackers && waitingFor === "approval"
+            ? "Votre accès vient d'être validé, mais aucun tracker ne vous a encore été attribué."
+            : "Votre accès est validé, mais aucun tracker ne vous a encore été attribué."}{" "}
+          Un administrateur doit cocher les pages auxquelles vous avez droit.
+        </p>
+      ) : (
+        <>
+          <p>
+            Votre compte a bien été reconnu. Un administrateur doit valider votre accès une seule
+            fois : votre demande vient d'être enregistrée.
+          </p>
+          <p>
+            Une fois validée, vous entrerez directement à chaque connexion — vous n'aurez plus rien
+            à demander.
+          </p>
+        </>
+      )}
+
+      <p className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-[13px] text-slate-600">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" aria-hidden="true" />
+        <span aria-live="polite">
+          Cette page s'ouvrira toute seule dès que ce sera fait — vous pouvez la laisser ouverte.
+        </span>
+      </p>
+
+      <Button
+        variant="outline"
+        className="w-full"
+        onClick={watch.checkNow}
+        disabled={watch.checking}
+      >
+        {watch.checking ? "Vérification…" : "Vérifier maintenant"}
+      </Button>
+    </Shell>
   );
 }

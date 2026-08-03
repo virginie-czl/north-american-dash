@@ -84,7 +84,15 @@ export async function registerAndGetAccess(user: {
   return result;
 }
 
-export async function getAccess(email: string): Promise<Access> {
+/**
+ * Someone's standing.
+ *
+ * `fresh` skips the cache read. The waiting page's poll asks this question for the sole
+ * purpose of noticing a decision that was just taken, quite possibly on another instance
+ * whose cache this one cannot see — served from a 45-second-old copy it would report
+ * "still pending" for up to that long after the admin clicked approve.
+ */
+export async function getAccess(email: string, opts: { fresh?: boolean } = {}): Promise<Access> {
   const key = email.toLowerCase();
 
   // The owner is approved by definition, with no database round trip. Deriving it
@@ -95,7 +103,7 @@ export async function getAccess(email: string): Promise<Access> {
     return { status: "approved", role: "owner", trackers: ALL_TRACKERS };
   }
 
-  const hit = cache.get(key);
+  const hit = opts.fresh ? undefined : cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
     return { status: hit.status, role: hit.role, trackers: hit.trackers };
   }

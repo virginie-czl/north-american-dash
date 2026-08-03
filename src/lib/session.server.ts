@@ -6,7 +6,15 @@ import { SignJWT, jwtVerify } from "jose";
 
 export const SESSION_COOKIE = "naboo_session";
 export const STATE_COOKIE = "naboo_oauth_state";
-const SESSION_MAX_AGE_S = 7 * 24 * 60 * 60; // 7 days
+export const PENDING_COOKIE = "naboo_pending";
+export const SESSION_MAX_AGE_S = 7 * 24 * 60 * 60; // 7 days
+/**
+ * A waiting identity is deliberately short-lived. It grants nothing on its own, but it
+ * is what lets an approval be picked up without a second trip through Google — so it
+ * should not outlive the afternoon someone spent waiting for it. Past that, signing in
+ * again re-proves the account still exists.
+ */
+export const PENDING_MAX_AGE_S = 12 * 60 * 60;
 
 export interface SessionUser {
   /** Google account `sub` — stable unique id */
@@ -31,10 +39,17 @@ export async function signSession(user: SessionUser): Promise<string> {
     .sign(getSecret());
 }
 
-export async function verifySessionToken(token: string): Promise<SessionUser | null> {
+async function verifyToken(token: string, use: "session" | "pending"): Promise<SessionUser | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
     if (!payload.sub || typeof payload.email !== "string") return null;
+    // Both tokens are signed with the same secret, so the claim is what separates them.
+    // A waiting identity carries `use: "pending"` and must never be accepted as a
+    // session: moving the cookie's value across by hand would otherwise be a way into
+    // the app without an approval. Sessions predate the claim and so carry none, which
+    // is why this is a rejection of "pending" rather than a demand for "session".
+    if (use === "session" && payload.use === "pending") return null;
+    if (use === "pending" && payload.use !== "pending") return null;
     return {
       id: payload.sub,
       email: payload.email,
@@ -44,6 +59,33 @@ export async function verifySessionToken(token: string): Promise<SessionUser | n
   } catch {
     return null;
   }
+}
+
+export async function verifySessionToken(token: string): Promise<SessionUser | null> {
+  return verifyToken(token, "session");
+}
+
+/**
+ * A verified identity with no access at all.
+ *
+ * Someone signing in for the first time has proved who they are and then has to wait for
+ * an admin. Issuing them no cookie meant the browser forgot them entirely: the approval
+ * could not reach the page they were looking at, and they had to go back through Google
+ * to discover it had happened. This cookie remembers the identity — nothing more. Every
+ * gate reads the session cookie, so holding this one opens no door; it exists so that
+ * `/api/auth/status` can answer "you're in now" and hand over a real session.
+ */
+export async function signPendingIdentity(user: SessionUser): Promise<string> {
+  return new SignJWT({ email: user.email, name: user.name, picture: user.picture, use: "pending" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(user.id)
+    .setIssuedAt()
+    .setExpirationTime(`${PENDING_MAX_AGE_S}s`)
+    .sign(getSecret());
+}
+
+export async function verifyPendingToken(token: string): Promise<SessionUser | null> {
+  return verifyToken(token, "pending");
 }
 
 export function parseCookies(header: string | null): Record<string, string> {
@@ -74,6 +116,14 @@ export async function getSessionFromRequest(request: Request): Promise<SessionUs
   const token = cookies[SESSION_COOKIE];
   if (!token) return null;
   return verifySessionToken(token);
+}
+
+/** The identity of someone waiting for approval, if their browser still remembers it. */
+export async function getPendingIdentity(request: Request): Promise<SessionUser | null> {
+  const cookies = parseCookies(request.headers.get("cookie"));
+  const token = cookies[PENDING_COOKIE];
+  if (!token) return null;
+  return verifyPendingToken(token);
 }
 
 /**

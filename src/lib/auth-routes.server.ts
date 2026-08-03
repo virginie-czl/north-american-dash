@@ -21,10 +21,15 @@ import {
   registerAndGetAccess,
 } from "./access.server";
 import {
+  PENDING_COOKIE,
+  PENDING_MAX_AGE_S,
   SESSION_COOKIE,
+  SESSION_MAX_AGE_S,
   STATE_COOKIE,
+  getPendingIdentity,
   parseCookies,
   serializeCookie,
+  signPendingIdentity,
   signSession,
   getSessionFromRequest,
 } from "./session.server";
@@ -138,25 +143,86 @@ async function handleCallback(request: Request): Promise<Response> {
 
   // Identity established. Access is a separate question: record the sign-in and
   // check standing before handing out a session.
-  const standing = await registerAndGetAccess({
-    email,
-    name: claims.name ?? null,
-    picture: claims.picture ?? null,
-  });
-  if (standing.status !== "approved") {
-    return redirect(`/auth?status=${standing.status}`, [clearState]);
-  }
-
-  const session = await signSession({
+  const identity = {
     id: claims.sub,
     email,
     name: claims.name ?? null,
     picture: claims.picture ?? null,
+  };
+  const standing = await registerAndGetAccess({
+    email,
+    name: identity.name,
+    picture: identity.picture,
   });
+  if (standing.status !== "approved") {
+    // Remember who is waiting, so the approval can reach the page they are looking at
+    // instead of requiring another trip through Google to discover it happened. The
+    // cookie grants nothing — see signPendingIdentity — and is only issued to someone
+    // whose access is genuinely pending; a refusal has nothing to wait for.
+    const cookies = [clearState];
+    if (standing.status === "pending") {
+      cookies.push(
+        serializeCookie(PENDING_COOKIE, await signPendingIdentity(identity), {
+          maxAge: PENDING_MAX_AGE_S,
+          secure,
+        }),
+      );
+    }
+    return redirect(`/auth?status=${standing.status}`, cookies);
+  }
+
   return redirect("/", [
     clearState,
-    serializeCookie(SESSION_COOKIE, session, { maxAge: 7 * 24 * 60 * 60, secure }),
+    serializeCookie(SESSION_COOKIE, await signSession(identity), {
+      maxAge: SESSION_MAX_AGE_S,
+      secure,
+    }),
+    // Nothing left to wait for.
+    serializeCookie(PENDING_COOKIE, "", { maxAge: 0, secure }),
   ]);
+}
+
+/**
+ * "Am I in yet?" — polled by the waiting screen.
+ *
+ * Answers for whoever the browser remembers: an approved session, or an identity still
+ * waiting for a decision. When the decision has landed and it was yes, this is also
+ * where the waiting identity becomes a real session, so the page that asked can simply
+ * reload into the app. That conversion re-reads the standing from the database first and
+ * is the only thing the waiting cookie can ever buy.
+ */
+async function handleAccessStatus(request: Request): Promise<Response> {
+  const secure = isSecureOrigin(requestOrigin(request));
+  const session = await getSessionFromRequest(request);
+  const identity = session ?? (await getPendingIdentity(request));
+
+  const body = (payload: Record<string, unknown>, cookies: string[] = []): Response => {
+    const headers = new Headers({
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    for (const c of cookies) headers.append("Set-Cookie", c);
+    return new Response(JSON.stringify(payload), { status: 200, headers });
+  };
+
+  if (!identity) return body({ status: "signed-out", trackers: [], ready: false });
+
+  const { status, role, trackers } = await getAccess(identity.email, { fresh: true });
+  // Approved with no page ticked is still a locked door — every tracker route bounces
+  // back to this screen — so it is not "ready". Admins always have the access page.
+  const ready = status === "approved" && (trackers.length > 0 || isAdmin(role));
+
+  const cookies: string[] = [];
+  if (status === "approved" && !session) {
+    cookies.push(
+      serializeCookie(SESSION_COOKIE, await signSession(identity), {
+        maxAge: SESSION_MAX_AGE_S,
+        secure,
+      }),
+      serializeCookie(PENDING_COOKIE, "", { maxAge: 0, secure }),
+    );
+  }
+  return body({ status, trackers, ready }, cookies);
 }
 
 async function handleMe(request: Request): Promise<Response> {
@@ -189,10 +255,12 @@ async function handleMe(request: Request): Promise<Response> {
 
 function handleLogout(request: Request): Response {
   const secure = isSecureOrigin(requestOrigin(request));
-  return new Response(null, {
-    status: 204,
-    headers: { "Set-Cookie": serializeCookie(SESSION_COOKIE, "", { maxAge: 0, secure }) },
-  });
+  const headers = new Headers();
+  headers.append("Set-Cookie", serializeCookie(SESSION_COOKIE, "", { maxAge: 0, secure }));
+  // Signing out of a waiting screen has to drop the waiting identity too, or the poll
+  // would keep answering for someone who just asked to be forgotten.
+  headers.append("Set-Cookie", serializeCookie(PENDING_COOKIE, "", { maxAge: 0, secure }));
+  return new Response(null, { status: 204, headers });
 }
 
 // --- Gmail connection (separate from sign-in) -------------------------------
@@ -389,6 +457,9 @@ export async function handleAuthRequest(request: Request): Promise<Response | nu
       return await handleCallback(request);
     }
     if (pathname === "/api/auth/me" && request.method === "GET") return await handleMe(request);
+    if (pathname === "/api/auth/status" && request.method === "GET") {
+      return await handleAccessStatus(request);
+    }
     if (pathname === "/api/auth/logout" && request.method === "POST") {
       return handleLogout(request);
     }
