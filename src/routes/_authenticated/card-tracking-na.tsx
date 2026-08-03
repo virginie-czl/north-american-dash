@@ -722,6 +722,19 @@ function QueueCard({
             >
               Mark refused
             </Button>
+            {/* The third answer, and the common one: somebody already knows, from a
+                call or a contract, and only needs somewhere to type it. Without this
+                the only way in was to mark the row refused and correct it in the
+                ledger afterwards. Same editor the pencil and Decide open. */}
+            <Button
+              variant="naboo-ghost"
+              size="naboo-sm"
+              disabled={pending}
+              title="Fill in what they said — whether they take card, any fee, and our decision"
+              onClick={onDecide}
+            >
+              Fill in
+            </Button>
           </>
         ) : (
           <>
@@ -957,6 +970,9 @@ function TermsEditor({
   const previewStatus = cardStatus(row.evidence, { ...terms, ...draft }).status;
   const theyAccept = accepts(previewStatus);
   const problem = validateCardTerms(draft, previewStatus);
+  // Focus follows the first open question: on a row nobody has asked, that is what the
+  // provider said, not what we decided about it.
+  const startAtProvider = row.verdict.status === "unknown";
   // Follows the fee as it is typed: clearing a fee makes the row answer itself, adding
   // one hands the question back.
   const automatic = nabooPays(previewStatus, { naboo_pays_card: null }).source === "automatic";
@@ -979,6 +995,7 @@ function TermsEditor({
           </span>
           <select
             aria-label="Provider takes card"
+            autoFocus={startAtProvider}
             value={state.accepts_card}
             onChange={(e) =>
               setState((s) => ({ ...s, accepts_card: e.target.value as EditState["accepts_card"] }))
@@ -1048,7 +1065,7 @@ function TermsEditor({
           </span>
           <select
             aria-label="Naboo pays by card"
-            autoFocus
+            autoFocus={!startAtProvider}
             value={state.naboo_pays_card}
             onChange={(e) =>
               setState((s) => ({ ...s, naboo_pays_card: e.target.value as CardYesNo | "" }))
