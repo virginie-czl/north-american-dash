@@ -9,17 +9,30 @@
 import { readFileSync } from "node:fs";
 import {
   COLUMN_ORDER,
+  NO_FILTER,
+  boardStats,
   buildBoard,
   columnCounts,
   columnTasks,
   compareTasks,
+  daysBetween,
   derivedKey,
+  dueInfo,
+  formatDay,
   initials,
   isManualKey,
+  isFiltered,
   isOverdue,
   isTaskColumn,
+  listOrder,
   matchesFilter,
+  rankTask,
+  refLabel,
+  resolveHint,
   shortName,
+  sourceLabel,
+  sourceOptions,
+  trackerBadge,
   trackerCounts,
   validateManualTask,
 } from "./tasks.ts";
@@ -63,6 +76,7 @@ const state = (o = {}) => ({
   column: "todo",
   assignee: null,
   note: null,
+  priority: "normal",
   due: null,
   title: null,
   tracker: "na-cards",
@@ -266,7 +280,14 @@ console.log("\n[the feeds restate the trackers, they do not re-decide]");
   const tasks = cardTasks(rows);
   t("an unasked provider is a task", tasks.length === 1);
   t("keyed as the asking job", tasks[0].kind === "card-ask");
-  t("named by the tracker's own sentence", tasks[0].title.startsWith("Never asked"));
+  // The card says what to do; the tracker's own sentence rides along as the detail, so
+  // the board can be verb-led without paraphrasing the page it came from.
+  t(
+    "titled with the move, not the state",
+    tasks[0].title === "Ask Hyatt Regency whether they take a card",
+    tasks[0].title,
+  );
+  t("with the tracker's own sentence kept", tasks[0].detail.startsWith("Never asked"));
   t("carrying the provider", tasks[0].subject === "Hyatt Regency");
   t("and one currency's figure", tasks[0].amount === "1,000.00 USD");
 
@@ -416,6 +437,151 @@ console.log("\n[the Slack feed]");
     "and filter as their own group",
     matchesFilter(board[0], { trackers: ["slack"], assignee: null, search: "" }) &&
       !matchesFilter(board[0], { trackers: ["na-cards"], assignee: null, search: "" }),
+  );
+}
+
+// ── What a card looks like ──────────────────────────────────────────────────
+// The visible layer has rules of its own, and they are the ones a reader trusts without
+// checking: a date said in words, urgency that actually reorders the column, and a badge
+// that promises a card will leave on its own.
+console.log("\n[dates, as a card says them]");
+{
+  const on = (due, column = "todo") => ({ ...derived(), due, column, priority: "normal" });
+  t("no date is said, not left blank", dueInfo(on(null), "2026-08-03").label === "No date");
+  t("today is today", dueInfo(on("2026-08-03"), "2026-08-03").label === "Today");
+  t("and tomorrow is tomorrow", dueInfo(on("2026-08-04"), "2026-08-03").label === "Tomorrow");
+  t(
+    "late says how late",
+    dueInfo(on("2026-07-29"), "2026-08-03").label === "5d overdue",
+    dueInfo(on("2026-07-29"), "2026-08-03").label,
+  );
+  t("and it reads as a problem", dueInfo(on("2026-07-29"), "2026-08-03").tone === "red");
+  t("further out is a date", dueInfo(on("2026-08-12"), "2026-08-03").label === "Aug 12");
+  // A closed card's date is history, not a deadline — so it never reads as overdue.
+  t(
+    "a closed card's date is history",
+    dueInfo(on("2026-07-29", "done"), "2026-08-03").label === "Jul 29" &&
+      dueInfo(on("2026-07-29", "done"), "2026-08-03").tone === "green",
+  );
+  t("month and day, no year", formatDay("2026-08-12") === "Aug 12");
+  t("a month boundary counts in days", daysBetween("2026-07-29", "2026-08-03") === 5);
+  t("and a bad day is not guessed at", daysBetween("", "2026-08-03") === null);
+}
+
+console.log("\n[urgent, then late, then the rest]");
+{
+  const card = (o) =>
+    buildBoard(
+      [derived({ ref: o.ref, kind: o.ref })],
+      [state({ key: derivedKey("na-cards", o.ref, o.ref), ...o })],
+    )[0];
+  const urgent = card({ ref: "u", priority: "urgent", due: "2026-08-20" });
+  const late = card({ ref: "l", priority: "normal", due: "2026-07-30" });
+  const soon = card({ ref: "s", priority: "normal", due: "2026-08-04" });
+  const undated = card({ ref: "n", priority: "normal", due: null });
+  const day = "2026-08-03";
+  const order = [undated, soon, late, urgent].sort((a, b) => compareTasks(a, b, day));
+  t(
+    "urgent outranks a nearer date",
+    order.map((c) => c.ref).join(" ") === "u l s n",
+    order.map((c) => c.ref).join(" "),
+  );
+  t("and both outrank an undated card", order[3].ref === "n");
+  t(
+    "urgent and late is the top rank",
+    rankTask(card({ ref: "b", priority: "urgent", due: "2026-07-01" }), day) === -1,
+  );
+  t("plain and undated is the bottom", rankTask(undated, day) === 2);
+  // Without a day the lateness half simply does not apply — the order stays a pure
+  // function of its inputs rather than of the clock.
+  t("no day means no lateness", rankTask(late, "") === 2);
+
+  const board = [undated, late, urgent];
+  t(
+    "the list groups by column before it sorts",
+    listOrder([{ ...undated, column: "done" }, late], day)
+      .map((c) => c.column)
+      .join(" ") === "todo done",
+  );
+  t("the board's stats count what is shown", boardStats(board, day).open === 3);
+  t("late cards are counted once", boardStats(board, day).overdue === 1);
+  t("and urgency is counted separately", boardStats(board, day).urgent === 1);
+  const withManual = [...board, { ...undated, manual: true, open: true }];
+  t("automatic means nobody typed it", boardStats(withManual, day).automatic === 3);
+}
+
+console.log("\n[which badge a card wears]");
+{
+  const card = buildBoard([derived()], [])[0];
+  t("a tracker card wears its tracker", trackerBadge(card).label === "Card tracking NA");
+  t("with the tint that tracker has elsewhere", trackerBadge(card).tone === "orange");
+  t("and the kind is named in words", sourceLabel(card) === "Card question");
+  const manual = buildBoard([], [state({ key: "manual::1", manual: true, title: "x" })])[0];
+  t("a typed card says so", trackerBadge(manual).label === "Added by hand");
+  t("and its source is the same thing", sourceLabel(manual) === "Added by hand");
+  const mention = buildBoard(
+    [
+      {
+        tracker: null,
+        kind: "slack-mention",
+        ref: "C1:1",
+        title: "look at this",
+        subject: "Mentioned in #finance-na",
+        amount: null,
+        owner: "us",
+        sourceLabel: "My Slack",
+      },
+    ],
+    [],
+  )[0];
+  t("a Slack card is not a tracker's", trackerBadge(mention).label === "My Slack");
+  t("and knows it came from a mention", sourceLabel(mention) === "Slack mention");
+
+  const tasks = [card, manual, mention];
+  t("the source select lists what is there", sourceOptions(tasks).length === 3);
+  t(
+    "and filtering by one keeps only it",
+    tasks.filter((x) => matchesFilter(x, { ...NO_FILTER, source: "Slack mention" })).length === 1,
+  );
+  t(
+    "unassigned is a real answer",
+    tasks.filter((x) => matchesFilter(x, { ...NO_FILTER, assignee: "none" })).length === 3,
+  );
+  t("an unfiltered board says so", !isFiltered(NO_FILTER));
+  t("and a filtered one says so too", isFiltered({ ...NO_FILTER, source: "Slack mention" }));
+
+  // A booking ref means something to a reader; a Slack message id does not, and printing
+  // it where a ref goes claims it is one.
+  t("a booking ref is printed", refLabel(card) === "O-A001");
+  t("a Slack id is not", refLabel(mention) === null);
+
+  // Three different promises, because three different things are true.
+  t("a tracker card leaves on its own", resolveHint(card).includes("stops reporting"));
+  t("a typed card never does", resolveHint(manual).includes("until you close it"));
+  t("a mention ages out", resolveHint(mention).includes("kept for a week"));
+  t(
+    "and a reminder closes in Slack",
+    resolveHint(
+      buildBoard(
+        [
+          {
+            tracker: null,
+            kind: "slack-reminder",
+            ref: "Rm1",
+            title: "call back",
+            subject: null,
+            amount: null,
+            owner: "us",
+            sourceLabel: "My Slack",
+          },
+        ],
+        [],
+      )[0],
+    ).includes("Completing it in Slack"),
+  );
+  t(
+    "a resolved card says what happened",
+    resolveHint(buildBoard([], [state({ title: "x" })])[0]).includes("closed itself"),
   );
 }
 

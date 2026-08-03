@@ -14,6 +14,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
   isTaskColumn,
+  isTaskPriority,
   type DerivedTask,
   type ManualTaskInput,
   type Task,
@@ -61,6 +62,7 @@ type StateRow = {
   column_key: string;
   assignee: string | null;
   note: string | null;
+  priority: string | null;
   due: Date | string | null;
   title: string | null;
   tracker: string | null;
@@ -81,6 +83,7 @@ function toState(
     column: isTaskColumn(row.column_key) ? row.column_key : "todo",
     assignee: row.assignee,
     note: row.note,
+    priority: isTaskPriority(row.priority) ? row.priority : "normal",
     due: dayOrNull(row.due),
     title: row.title,
     tracker: isTrackerKey(row.tracker) ? row.tracker : null,
@@ -95,7 +98,7 @@ async function readState(): Promise<TaskState[]> {
   const { db, isoOrNull, dayOrNull } = await import("./db.server");
   const sql = await db();
   const rows = await sql<StateRow[]>`
-    SELECT key, manual, column_key, assignee, note, due, title, tracker, ref,
+    SELECT key, manual, column_key, assignee, note, priority, due, title, tracker, ref,
            created_by, updated_by, updated_at
     FROM tracker_tasks
     ORDER BY updated_at DESC
@@ -290,6 +293,7 @@ export const saveTaskState = createServerFn({ method: "POST" })
       column?: string;
       assignee?: string | null;
       note?: string | null;
+      priority?: string | null;
       due?: string | null;
       /** Only used when the row does not exist yet. */
       title?: string | null;
@@ -300,6 +304,7 @@ export const saveTaskState = createServerFn({ method: "POST" })
       column: isTaskColumn(input?.column) ? input.column : null,
       assignee: cleanText(input?.assignee, 200),
       note: cleanText(input?.note, 2000),
+      priority: isTaskPriority(input?.priority) ? input.priority : null,
       due: cleanDay(input?.due),
       title: cleanText(input?.title, 200),
       tracker: isTrackerKey(input?.tracker) ? input.tracker : null,
@@ -315,10 +320,11 @@ export const saveTaskState = createServerFn({ method: "POST" })
     const column: TaskColumn = data.column ?? "todo";
     const rows = await sql<StateRow[]>`
       INSERT INTO tracker_tasks (
-        key, manual, column_key, assignee, note, due, title, tracker, ref,
+        key, manual, column_key, assignee, note, priority, due, title, tracker, ref,
         created_by, updated_by, updated_at
       ) VALUES (
-        ${data.key}, false, ${column}, ${data.assignee}, ${data.note}, ${data.due},
+        ${data.key}, false, ${column}, ${data.assignee}, ${data.note},
+        ${data.priority ?? "normal"}, ${data.due},
         ${data.title}, ${data.tracker}, ${data.ref}, ${session.email}, ${session.email}, now()
       )
       ON CONFLICT (key) DO UPDATE SET
@@ -327,13 +333,14 @@ export const saveTaskState = createServerFn({ method: "POST" })
         column_key = COALESCE(${data.column}, tracker_tasks.column_key),
         assignee   = ${data.assignee},
         note       = ${data.note},
+        priority   = COALESCE(${data.priority}, tracker_tasks.priority),
         due        = ${data.due},
         title      = COALESCE(tracker_tasks.title, EXCLUDED.title),
         tracker    = COALESCE(tracker_tasks.tracker, EXCLUDED.tracker),
         ref        = COALESCE(tracker_tasks.ref, EXCLUDED.ref),
         updated_by = EXCLUDED.updated_by,
         updated_at = now()
-      RETURNING key, manual, column_key, assignee, note, due, title, tracker, ref,
+      RETURNING key, manual, column_key, assignee, note, priority, due, title, tracker, ref,
                 created_by, updated_by, updated_at
     `;
     return toState(rows[0], isoOrNull, dayOrNull);
@@ -349,6 +356,7 @@ export const createManualTask = createServerFn({ method: "POST" })
     due: cleanDay(input?.due),
     note: cleanText(input?.note, 2000),
     column: String(input?.column ?? "todo"),
+    priority: isTaskPriority(input?.priority) ? input.priority : "normal",
   }))
   .handler(async ({ data }): Promise<TaskState> => {
     const { requireSession } = await import("./session.server");
@@ -364,14 +372,14 @@ export const createManualTask = createServerFn({ method: "POST" })
     const key = `manual::${crypto.randomUUID()}`;
     const rows = await sql<StateRow[]>`
       INSERT INTO tracker_tasks (
-        key, manual, column_key, assignee, note, due, title, tracker, ref,
+        key, manual, column_key, assignee, note, priority, due, title, tracker, ref,
         created_by, updated_by, updated_at
       ) VALUES (
-        ${key}, true, ${data.column}, ${data.assignee}, ${data.note}, ${data.due},
-        ${data.title.slice(0, 200)}, ${data.tracker}, ${data.ref},
+        ${key}, true, ${data.column}, ${data.assignee}, ${data.note}, ${data.priority},
+        ${data.due}, ${data.title.slice(0, 200)}, ${data.tracker}, ${data.ref},
         ${session.email}, ${session.email}, now()
       )
-      RETURNING key, manual, column_key, assignee, note, due, title, tracker, ref,
+      RETURNING key, manual, column_key, assignee, note, priority, due, title, tracker, ref,
                 created_by, updated_by, updated_at
     `;
     return toState(rows[0], isoOrNull, dayOrNull);
@@ -387,6 +395,7 @@ export const updateManualTask = createServerFn({ method: "POST" })
     due: cleanDay(input?.due),
     note: cleanText(input?.note, 2000),
     column: String(input?.column ?? "todo"),
+    priority: isTaskPriority(input?.priority) ? input.priority : "normal",
   }))
   .handler(async ({ data }): Promise<TaskState> => {
     const { requireSession } = await import("./session.server");
@@ -403,10 +412,11 @@ export const updateManualTask = createServerFn({ method: "POST" })
     const rows = await sql<StateRow[]>`
       UPDATE tracker_tasks SET
         column_key = ${data.column}, assignee = ${data.assignee}, note = ${data.note},
-        due = ${data.due}, title = ${data.title.slice(0, 200)}, tracker = ${data.tracker},
+        priority = ${data.priority}, due = ${data.due},
+        title = ${data.title.slice(0, 200)}, tracker = ${data.tracker},
         ref = ${data.ref}, updated_by = ${session.email}, updated_at = now()
       WHERE key = ${data.key} AND manual = true
-      RETURNING key, manual, column_key, assignee, note, due, title, tracker, ref,
+      RETURNING key, manual, column_key, assignee, note, priority, due, title, tracker, ref,
                 created_by, updated_by, updated_at
     `;
     if (rows.length === 0) throw new Error("That task no longer exists.");

@@ -252,6 +252,10 @@ const SCHEMA_STATEMENTS = [
      updated_at timestamptz NOT NULL DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS tracker_tasks_column_idx ON tracker_tasks (column_key)`,
+  // Urgency is the one thing on a card that no tracker can know: the ledger says what is
+  // owed, a colleague says what jumps the queue. Existing deployments predate the column.
+  `ALTER TABLE tracker_tasks
+     ADD COLUMN IF NOT EXISTS priority text NOT NULL DEFAULT 'normal'`,
 
   // A personal Slack grant, one row per person. Not the workspace bot — this token can
   // read that person's own reminders and saved items and nothing else. Encrypted with

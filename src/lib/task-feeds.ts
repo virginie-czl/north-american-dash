@@ -27,22 +27,35 @@ function providerAmount(row: CardRow): string | null {
  * Card tracking NA: one card per provider still needing a human.
  *
  * Straight off `needsDecision`, so the board's count and the page's queue badge cannot
- * disagree. The sentence is `nextMove`'s — the same prose the queue card shows.
+ * disagree.
+ *
+ * The title is a verb phrase naming the next move, because that is what a task is: a card
+ * reading "Never asked — no Slack approval" describes a state and leaves the reader to work
+ * out what to do about it. The tracker's own sentence is not thrown away — it travels as
+ * `detail` and is what the drawer shows, so the board and the page still say the same thing
+ * in the same words, one level down.
  */
 export function cardTasks(rows: CardRow[]): DerivedTask[] {
-  return rows.filter(needsDecision).map((row) => ({
-    tracker: "na-cards" as const,
-    // Two shapes of open card question, and they are different jobs: nobody has asked
-    // the provider, versus they answered and we have not.
-    kind: row.verdict.status === "unknown" ? "card-ask" : "card-decide",
-    ref: row.provider.owner_code,
-    title: nextMove(row) ?? "Decide whether we pay this provider by card",
-    subject: row.provider.provider_name,
-    amount: providerAmount(row),
-    // An unasked provider is waiting on us to write; one that accepts is waiting on our
-    // own decision. Both are ours, which is why neither is "partner".
-    owner: "us" as const,
-  }));
+  return rows.filter(needsDecision).map((row) => {
+    const unasked = row.verdict.status === "unknown";
+    const name = row.provider.provider_name;
+    return {
+      tracker: "na-cards" as const,
+      // Two shapes of open card question, and they are different jobs: nobody has asked
+      // the provider, versus they answered and we have not.
+      kind: unasked ? "card-ask" : "card-decide",
+      ref: row.provider.owner_code,
+      title: unasked
+        ? `Ask ${name} whether they take a card`
+        : `Decide whether we pay ${name} by card`,
+      subject: name,
+      detail: nextMove(row),
+      amount: providerAmount(row),
+      // An unasked provider is waiting on us to write; one that accepts is waiting on our
+      // own decision. Both are ours, which is why neither is "partner".
+      owner: "us" as const,
+    };
+  });
 }
 
 /**
@@ -71,6 +84,10 @@ export function commissionTasks(rows: CommissionRow[]): DerivedTask[] {
         mismatched.length === 1
           ? "Check the commission rate — one line does not match"
           : `Check the commission rates — ${mismatched.length} lines do not match`,
+      detail:
+        mismatched.length === 1
+          ? "The commission charged does not match the rate on the booking."
+          : `${mismatched.length} partner lines charge something other than their rate.`,
       subject: [row.company_name, names].filter(Boolean).join(" · ") || null,
       amount:
         row.total_commission_ht != null
@@ -103,10 +120,9 @@ export function slackTasks(items: StoredSlackTask[]): DerivedTask[] {
       kind: SLACK_KINDS[item.kind],
       ref: item.slack_id,
       title: item.title,
-      subject:
-        item.kind === "mention"
-          ? (item.subject ?? "Mentioned in Slack")
-          : SLACK_SUBJECTS[item.kind],
+      // Only a mention has a "where". A reminder's kind is already said by the card's
+      // source label, and repeating it as a subject printed it on the card twice.
+      subject: item.kind === "mention" ? (item.subject ?? "Mentioned in Slack") : null,
       amount: null,
       owner: "us" as const,
       permalink: item.permalink,
@@ -121,13 +137,6 @@ const SLACK_KINDS: Record<StoredSlackTask["kind"], string> = {
   reminder: "slack-reminder",
   saved: "slack-saved",
   mention: "slack-mention",
-};
-
-const SLACK_SUBJECTS: Record<StoredSlackTask["kind"], string> = {
-  reminder: "Slack reminder",
-  saved: "Saved in Slack",
-  // Overridden by the stored channel when there is one.
-  mention: "Mentioned in Slack",
 };
 
 /** Re-exported so the feeds and their tests share one notion of "accepting". */
