@@ -252,7 +252,9 @@ function TasksPage() {
           {slack?.connected ? (
             <>
               <span className="text-[12.5px] text-navy">
-                Your Slack reminders and saved messages are on this board.
+                {slack.needsReconnect
+                  ? "Your Slack reminders and saved messages are on this board — mentions are not."
+                  : "Your Slack reminders, saved messages and mentions are on this board."}
               </span>
               <span className="text-[11.5px] text-slate-400">
                 {slack.syncedAt
@@ -273,6 +275,20 @@ function TasksPage() {
                 />
                 {slackSync.isPending ? "Pulling…" : "Pull now"}
               </Button>
+              {/* An older grant predates mentions. Saying so beats a board that quietly
+                  reads less than the line above it claims. */}
+              {slack.needsReconnect && (
+                <Button
+                  variant="naboo"
+                  size="naboo"
+                  onClick={() => {
+                    window.location.href = "/api/slack/connect";
+                  }}
+                  title="Your connection predates mentions — reconnect to include your Activity"
+                >
+                  Reconnect for mentions
+                </Button>
+              )}
               <Button
                 variant="naboo-ghost"
                 size="naboo"
@@ -286,12 +302,13 @@ function TasksPage() {
           ) : (
             <>
               <span className="text-[12.5px] text-navy">
-                Connect Slack to put your own reminders and saved messages on this board.
+                Connect Slack to put your own reminders, saved messages and mentions on this board.
               </span>
               {/* Said plainly, because it is the part worth trusting: the grant asks for
-                  two personal scopes and can read nothing else. */}
+                  three personal scopes, and mentions do mean reading messages — but only
+                  the ones that name the person connecting. */}
               <span className="text-[11.5px] text-slate-400">
-                Your reminders and saved items only — never a channel, never anyone else&apos;s.
+                Your own Activity only — messages that mention you, never anyone else&apos;s.
               </span>
               <Button
                 variant="naboo"

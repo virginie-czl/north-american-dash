@@ -282,6 +282,13 @@ const SCHEMA_STATEMENTS = [
      synced_at timestamptz NOT NULL DEFAULT now(),
      PRIMARY KEY (owner_email, slack_id)
    )`,
+  // Mentions are events, not state. A reminder still exists in Slack on the next pull, so
+  // it can be replaced wholesale; a mention was said once, fifteen minutes ago, and will
+  // never be in another answer. first_seen_at is what lets the row survive later syncs and
+  // still be pruned eventually, and subject holds where it was said.
+  `ALTER TABLE slack_tasks
+     ADD COLUMN IF NOT EXISTS first_seen_at timestamptz NOT NULL DEFAULT now(),
+     ADD COLUMN IF NOT EXISTS subject text`,
 ];
 
 /** Applies the schema once per instance. Every statement is idempotent. */

@@ -1,32 +1,55 @@
 /**
- * A personal Slack connection, and the only two things it is ever used to read.
+ * A personal Slack connection, and the only three things it is ever used to read.
  *
  * This is not the workspace bot in slack-cards.server.ts. That one reads one finance
  * channel with a shared token. This is an individual OAuth grant, stored per user, and
  * it exists for exactly one purpose: putting that person's own Slack to-dos on their
  * task board.
  *
- * **It can only ever read the connecting person's own items.** The two endpoints used —
- * `reminders.list` and `stars.list` — are defined by Slack to return the caller's
- * reminders and the caller's saved items and nothing else; there is no user or channel
- * parameter to widen them with. No search runs, no channel is listed, no other person's
- * name is ever sent to Slack. The requested scopes say the same thing out loud:
- * `reminders:read` and `stars:read`, both user scopes, neither of which can read a
- * conversation.
+ * **It can only ever read the connecting person's own items.** Three reads, and each is
+ * anchored to the token's owner:
+ *
+ *  - `reminders.list` — the caller's reminders. No user parameter exists to widen it.
+ *  - `stars.list` — the caller's saved items. Same.
+ *  - `search.messages` — the caller's Activity, i.e. messages that mention *them*. This
+ *    one takes a query, so the anchor is enforced here instead of by Slack: the query is
+ *    the caller's own handle, taken from `auth.test` on their own token and never from
+ *    anything a client sent, and every match is then checked with `mentionsPerson` against
+ *    that same handle before it can become a card. A match that names somebody else is
+ *    dropped. No channel is listed, no other person's name is ever sent to Slack, and no
+ *    message is stored beyond the one line that mentioned the person reading it.
+ *
+ * The scopes say the same thing out loud: `reminders:read`, `stars:read` and `search:read`
+ * — all user scopes, so Slack itself limits every one of them to what this person can
+ * already see. Adding mentions is a real widening of the earlier "nothing searches Slack"
+ * promise and is written down here rather than glossed: it is still only ever their own
+ * Activity, but it does now read messages, and it needs the grant re-consented.
  *
  * The token is a user token, encrypted at rest with the same key as the Gmail grant, and
  * a disconnect revokes it at Slack rather than merely forgetting it here.
  */
+import { activitySubject, activityTitle, isActionItem, mentionsPerson } from "./slack-activity";
 import { decryptSecret, encryptSecret } from "./crypto.server";
 
 const SLACK_API = "https://slack.com/api";
 export const SLACK_AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize";
 
 /**
- * User scopes, and deliberately the narrowest pair that answers "what am I meant to be
- * doing?". Nothing here can read a channel, a DM or another person's anything.
+ * User scopes, and deliberately the narrowest set that answers "what am I meant to be
+ * doing?". All three are *user* scopes: they see what this person sees and nothing more,
+ * so none of them can reach a channel this person is not in or another person's anything.
  */
-export const SLACK_USER_SCOPES = ["reminders:read", "stars:read"];
+export const SLACK_USER_SCOPES = ["reminders:read", "stars:read", "search:read"];
+
+/**
+ * How far back a sync looks for mentions, in minutes — the same fifteen as the cron in
+ * vercel.json, deliberately from one place so the window and the cadence cannot drift
+ * apart and leave a gap where a mention is never read at all.
+ */
+export const MENTION_WINDOW_MINUTES = 15;
+
+/** How long an unread mention stays on the board before it is forgotten. */
+const MENTION_KEEP_DAYS = 7;
 
 export class SlackNotConnectedError extends Error {
   constructor(email: string) {
@@ -163,13 +186,25 @@ async function slack<T>(email: string, method: string): Promise<T> {
  */
 export type SlackItem = {
   id: string;
-  kind: "reminder" | "saved";
+  kind: SlackTaskKind;
   title: string;
   /** ISO day, when Slack gave the reminder a time. */
   due: string | null;
   /** Deep link, when there is one to give. */
   permalink: string | null;
+  /** Where it was said — only mentions have somewhere to name. */
+  subject?: string | null;
 };
+
+/**
+ * Reminders and saved items are *state*: Slack answers with the current set every time, so
+ * a sync can replace them. A mention is an *event* — it happened once, in one fifteen
+ * minute window, and will never be in another answer — so it is kept until it is pruned.
+ * The two are treated differently in syncSlackTasks and this is the distinction being made.
+ */
+export type SlackTaskKind = "reminder" | "saved" | "mention";
+
+const STATE_KINDS = ["reminder", "saved"] as const;
 
 function isoDay(epochSeconds: number | null | undefined): string | null {
   if (!epochSeconds || epochSeconds <= 0) return null;
@@ -233,17 +268,97 @@ export async function fetchSlackSaved(email: string): Promise<SlackItem[]> {
 }
 
 /**
- * Pulls one person's items and replaces their stored set.
+ * Who the token belongs to, asked of Slack rather than assumed.
  *
- * A replace rather than a merge, because Slack is the authority: a reminder completed or
- * a message unsaved has to leave the board, and the only way to know it went is that it
- * is no longer in the answer. Scoped by `owner_email` in both directions, so one
- * person's sync can never touch another's rows.
- *
- * Saved items are optional: if the grant predates that scope, the reminders still work
- * rather than the whole sync failing.
+ * `auth.test` needs no scope and answers only about the caller. Its `user` is the handle
+ * the workspace mentions this person by, which is exactly what has to go in the search
+ * query — and taking it from the token means the query can never be pointed at anybody
+ * else, whatever arrives from a client.
  */
-export async function syncSlackTasks(email: string): Promise<{ items: number }> {
+async function whoAmI(email: string): Promise<{ id: string; handle: string }> {
+  const body = await slack<{ user?: string; user_id?: string }>(email, "auth.test");
+  return { id: (body.user_id ?? "").trim(), handle: (body.user ?? "").trim() };
+}
+
+/**
+ * The caller's Activity for the last few minutes: messages that mention them.
+ *
+ * Slack has no "my mentions" endpoint — the Activity tab is a client-side view over search
+ * — so this is `search.messages` for the caller's own handle on the caller's own token,
+ * which is the same read their Activity tab performs. Two things narrow it afterwards:
+ * only a real mention of this person survives (`mentionsPerson`), and only what is not
+ * known noise becomes a task (`isActionItem`, which is where the queued-payment
+ * acknowledgement is dropped).
+ *
+ * The window is applied here rather than in the query on purpose: Slack's `after:` modifier
+ * is day-granular, so it cannot express "the last fifteen minutes". Sorting newest-first
+ * and cutting by timestamp can, and it is exact.
+ */
+export async function fetchSlackMentions(
+  email: string,
+  windowMinutes = MENTION_WINDOW_MINUTES,
+  now = Date.now(),
+): Promise<SlackItem[]> {
+  const me = await whoAmI(email);
+  if (!me.handle && !me.id) return [];
+
+  type Match = {
+    ts?: string;
+    text?: string;
+    permalink?: string;
+    user?: string;
+    username?: string;
+    channel?: { id?: string; name?: string };
+  };
+  const query = encodeURIComponent(`@${me.handle || me.id}`);
+  const body = await slack<{ messages?: { matches?: Match[] } }>(
+    email,
+    `search.messages?query=${query}&sort=timestamp&sort_dir=desc&count=100`,
+  );
+
+  const cutoff = (now - windowMinutes * 60_000) / 1000;
+  const items: SlackItem[] = [];
+  for (const match of body.messages?.matches ?? []) {
+    const ts = Number(match.ts);
+    if (!Number.isFinite(ts) || ts < cutoff) continue;
+    // Something this person wrote themselves is not somebody asking them for anything.
+    if (match.user && me.id && match.user === me.id) continue;
+    if (!mentionsPerson(match.text, me)) continue;
+    if (!isActionItem(match.text)) continue;
+    const title = activityTitle(match.text);
+    if (!title) continue;
+    items.push({
+      id: `${match.channel?.id ?? "?"}:${match.ts}`,
+      kind: "mention",
+      title,
+      due: null,
+      permalink: match.permalink ?? null,
+      subject: activitySubject(match.channel?.name),
+    });
+  }
+  return items;
+}
+
+/**
+ * Pulls one person's items and brings their stored set up to date.
+ *
+ * Two halves, because Slack answers two different kinds of question.
+ *
+ * Reminders and saved items are replaced: Slack is the authority on them, a reminder
+ * completed or a message unsaved has to leave the board, and the only way to know it went
+ * is that it is no longer in the answer.
+ *
+ * Mentions are added, never replaced. Each sync sees fifteen minutes, so replacing would
+ * throw away every window but the newest — the board would forget a mention as soon as the
+ * next quarter hour arrived, which is the opposite of a task list. They are inserted with
+ * `DO NOTHING` so a mention read twice stays one card (and keeps the column it was dragged
+ * to), and pruned after MENTION_KEEP_DAYS so the board does not accumulate forever.
+ *
+ * Every statement is scoped by `owner_email`, so one person's sync can never touch
+ * another's rows. Saved items and mentions are both optional: a grant that predates either
+ * scope still syncs what it can rather than failing whole.
+ */
+export async function syncSlackTasks(email: string): Promise<{ items: number; mentions: number }> {
   const reminders = await fetchSlackReminders(email);
   let saved: SlackItem[] = [];
   try {
@@ -251,46 +366,74 @@ export async function syncSlackTasks(email: string): Promise<{ items: number }> 
   } catch (error) {
     console.error(`Slack saved items unavailable for ${email} (keeping reminders):`, error);
   }
-  const items = [...reminders, ...saved];
+  let mentions: SlackItem[] = [];
+  try {
+    mentions = await fetchSlackMentions(email);
+  } catch (error) {
+    // Most likely an older grant without search:read. The rest of the sync is still worth
+    // doing, and reconnecting is what fixes it.
+    console.error(`Slack mentions unavailable for ${email} (keeping the rest):`, error);
+  }
+  const current = [...reminders, ...saved];
+
+  const columns = [
+    "owner_email",
+    "slack_id",
+    "kind",
+    "title",
+    "subject",
+    "due",
+    "permalink",
+    "synced_at",
+  ] as const;
+  const row = (item: SlackItem) => ({
+    owner_email: email,
+    slack_id: item.id,
+    kind: item.kind,
+    title: item.title,
+    subject: item.subject ?? null,
+    due: item.due,
+    permalink: item.permalink,
+    synced_at: new Date(),
+  });
 
   const { db } = await import("./db.server");
   const sql = await db();
   await sql.begin(async (tx) => {
-    await tx`DELETE FROM slack_tasks WHERE owner_email = ${email}`;
-    if (items.length > 0) {
-      const rows = items.map((i) => ({
-        owner_email: email,
-        slack_id: i.id,
-        kind: i.kind,
-        title: i.title,
-        due: i.due,
-        permalink: i.permalink,
-        synced_at: new Date(),
-      }));
+    await tx`
+      DELETE FROM slack_tasks
+      WHERE owner_email = ${email} AND kind IN ${tx(STATE_KINDS)}
+    `;
+    if (current.length > 0) {
+      await tx`INSERT INTO slack_tasks ${tx(current.map(row), ...columns)}`;
+    }
+    if (mentions.length > 0) {
+      // Already on the board: leave the row alone. Re-inserting would reset nothing
+      // visible, but the first_seen_at it was read at is what the prune measures.
       await tx`
-        INSERT INTO slack_tasks ${tx(
-          rows,
-          "owner_email",
-          "slack_id",
-          "kind",
-          "title",
-          "due",
-          "permalink",
-          "synced_at",
-        )}
+        INSERT INTO slack_tasks ${tx(mentions.map(row), ...columns)}
+        ON CONFLICT (owner_email, slack_id) DO NOTHING
       `;
     }
+    await tx`
+      DELETE FROM slack_tasks
+      WHERE owner_email = ${email}
+        AND kind = 'mention'
+        AND first_seen_at < now() - ${`${MENTION_KEEP_DAYS} days`}::interval
+    `;
     await tx`
       UPDATE slack_credentials SET synced_at = now() WHERE user_email = ${email}
     `;
   });
-  return { items: items.length };
+  return { items: current.length + mentions.length, mentions: mentions.length };
 }
 
 export type StoredSlackTask = {
   slack_id: string;
-  kind: "reminder" | "saved";
+  kind: SlackTaskKind;
   title: string;
+  /** Where a mention was said. Null for reminders and saves, which have nowhere to name. */
+  subject: string | null;
   due: string | null;
   permalink: string | null;
 };
@@ -310,18 +453,20 @@ export async function readSlackTasks(email: string): Promise<StoredSlackTask[]> 
       slack_id: string;
       kind: string;
       title: string;
+      subject: string | null;
       due: Date | string | null;
       permalink: string | null;
     }[]
   >`
-    SELECT slack_id, kind, title, due, permalink
+    SELECT slack_id, kind, title, subject, due, permalink
     FROM slack_tasks WHERE owner_email = ${email}
-    ORDER BY due NULLS LAST, title
+    ORDER BY due NULLS LAST, first_seen_at DESC, title
   `;
   return rows.map((r) => ({
     slack_id: r.slack_id,
-    kind: r.kind === "saved" ? "saved" : "reminder",
+    kind: r.kind === "saved" || r.kind === "mention" ? r.kind : "reminder",
     title: r.title,
+    subject: r.subject,
     due: dayOrNull(r.due),
     permalink: r.permalink,
   }));

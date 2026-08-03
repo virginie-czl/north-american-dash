@@ -384,8 +384,9 @@ async function handleGmailDisconnect(request: Request): Promise<Response> {
 // --- Slack (personal, and only for the task board) ---------------------------
 //
 // A separate grant from the workspace bot that reads #finance-paiement-by-card. This one
-// is per person, asks for two user scopes that cannot read a conversation, and feeds
-// nothing but that person's own cards on /tasks. See slack-user.server.ts.
+// is per person, asks for three user scopes — so it can only ever see what that person can
+// already see — and feeds nothing but that person's own cards on /tasks. Reminders, saved
+// items and their own Activity. See slack-user.server.ts.
 
 const SLACK_STATE_COOKIE = "naboo_slack_state";
 
@@ -399,7 +400,7 @@ async function handleSlackConnect(request: Request): Promise<Response> {
     client_id: requiredEnv("SLACK_CLIENT_ID"),
     redirect_uri: `${origin}/api/slack/callback`,
     // user_scope, not scope: this asks for a token that acts as the person, and only for
-    // the two things they are being asked to share.
+    // the things they are being asked to share.
     user_scope: SLACK_USER_SCOPES.join(","),
     state,
   });

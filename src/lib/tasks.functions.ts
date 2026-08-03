@@ -32,13 +32,25 @@ export type FeedStatus = {
   error: string | null;
 };
 
+export type SlackStatus = {
+  connected: boolean;
+  syncedAt: string | null;
+  error: string | null;
+  /**
+   * True when the grant was made before mentions existed, so it has no `search:read` and
+   * this person's Activity is silently not being read. Worth saying out loud: a connector
+   * that is quietly doing less than the page claims is worse than one that is off.
+   */
+  needsReconnect: boolean;
+};
+
 export type BoardPayload = {
   tasks: Task[];
   feeds: FeedStatus[];
   /** Approved users, for the assignee picker. */
   people: string[];
   /** The caller's own Slack connection — nobody else's is ever reported. */
-  slack: { connected: boolean; syncedAt: string | null; error: string | null };
+  slack: SlackStatus;
 };
 
 // ── Stored state ────────────────────────────────────────────────────────────
@@ -205,18 +217,26 @@ export const fetchBoard = createServerFn({ method: "GET" }).handler(
 
     // Somebody's own Slack, read only for them. Not a FEEDS entry: those are gated by
     // tracker and shared by everyone who has that tracker, and these are neither.
-    let slack: { connected: boolean; syncedAt: string | null; error: string | null } = {
+    let slack: SlackStatus = {
       connected: false,
       syncedAt: null,
       error: null,
+      needsReconnect: false,
     };
     try {
-      const { getSlackConnection, readSlackTasks } = await import("./slack-user.server");
+      const { getSlackConnection, readSlackTasks, SLACK_USER_SCOPES } =
+        await import("./slack-user.server");
       const connection = await getSlackConnection(session.email);
       if (connection) {
         const { slackTasks } = await import("./task-feeds");
         derived.push(...slackTasks(await readSlackTasks(session.email)));
-        slack = { connected: true, syncedAt: connection.synced_at, error: null };
+        const granted = new Set(connection.scopes.split(",").map((s) => s.trim()));
+        slack = {
+          connected: true,
+          syncedAt: connection.synced_at,
+          error: null,
+          needsReconnect: SLACK_USER_SCOPES.some((scope) => !granted.has(scope)),
+        };
       }
     } catch (error) {
       console.error("reading Slack tasks failed:", error);
@@ -224,6 +244,7 @@ export const fetchBoard = createServerFn({ method: "GET" }).handler(
         connected: true,
         syncedAt: null,
         error: error instanceof Error ? error.message : String(error),
+        needsReconnect: false,
       };
     }
 

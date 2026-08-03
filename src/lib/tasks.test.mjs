@@ -24,6 +24,14 @@ import {
   validateManualTask,
 } from "./tasks.ts";
 import { cardTasks, commissionTasks, slackTasks } from "./task-feeds.ts";
+import {
+  activitySubject,
+  activityTitle,
+  ignoredBecause,
+  isActionItem,
+  mentionsPerson,
+  normaliseActivity,
+} from "./slack-activity.ts";
 import { buildRows, aggregateProviders, emptyTerms, NO_EVIDENCE } from "./card-tracking.ts";
 
 let pass = 0,
@@ -411,27 +419,173 @@ console.log("\n[the Slack feed]");
   );
 }
 
+// ── Activity: what a mention is, and what it is not ─────────────────────────
+// The rule the user set is narrow and worth pinning exactly: everything that mentions them
+// is a task except the queued-payment acknowledgement. So there are two failure modes to
+// guard against — the exclusion not firing because the text arrived in a different shape,
+// and the exclusion firing on real work that happens to look similar.
+console.log("\n[mentions become action items, except the one that never is]");
+{
+  const queued = "Payment in queue — tag @Shayma if you need urgent validation.";
+  t("the acknowledgement is not a task", !isActionItem(queued));
+  t("and it says why", (ignoredBecause(queued) ?? "").includes("no reply is expected"));
+
+  // The same line as Slack actually sends it: raw mention markup, plain dashes, shouting,
+  // ragged whitespace. An exclusion that only works on the tidy version is worse than none.
+  const shapes = [
+    "Payment in queue <@U012SHAYMA|shayma> if you need urgent validation",
+    "payment in queue -- tag @shayma if you need urgent validation",
+    "PAYMENT IN QUEUE — TAG @SHAYMA IF YOU NEED URGENT VALIDATION.",
+    "Payment in queue  —  tag  @shayma  if you need urgent validation",
+  ];
+  t(
+    "in every shape Slack sends it",
+    shapes.every((s) => !isActionItem(s)),
+    shapes.filter(isActionItem).join(" | "),
+  );
+  t(
+    "the raw mention flattens to a handle",
+    normaliseActivity("Ping <@U012SHAYMA|shayma> about it") === "ping @shayma about it",
+  );
+  t(
+    "and a link keeps its label, not its url",
+    normaliseActivity("see <https://naboo.app/x|the invoice>") === "see the invoice",
+  );
+
+  // Real work, including work that mentions a payment queue. Nothing here may be dropped.
+  const real = [
+    "@shayma the Fairmont invoice is wrong",
+    "Payment in queue for CR893 has been stuck since Friday — can you look?",
+    "tag @shayma if you need urgent validation on the new process doc",
+    "queue is empty, payment went out",
+  ];
+  t(
+    "everything else is a task",
+    real.every(isActionItem),
+    real.filter((x) => !isActionItem(x)).join(" | "),
+  );
+  t("an empty message is not", !isActionItem("   "));
+
+  // The mention has to be of the person reading the board — search is full text, so this
+  // is what stops somebody else's mention becoming their card.
+  const me = { id: "U012SHAYMA", handle: "shayma" };
+  t("a raw mention counts", mentionsPerson("hi <@U012SHAYMA> can you check", me));
+  t("a rendered handle counts", mentionsPerson("hi @shayma can you check", me));
+  t("somebody else's mention does not", !mentionsPerson("hi <@U099VIRGINIE> ping", me));
+  t("nor a name in passing", !mentionsPerson("shayma is on the Fairmont one", me));
+  t("nor a longer handle that starts the same", !mentionsPerson("@shaymandiaye ping", me));
+
+  // The card says what was said, in the words it was said in.
+  t(
+    "the title is the person's own words",
+    activityTitle("<@U012SHAYMA|shayma> the Fairmont invoice is wrong") ===
+      "@shayma the Fairmont invoice is wrong",
+  );
+  const flat = `${"word ".repeat(60)}end`;
+  const long = activityTitle(flat, 40);
+  // Cut at a word boundary means: what is kept is a prefix of the original, and the
+  // original carries on with a space rather than mid-word.
+  const kept = long.slice(0, -1);
+  t(
+    "a long message is cut at a word",
+    long.length <= 41 && flat.startsWith(kept) && flat[kept.length] === " ",
+    long,
+  );
+  t("and marked as cut", long.endsWith("…"));
+  t(
+    "a short one is left alone",
+    activityTitle("Call the Fairmont back") === "Call the Fairmont back",
+  );
+  t("the channel is named", activitySubject("finance-na") === "Mentioned in #finance-na");
+  t("with or without its hash", activitySubject("#finance-na") === "Mentioned in #finance-na");
+  t("and a DM still says where", activitySubject(null) === "Mentioned in Slack");
+
+  // On the board: a mention is a card like any other, and the exclusion applies again on
+  // the way out so a rule added today quiets rows stored yesterday.
+  const stored = [
+    {
+      slack_id: "C123:1785.2",
+      kind: "mention",
+      title: "@shayma the Fairmont invoice is wrong",
+      subject: "Mentioned in #finance-na",
+      due: null,
+      permalink: "https://naboo.slack.com/archives/C123/p17852",
+    },
+    {
+      slack_id: "C123:1785.3",
+      kind: "mention",
+      title: queued,
+      subject: "Mentioned in #finance-na",
+      due: null,
+      permalink: null,
+    },
+  ];
+  const mentionTasks = slackTasks(stored);
+  t("the acknowledgement is dropped even once stored", mentionTasks.length === 1);
+  t("the mention is its own kind", mentionTasks[0].kind === "slack-mention");
+  t("and says where it was said", mentionTasks[0].subject === "Mentioned in #finance-na");
+  t("it carries no tracker", mentionTasks[0].tracker === null);
+  const mentionBoard = buildBoard(mentionTasks, []);
+  t("it lands in To do", mentionBoard[0].column === "todo");
+  t("keyed as a Slack card", mentionBoard[0].key === "slack::c123:1785.2::slack-mention");
+  t("and opens the thread", mentionBoard[0].href?.includes("/archives/C123/") === true);
+}
+
 console.log("\n[the connector can only read the connecting person]");
 {
   const src = readFileSync(new URL("./slack-user.server.ts", import.meta.url), "utf8");
-  // The scopes are the promise. Neither can read a conversation.
+  // The scopes are the promise. All three are user scopes — they see what this person can
+  // already see and nothing further — and no bot or channel scope is asked for.
   t(
-    "two user scopes, and only two",
-    /SLACK_USER_SCOPES = \["reminders:read", "stars:read"\]/.test(src),
+    "three user scopes, and only three",
+    /SLACK_USER_SCOPES = \["reminders:read", "stars:read", "search:read"\]/.test(src),
   );
-  t("no channel scope is requested", !/channels:|groups:|im:|mpim:|search:/.test(src));
-  // The endpoints are caller-scoped by definition, and no other Slack method is called.
-  const methods = [...src.matchAll(/slack<[^>]*>\(email, "([^"]+)"\)/g)].map((m) => m[1]);
-  t("exactly two Slack methods are called", methods.length === 2, methods.join(", "));
+  t("no channel scope is requested", !/channels:|groups:|im:|mpim:/.test(src));
+  // The endpoints, and each anchored to the token's owner.
+  const methods = [...src.matchAll(/slack<[^>]*>\(\s*email,\s*[`"]([^`"]+)[`"]/g)].map((m) => m[1]);
+  t("exactly four Slack methods are called", methods.length === 4, methods.join(", "));
   t(
     "and they are the personal ones",
-    methods.every((m) => /^reminders\.list|^stars\.list/.test(m)),
+    methods.every((m) => /^reminders\.list|^stars\.list|^auth\.test|^search\.messages/.test(m)),
     methods.join(", "),
   );
-  t("nothing searches Slack", !/search\.messages|conversations\.history|users\.list/.test(src));
+  // Search is the one read that takes a query, so the anchoring is the code's job: the
+  // handle comes from auth.test on this person's own token, never from a caller.
+  t("the search query is the caller's own handle", /query=\$\{query\}/.test(src));
+  t(
+    "and that handle is asked of Slack, not passed in",
+    /const query = encodeURIComponent\(`@\$\{me\.handle \|\| me\.id\}`\)/.test(src) &&
+      /const me = await whoAmI\(email\)/.test(src),
+  );
+  t(
+    "every match is checked against that same person",
+    /if \(!mentionsPerson\(match\.text, me\)\) continue/.test(src),
+  );
+  t(
+    "nothing lists channels or people",
+    !/conversations\.history|conversations\.list|users\.list|users\.info/.test(src),
+  );
+  t(
+    "the excluded acknowledgement never becomes a task",
+    /if \(!isActionItem\(match\.text\)\) continue/.test(src),
+  );
   // Reads and writes are both keyed on the owner.
   t("the read is scoped to one person", /WHERE owner_email = \$\{email\}/.test(src));
-  t("so is the replace", /DELETE FROM slack_tasks WHERE owner_email = \$\{email\}/.test(src));
+  t("so is the replace", /DELETE FROM slack_tasks\s+WHERE owner_email = \$\{email\}/.test(src));
+  // Reminders are state and can be replaced; a mention happened once and would be lost.
+  t(
+    "only reminders and saves are replaced",
+    /WHERE owner_email = \$\{email\} AND kind IN \$\{tx\(STATE_KINDS\)\}/.test(src),
+  );
+  t(
+    "a mention read twice stays one card",
+    /ON CONFLICT \(owner_email, slack_id\) DO NOTHING/.test(src),
+  );
+  t("and old mentions are pruned", /AND kind = 'mention'\s+AND first_seen_at </.test(src));
+  t(
+    "the window and the cron are one number",
+    /MENTION_WINDOW_MINUTES = 15/.test(src) && /windowMinutes = MENTION_WINDOW_MINUTES/.test(src),
+  );
   t(
     "disconnecting takes the tasks with it",
     /DELETE FROM slack_tasks WHERE owner_email[\s\S]{0,200}DELETE FROM slack_credentials/.test(src),

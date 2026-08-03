@@ -2,12 +2,14 @@
  * Scheduled work, dispatched from src/server.ts ahead of the app.
  *
  * One job: pull each connected person's own Slack items so their board is current
- * without anyone pressing anything. Every fifteen minutes (see vercel.json).
+ * without anyone pressing anything. Every fifteen minutes (see vercel.json), which is also
+ * the window a sync reads mentions over — the two are the same number on purpose, so no
+ * quarter hour of somebody's Activity goes unread.
  *
  * Two things this deliberately does not do. It does not touch a person who has not
- * connected Slack, and it does not read anything but that person's own reminders and
- * saved items — the loop is over stored grants, and each iteration uses that grant's own
- * token against two endpoints that take no user parameter. A cron with a shared token
+ * connected Slack, and it does not read anything but that person's own reminders, saved
+ * items and mentions of them — the loop is over stored grants, and each iteration uses
+ * that grant's own token, anchored to that grant's own handle. A cron with a shared token
  * reading everybody's Slack would be a different feature and not one that was asked for.
  *
  * Authorisation: Vercel signs its own cron calls with `CRON_SECRET`. Without the secret

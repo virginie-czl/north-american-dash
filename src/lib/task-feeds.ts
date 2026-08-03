@@ -13,6 +13,7 @@
  */
 import { accepts, fmtAmount, needsDecision, nextMove, type CardRow } from "./card-tracking.ts";
 import type { CommissionRow } from "./commission.functions";
+import { isActionItem } from "./slack-activity.ts";
 import type { DerivedTask } from "./tasks";
 import type { StoredSlackTask } from "./slack-user.server";
 
@@ -88,21 +89,46 @@ export function commissionTasks(rows: CommissionRow[]): DerivedTask[] {
  * own account, and they carry no tracker, so nothing about them is visible to anyone else
  * on this shared board. The board does not interpret them — a reminder is a reminder, in
  * the words the person wrote — and completing it in Slack is what closes it here.
+ *
+ * Mentions are filtered again on the way out. The exclusion list already ran when they were
+ * read, but a rule added afterwards has to apply to what is already stored, or quieting the
+ * board would mean waiting for rows to age out.
  */
 export function slackTasks(items: StoredSlackTask[]): DerivedTask[] {
-  return items.map((item) => ({
-    tracker: null,
-    kind: item.kind === "saved" ? "slack-saved" : "slack-reminder",
-    ref: item.slack_id,
-    title: item.title,
-    subject: item.kind === "saved" ? "Saved in Slack" : "Slack reminder",
-    amount: null,
-    owner: "us" as const,
-    permalink: item.permalink,
-    due: item.due,
-    sourceLabel: "My Slack",
-  }));
+  const tasks: DerivedTask[] = [];
+  for (const item of items) {
+    if (item.kind === "mention" && !isActionItem(item.title)) continue;
+    tasks.push({
+      tracker: null,
+      kind: SLACK_KINDS[item.kind],
+      ref: item.slack_id,
+      title: item.title,
+      subject:
+        item.kind === "mention"
+          ? (item.subject ?? "Mentioned in Slack")
+          : SLACK_SUBJECTS[item.kind],
+      amount: null,
+      owner: "us" as const,
+      permalink: item.permalink,
+      due: item.due,
+      sourceLabel: "My Slack",
+    });
+  }
+  return tasks;
 }
+
+const SLACK_KINDS: Record<StoredSlackTask["kind"], string> = {
+  reminder: "slack-reminder",
+  saved: "slack-saved",
+  mention: "slack-mention",
+};
+
+const SLACK_SUBJECTS: Record<StoredSlackTask["kind"], string> = {
+  reminder: "Slack reminder",
+  saved: "Saved in Slack",
+  // Overridden by the stored channel when there is one.
+  mention: "Mentioned in Slack",
+};
 
 /** Re-exported so the feeds and their tests share one notion of "accepting". */
 export { accepts };
