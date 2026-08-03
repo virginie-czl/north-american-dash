@@ -3,6 +3,7 @@ import {
   AIRLINE_CARRIERS,
   buildRows,
   cardKpis,
+  cardOkIfFeeNote,
   cardOutreach,
   cardStatus,
   CARD_SCOPES,
@@ -30,9 +31,11 @@ import {
   payableNote,
   peakAmount,
   provenance,
+  refusesNote,
   rowNabooPays,
   scopeCounts,
   scopeMatcher,
+  sumAmounts,
   sortRows,
   validateCardTerms,
 } from "./card-tracking.ts";
@@ -573,10 +576,30 @@ console.log("\n[needsDecision]");
   t("and duplicates nothing", open.length === 1 && settled.length === 1);
 }
 
+console.log("\n[sumAmounts]");
+{
+  const rows = buildRows(
+    aggregateProviders([
+      row({ owner_code: "O-G001", currency: "CAD", outstanding: 1000 }),
+      row({ owner_code: "O-G002", currency: "CAD", outstanding: 2500 }),
+      row({ owner_code: "O-G003", currency: "USD", outstanding: 9999 }),
+    ]),
+    new Map(),
+    new Map(),
+  );
+  t(
+    "sums only the requested currency",
+    sumAmounts(rows, "CAD").currency === "CAD" && sumAmounts(rows, "CAD").amount === 3500,
+  );
+  t("a currency nothing carries is null, not zero", sumAmounts(rows, "GBP") === null);
+  t("no currency to look for is null", sumAmounts(rows, null) === null);
+  t("no rows is null", sumAmounts([], "CAD") === null);
+}
+
 console.log("\n[cardKpis]");
 {
-  // Four providers: one never asked, one accepting-undecided, one accepted-and-paid
-  // with a fee, one we decline with a reason on file.
+  // Six providers: one never asked, one accepting-undecided, two accepted-and-paid
+  // with a fee, one we decline with a reason on file, one refusing outright.
   const quotes = [
     row({ owner_code: "O-A001", currency: "USD", outstanding: 12300 }),
     row({ owner_code: "O-B002", currency: "CAD", outstanding: 14505 }),
@@ -584,6 +607,7 @@ console.log("\n[cardKpis]");
     row({ owner_code: "O-D004", currency: "USD", outstanding: 26780 }),
     // One provider whose currency is numerically enormous and materially small.
     row({ owner_code: "O-E005", currency: "IDR", outstanding: 281000000 }),
+    row({ owner_code: "O-F006", currency: "CAD", outstanding: 5000 }),
   ];
   const rows = buildRows(
     aggregateProviders(quotes),
@@ -592,6 +616,7 @@ console.log("\n[cardKpis]");
       ["O-C003", terms({ fee_percent: 1.75, naboo_pays_card: "yes" })],
       ["O-D004", terms({ naboo_pays_card: "no", naboo_reason: "Over the card limit" })],
       ["O-E005", terms({ naboo_pays_card: "yes" })],
+      ["O-F006", terms({ accepts_card: "no" })],
     ]),
     new Map([
       ["O-B002", ev({ emailVerdict: "accepted" })],
@@ -605,8 +630,20 @@ console.log("\n[cardKpis]");
   t("split by which question is unanswered", k.open.neverAsked === 1 && k.open.waitingOnUs === 1);
   t("payable by card", k.payableByCard.total === 4, k.payableByCard.total);
   t("of which some charge a fee", k.payableByCard.withFee === 2, k.payableByCard.withFee);
+  t(
+    "the fee amount is only the fee-charging slice, in the dominant currency",
+    k.payableByCard.feeAmount.currency === "CAD" && k.payableByCard.feeAmount.amount === 102720,
+    k.payableByCard.feeAmount,
+  );
   t("they accept and we decline", k.weDecline.total === 1);
   t("the decline is on the record", k.weDecline.withReason === 1);
+  t("one provider refuses", k.refuses.total === 1, k.refuses.total);
+  t(
+    "and their exposure is tracked too",
+    k.refuses.amount.currency === "CAD" && k.refuses.amount.amount === 5000,
+    k.refuses.amount,
+  );
+  t("no refusals, no amount", cardKpis([]).refuses.amount === null);
 
   // The trap the design called out: 281,000,000 IDR is the biggest number here and
   // means the least. The currency is picked by how many providers carry it.
@@ -633,6 +670,15 @@ t(
 );
 t("fees among the accepting", payableNote({ total: 8, withFee: 4 }) === "4 of them charge a fee");
 t("none charging", payableNote({ total: 8, withFee: 0 }) === "none of them charge a fee");
+t(
+  "the fee-charging count, on its own",
+  cardOkIfFeeNote({ total: 8, withFee: 4 }) === "4 providers",
+);
+t("singular", cardOkIfFeeNote({ total: 8, withFee: 1 }) === "1 provider");
+t("none charge a fee", cardOkIfFeeNote({ total: 8, withFee: 0 }) === "none charge a fee");
+t("one refusal", refusesNote({ total: 1, amount: null }) === "1 provider");
+t("several refusals", refusesNote({ total: 3, amount: null }) === "3 providers");
+t("nobody has refused", refusesNote({ total: 0, amount: null }) === "nobody has refused");
 t(
   "two declines both written up",
   declineNote({ total: 2, withReason: 2 }) === "both with a written reason",
@@ -688,19 +734,19 @@ console.log("\n[nextMove and provenance]");
 
 console.log("\n[cardOutreach]");
 {
-  const one = cardOutreach({ provider_name: "Rooftop 210", bookings: 1 });
-  const many = cardOutreach({ provider_name: "Rooftop 210", bookings: 3 });
+  const one = cardOutreach({ provider_name: "Rooftop 210" });
   t("the provider is named in the subject", one.subject.includes("Rooftop 210"));
-  t("singular booking", /1 booking\b/.test(one.body) && one.subject.includes("Naboo booking —"));
-  t("plural in the subject too", many.subject.includes("Naboo bookings —"));
-  t("plural bookings", /3 bookings/.test(many.body));
+  t("and in the greeting", one.body.includes("Hi team Rooftop 210,"));
   t(
     "it asks the two questions this page exists for",
-    /accept payment by credit card/.test(one.body) && /card fee/.test(one.body),
+    /accept credit card payments/.test(one.body) && /card processing fees/.test(one.body),
   );
   // A refusal has to be an acceptable answer, or the reply rate suffers and the
-  // "Refuses card" status never gets recorded.
-  t("a no is welcome", /bank transfer instead/.test(one.body));
+  // "Refuses card" status never gets recorded — this template never says "if you
+  // don't take card" explicitly, but doesn't demand a yes either, and email-facts.ts
+  // now reads a reply that neither accepts nor sends a payment link as a no anyway.
+  t("no shortcodes leaked into the subject", !/:\w+:/.test(one.subject));
+  t("no shortcodes leaked into the body", !/:\w+:/.test(one.body));
 }
 
 // ── Naboo's own answer ──────────────────────────────────────────────────────

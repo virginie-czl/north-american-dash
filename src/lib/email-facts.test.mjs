@@ -258,7 +258,7 @@ if (fail) process.exitCode = 1;
     at: "2026-04-05T09:00:00Z",
     from: ME,
     subject: "Card payment for your upcoming booking",
-    body: cardOutreach({ provider_name: "Traiteur X", bookings: 1 }).body,
+    body: cardOutreach({ provider_name: "Traiteur X" }).body,
   };
   const facts = (reply) => extractFacts([asked, reply], ME);
 
@@ -327,10 +327,13 @@ if (fail) process.exitCode = 1;
     neverAsked.cardPayment,
   );
 
-  t("our own outreach template is recognised as asking about card", (() => {
-    const outboundOnly = extractFacts([asked], ME);
-    return outboundOnly.signals.includes("card:asked");
-  })());
+  t(
+    "our own outreach template is recognised as asking about card",
+    (() => {
+      const outboundOnly = extractFacts([asked], ME);
+      return outboundOnly.signals.includes("card:asked");
+    })(),
+  );
 
   console.log(`\n[card silence] ${p} passed, ${f} failed`);
   if (f) process.exitCode = 1;

@@ -25,6 +25,7 @@ import {
   accepts,
   approvalNote,
   cardKpis,
+  cardOkIfFeeNote,
   cardOutreach,
   cardStatus,
   csvRows,
@@ -43,6 +44,7 @@ import {
   partitionRows,
   payableNote,
   provenance,
+  refusesNote,
   rowNabooPays,
   scopeCounts,
   sortRows,
@@ -57,7 +59,7 @@ import {
 import { getCardProviders } from "@/lib/card-tracking.functions";
 import { fetchCardEvidence, fetchCardTerms, saveCardTerms } from "@/lib/card-terms.functions";
 import { syncCardApprovals } from "@/lib/slack-cards.functions";
-import { useDraftEmail } from "@/lib/use-gmail";
+import { useDraftEmail, useFactScan, useGmailConnection } from "@/lib/use-gmail";
 import { useRegisterTrackerActions } from "@/components/tracker-chrome";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -160,6 +162,8 @@ function CardTrackingPage() {
   });
 
   const draft = useDraftEmail();
+  const { data: gmailConnection } = useGmailConnection();
+  const { progress: recheckProgress, start: startRecheck } = useFactScan();
 
   const rows = useMemo(() => {
     const termsByOwner = new Map((termsQuery.data ?? []).map((t) => [t.owner_code, t]));
@@ -176,6 +180,29 @@ function CardTrackingPage() {
     );
     return buildRows(providers, termsByOwner, evidenceByOwner);
   }, [providers, termsQuery.data, evidenceQuery.data]);
+
+  // Providers currently trusted as "Card OK" purely on an old email verdict — the
+  // exact case the detection rules got wrong before they were tightened (see
+  // email-facts.ts). There is nothing left to re-derive this from without reading
+  // the thread again, so every one of their bookings goes back through the real
+  // scan rather than a guess.
+  const recheckEvents = useMemo(() => {
+    const byEvent = new Map<string, Array<{ name: string; email: string | null }>>();
+    for (const r of rows) {
+      if (r.evidence.emailVerdict !== "accepted") continue;
+      for (const eventRef of r.provider.event_refs) {
+        const partners = byEvent.get(eventRef) ?? [];
+        partners.push({ name: r.provider.provider_name, email: r.provider.email });
+        byEvent.set(eventRef, partners);
+      }
+    }
+    return [...byEvent.entries()].map(([event_ref, partners]) => ({ event_ref, partners }));
+  }, [rows]);
+
+  async function recheckEmailEvidence() {
+    await startRecheck(recheckEvents);
+    queryClient.invalidateQueries({ queryKey: ["na-card-evidence"] });
+  }
 
   // The KPI band answers for the whole set; search narrows the two lists below it. The
   // group counts follow what is on screen and say so when they are a subset.
@@ -307,8 +334,43 @@ function CardTrackingPage() {
               />
               {syncCards.isPending ? "Syncing…" : "Refresh card approvals"}
             </Button>
+            {gmailConnection?.connected && recheckEvents.length > 0 && (
+              <Button
+                variant="naboo-ghost"
+                size="naboo"
+                onClick={recheckEmailEvidence}
+                disabled={recheckProgress.running}
+                title="Re-reads the thread for every provider currently marked Card OK on an old email verdict"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${recheckProgress.running ? "animate-spin" : ""}`}
+                  aria-hidden="true"
+                />
+                {recheckProgress.running
+                  ? `Rechecking… ${recheckProgress.done}/${recheckProgress.total}`
+                  : `Recheck email evidence (${recheckEvents.length})`}
+              </Button>
+            )}
           </div>
         </div>
+
+        {recheckProgress.error && (
+          <div
+            role="alert"
+            className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-[12.5px] text-rose-800"
+          >
+            Recheck interrupted: {recheckProgress.error}
+          </div>
+        )}
+        {!recheckProgress.running &&
+          recheckProgress.done > 0 &&
+          recheckProgress.done === recheckProgress.total && (
+            <p className="m-0 text-[11.5px] text-slate-500">
+              Rechecked {recheckProgress.total} event{recheckProgress.total === 1 ? "" : "s"} —{" "}
+              {recheckProgress.matched} provider{recheckProgress.matched === 1 ? "" : "s"} matched
+              in Gmail.
+            </p>
+          )}
 
         {(error != null || save.isError || syncCards.isError || draft.isError) && (
           <div
@@ -329,7 +391,7 @@ function CardTrackingPage() {
         )}
 
         {/* 2 — KPI band */}
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
           <Kpi
             dark
             label="Open decisions"
@@ -344,9 +406,36 @@ function CardTrackingPage() {
             note={isLoading ? " " : payableNote(kpis.payableByCard)}
           />
           <Kpi
+            // Named by currency for the same reason as the exposure card below: this is
+            // one currency's total, never a sum across the others in play.
+            label={
+              kpis.payableByCard.feeAmount
+                ? `Accepts with a fee (${kpis.payableByCard.feeAmount.currency})`
+                : "Accepts with a fee"
+            }
+            value={
+              isLoading || !kpis.payableByCard.feeAmount
+                ? "—"
+                : fmtRound(kpis.payableByCard.feeAmount.amount)
+            }
+            unit={kpis.payableByCard.feeAmount?.currency}
+            note={isLoading ? " " : cardOkIfFeeNote(kpis.payableByCard)}
+          />
+          <Kpi
             label="They accept, we decline"
             value={isLoading ? "…" : String(kpis.weDecline.total)}
             note={isLoading ? " " : declineNote(kpis.weDecline)}
+          />
+          <Kpi
+            label={
+              kpis.refuses.amount
+                ? `Refuses card (${kpis.refuses.amount.currency})`
+                : "Refuses card"
+            }
+            valueClassName="text-red-700"
+            value={isLoading || !kpis.refuses.amount ? "—" : fmtRound(kpis.refuses.amount.amount)}
+            unit={kpis.refuses.amount?.currency}
+            note={isLoading ? " " : refusesNote(kpis.refuses)}
           />
           <Kpi
             // The currency is named in the label because the figure is one currency's

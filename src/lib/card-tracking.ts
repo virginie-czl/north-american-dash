@@ -690,11 +690,21 @@ export function partitionRows(rows: CardRow[]): { open: CardRow[]; settled: Card
 
 export type CardExposure = { currency: string; amount: number; provider: string };
 
+/** A total in one named currency — never a cross-currency sum, same reasoning as `largestExposure`. */
+export type CardAmountSummary = { currency: string; amount: number } | null;
+
 export type CardKpis = {
   /** Open decisions, split by which of the two questions is unanswered. */
   open: { total: number; neverAsked: number; waitingOnUs: number };
-  payableByCard: { total: number; withFee: number };
+  /**
+   * Accepting providers. `feeAmount` is only the fee-charging slice's exposure —
+   * the case a fee turns from "why not?" into "is it worth it?" — not the whole
+   * `payableByCard` total, which would blur that split back together.
+   */
+  payableByCard: { total: number; withFee: number; feeAmount: CardAmountSummary };
   weDecline: { total: number; withReason: number };
+  /** Providers who refuse card outright, and what is owed to them while they do. */
+  refuses: { total: number; amount: CardAmountSummary };
   /**
    * The largest single exposure inside one named currency.
    *
@@ -707,6 +717,21 @@ export type CardKpis = {
    */
   largestExposure: CardExposure | null;
 };
+
+/** Every row's exposure in one currency, summed — the rows that are not in that currency contribute nothing. */
+export function sumAmounts(rows: CardRow[], currency: string | null): CardAmountSummary {
+  if (!currency) return null;
+  let total = 0;
+  let any = false;
+  for (const row of rows) {
+    for (const a of row.provider.amounts) {
+      if (a.currency !== currency) continue;
+      total += a.amount;
+      any = true;
+    }
+  }
+  return any ? { currency, amount: round2(total) } : null;
+}
 
 /** The currency the most providers are owed in. Ties broken by name, for stability. */
 export function dominantCurrency(rows: CardRow[]): string | null {
@@ -728,7 +753,9 @@ export function dominantCurrency(rows: CardRow[]): string | null {
 export function cardKpis(rows: CardRow[]): CardKpis {
   const open = rows.filter(needsDecision);
   const payable = rows.filter((r) => accepts(r.verdict.status));
+  const withFeeRows = payable.filter((r) => r.verdict.status === "card_ok_if_fee");
   const decline = payable.filter((r) => rowNabooPays(r).value === "no");
+  const refuses = rows.filter((r) => r.verdict.status === "refuses");
 
   const currency = dominantCurrency(rows);
   let largest: CardExposure | null = null;
@@ -749,11 +776,16 @@ export function cardKpis(rows: CardRow[]): CardKpis {
     },
     payableByCard: {
       total: payable.length,
-      withFee: payable.filter((r) => hasFee(r.terms)).length,
+      withFee: withFeeRows.length,
+      feeAmount: sumAmounts(withFeeRows, currency),
     },
     weDecline: {
       total: decline.length,
       withReason: decline.filter((r) => (r.terms.naboo_reason ?? "").trim().length > 0).length,
+    },
+    refuses: {
+      total: refuses.length,
+      amount: sumAmounts(refuses, currency),
     },
     largestExposure: largest,
   };
@@ -773,6 +805,16 @@ export function payableNote(payable: CardKpis["payableByCard"]): string {
   if (payable.total === 0) return "none established yet";
   if (payable.withFee === 0) return "none of them charge a fee";
   return `${payable.withFee} of them charge a fee`;
+}
+
+/** "3 providers" — the fee-charging half of `payableByCard`, as a count. */
+export function cardOkIfFeeNote(payable: CardKpis["payableByCard"]): string {
+  return payable.withFee === 0 ? "none charge a fee" : pluralise(payable.withFee, "provider");
+}
+
+/** "4 providers" — how many refuse, since the KPI value itself is the amount, not the count. */
+export function refusesNote(refuses: CardKpis["refuses"]): string {
+  return refuses.total === 0 ? "nobody has refused" : pluralise(refuses.total, "provider");
 }
 
 /**
@@ -834,28 +876,34 @@ export function provenance(row: CardRow): string {
  * draft path the other trackers use, so it lands in the sender's own drafts for a read
  * before it goes.
  */
-export function cardOutreach(provider: Pick<CardProvider, "provider_name" | "bookings">): {
+export function cardOutreach(provider: Pick<CardProvider, "provider_name">): {
   subject: string;
   body: string;
 } {
   return {
-    subject: `Card payment for your upcoming Naboo booking${
-      provider.bookings > 1 ? "s" : ""
-    } — ${provider.provider_name}`,
-    body: `Hi,
+    subject: `Get paid faster by Naboo 💳 — a better way than wire transfers — ${provider.provider_name}`,
+    body: `Hi team ${provider.provider_name},
 
-Hope you're doing well! ☀️
+Hope you're doing great! ☀️
 
-We are settling ${pluralise(provider.bookings, "booking")} with you and would like to pay by corporate credit card if that works on your side.
+I'm reaching out with news I think you'll genuinely like — we've just rolled out a faster, easier way for you to get paid by Naboo.
 
-Two questions:
+Instead of waiting on a wire transfer to clear (and we know international transfers can take days, sometimes with bank fees eaten along the way), we can now pay you automatically by credit card. Here's why our partners are loving it:
 
-• Do you accept payment by credit card?
-• If you do, is there a card fee — a percentage, a flat amount, or both?
+• You get your money faster. The card arrives in your inbox as soon as the client payment hit our account. No delay. You charge the card yourself, the moment we send it — no waiting on bank processing times or cut-off hours.
+• It's fully secure. The card details are shared through a secure channel, never by plain email.
+• It's effortless going forward. We can set it up as a card on file per booking, so future bookings are paid automatically — no more invoices chasing, no more bank detail forms.
 
-If card is not an option we will arrange a bank transfer instead, so either answer is fine — we just need to know which.
+Honestly, once partners switch, they rarely go back to wires.
 
-Thanks so much!`,
+To get you all set up for future bookings, I just have two quick questions:
+
+1. Do you accept credit card payments?
+2. If so, do you apply any card processing fees?
+
+Just hit reply and I'll take care of everything from there — it takes only a few minutes on your side.
+
+Cheers,`,
   };
 }
 
