@@ -381,6 +381,131 @@ async function handleGmailDisconnect(request: Request): Promise<Response> {
   return new Response(null, { status: 204 });
 }
 
+// --- Slack (personal, and only for the task board) ---------------------------
+//
+// A separate grant from the workspace bot that reads #finance-paiement-by-card. This one
+// is per person, asks for two user scopes that cannot read a conversation, and feeds
+// nothing but that person's own cards on /tasks. See slack-user.server.ts.
+
+const SLACK_STATE_COOKIE = "naboo_slack_state";
+
+async function handleSlackConnect(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return redirect("/auth");
+  const origin = requestOrigin(request);
+  const state = crypto.randomUUID();
+  const { SLACK_AUTHORIZE_URL, SLACK_USER_SCOPES } = await import("./slack-user.server");
+  const params = new URLSearchParams({
+    client_id: requiredEnv("SLACK_CLIENT_ID"),
+    redirect_uri: `${origin}/api/slack/callback`,
+    // user_scope, not scope: this asks for a token that acts as the person, and only for
+    // the two things they are being asked to share.
+    user_scope: SLACK_USER_SCOPES.join(","),
+    state,
+  });
+  return redirect(`${SLACK_AUTHORIZE_URL}?${params.toString()}`, [
+    serializeCookie(SLACK_STATE_COOKIE, state, {
+      maxAge: 600,
+      secure: isSecureOrigin(origin),
+    }),
+  ]);
+}
+
+async function handleSlackCallback(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return redirect("/auth");
+  const origin = requestOrigin(request);
+  const secure = isSecureOrigin(origin);
+  const clearState = serializeCookie(SLACK_STATE_COOKIE, "", { maxAge: 0, secure });
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const cookies = parseCookies(request.headers.get("cookie"));
+
+  if (!code || !state || cookies[SLACK_STATE_COOKIE] !== state) {
+    return redirect("/tasks?slack=error", [clearState]);
+  }
+
+  const response = await fetch("https://slack.com/api/oauth.v2.access", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: requiredEnv("SLACK_CLIENT_ID"),
+      client_secret: requiredEnv("SLACK_CLIENT_SECRET"),
+      redirect_uri: `${origin}/api/slack/callback`,
+    }),
+  });
+  const body = (await response.json()) as {
+    ok?: boolean;
+    error?: string;
+    team?: { name?: string };
+    authed_user?: { id?: string; access_token?: string; scope?: string };
+  };
+  const user = body.authed_user;
+  if (!response.ok || body.ok !== true || !user?.access_token || !user.id) {
+    console.error("Slack token exchange failed:", body.error ?? response.status);
+    return redirect("/tasks?slack=error", [clearState]);
+  }
+
+  const { storeSlackToken, syncSlackTasks } = await import("./slack-user.server");
+  await storeSlackToken({
+    email: session.email,
+    token: user.access_token,
+    scopes: user.scope ?? "",
+    slackUserId: user.id,
+    teamName: body.team?.name ?? null,
+  });
+  // Pull straight away rather than leaving the board empty until the cron runs: the
+  // person just connected an account and expects to see something for it.
+  try {
+    await syncSlackTasks(session.email);
+  } catch (error) {
+    console.error("first Slack sync failed (the cron will retry):", error);
+    return redirect("/tasks?slack=connected-empty", [clearState]);
+  }
+  return redirect("/tasks?slack=connected", [clearState]);
+}
+
+async function handleSlackStatus(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  const { getSlackConnection } = await import("./slack-user.server");
+  const connection = await getSlackConnection(session.email);
+  return new Response(JSON.stringify({ connected: connection != null, ...connection }), {
+    status: 200,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+async function handleSlackDisconnect(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  const { disconnectSlack } = await import("./slack-user.server");
+  await disconnectSlack(session.email);
+  return new Response(null, { status: 204 });
+}
+
+/** The button on the board: pull my own items now rather than waiting for the cron. */
+async function handleSlackSync(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  const { syncSlackTasks } = await import("./slack-user.server");
+  try {
+    const result = await syncSlackTasks(session.email);
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  } catch (error) {
+    // A sync that fails must say so: the board would otherwise look up to date.
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+      { status: 502, headers: { "content-type": "application/json" } },
+    );
+  }
+}
+
 // --- Access administration ---------------------------------------------------
 
 async function handleAdminUsers(request: Request): Promise<Response> {
@@ -428,6 +553,7 @@ export async function handleAuthRequest(request: Request): Promise<Response | nu
   if (
     !pathname.startsWith("/api/auth/") &&
     !pathname.startsWith("/api/gmail/") &&
+    !pathname.startsWith("/api/slack/") &&
     !pathname.startsWith("/api/admin/")
   ) {
     return null;
@@ -439,6 +565,21 @@ export async function handleAuthRequest(request: Request): Promise<Response | nu
     }
     if (pathname === "/api/admin/decide" && request.method === "POST") {
       return await handleAdminDecide(request);
+    }
+    if (pathname === "/api/slack/connect" && request.method === "GET") {
+      return await handleSlackConnect(request);
+    }
+    if (pathname === "/api/slack/callback" && request.method === "GET") {
+      return await handleSlackCallback(request);
+    }
+    if (pathname === "/api/slack/status" && request.method === "GET") {
+      return await handleSlackStatus(request);
+    }
+    if (pathname === "/api/slack/disconnect" && request.method === "POST") {
+      return await handleSlackDisconnect(request);
+    }
+    if (pathname === "/api/slack/sync" && request.method === "POST") {
+      return await handleSlackSync(request);
     }
     if (pathname === "/api/gmail/connect" && request.method === "GET") {
       return await handleGmailConnect(request);

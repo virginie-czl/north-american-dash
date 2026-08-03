@@ -37,6 +37,8 @@ export type BoardPayload = {
   feeds: FeedStatus[];
   /** Approved users, for the assignee picker. */
   people: string[];
+  /** The caller's own Slack connection — nobody else's is ever reported. */
+  slack: { connected: boolean; syncedAt: string | null; error: string | null };
 };
 
 // ── Stored state ────────────────────────────────────────────────────────────
@@ -56,14 +58,18 @@ type StateRow = {
   updated_at: Date | null;
 };
 
-function toState(row: StateRow, isoOrNull: (v: unknown) => string | null): TaskState {
+function toState(
+  row: StateRow,
+  isoOrNull: (v: unknown) => string | null,
+  dayOrNull: (v: unknown) => string | null,
+): TaskState {
   return {
     key: row.key,
     manual: row.manual === true,
     column: isTaskColumn(row.column_key) ? row.column_key : "todo",
     assignee: row.assignee,
     note: row.note,
-    due: row.due == null ? null : String(row.due).slice(0, 10),
+    due: dayOrNull(row.due),
     title: row.title,
     tracker: isTrackerKey(row.tracker) ? row.tracker : null,
     ref: row.ref,
@@ -74,7 +80,7 @@ function toState(row: StateRow, isoOrNull: (v: unknown) => string | null): TaskS
 }
 
 async function readState(): Promise<TaskState[]> {
-  const { db, isoOrNull } = await import("./db.server");
+  const { db, isoOrNull, dayOrNull } = await import("./db.server");
   const sql = await db();
   const rows = await sql<StateRow[]>`
     SELECT key, manual, column_key, assignee, note, due, title, tracker, ref,
@@ -82,7 +88,7 @@ async function readState(): Promise<TaskState[]> {
     FROM tracker_tasks
     ORDER BY updated_at DESC
   `;
-  return rows.map((r) => toState(r, isoOrNull));
+  return rows.map((r) => toState(r, isoOrNull, dayOrNull));
 }
 
 // ── The feeds ───────────────────────────────────────────────────────────────
@@ -197,12 +203,36 @@ export const fetchBoard = createServerFn({ method: "GET" }).handler(
       }
     }
 
+    // Somebody's own Slack, read only for them. Not a FEEDS entry: those are gated by
+    // tracker and shared by everyone who has that tracker, and these are neither.
+    let slack: { connected: boolean; syncedAt: string | null; error: string | null } = {
+      connected: false,
+      syncedAt: null,
+      error: null,
+    };
+    try {
+      const { getSlackConnection, readSlackTasks } = await import("./slack-user.server");
+      const connection = await getSlackConnection(session.email);
+      if (connection) {
+        const { slackTasks } = await import("./task-feeds");
+        derived.push(...slackTasks(await readSlackTasks(session.email)));
+        slack = { connected: true, syncedAt: connection.synced_at, error: null };
+      }
+    } catch (error) {
+      console.error("reading Slack tasks failed:", error);
+      slack = {
+        connected: true,
+        syncedAt: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+
     const people = (await listUsers())
       .filter((u) => u.status === "approved")
       .map((u) => u.email)
       .sort();
 
-    return { tasks: buildBoard(derived, await readState()), feeds, people };
+    return { tasks: buildBoard(derived, await readState()), feeds, people, slack };
   },
 );
 
@@ -258,7 +288,7 @@ export const saveTaskState = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<TaskState> => {
     const { requireSession } = await import("./session.server");
     const session = await requireSession();
-    const { db, isoOrNull } = await import("./db.server");
+    const { db, isoOrNull, dayOrNull } = await import("./db.server");
     const sql = await db();
 
     const column: TaskColumn = data.column ?? "todo";
@@ -285,7 +315,7 @@ export const saveTaskState = createServerFn({ method: "POST" })
       RETURNING key, manual, column_key, assignee, note, due, title, tracker, ref,
                 created_by, updated_by, updated_at
     `;
-    return toState(rows[0], isoOrNull);
+    return toState(rows[0], isoOrNull, dayOrNull);
   });
 
 /** A task somebody typed. The only kind that can be created, edited or deleted. */
@@ -308,7 +338,7 @@ export const createManualTask = createServerFn({ method: "POST" })
     const problem = validateManualTask(data);
     if (problem) throw new Error(problem);
 
-    const { db, isoOrNull } = await import("./db.server");
+    const { db, isoOrNull, dayOrNull } = await import("./db.server");
     const sql = await db();
     const key = `manual::${crypto.randomUUID()}`;
     const rows = await sql<StateRow[]>`
@@ -323,7 +353,7 @@ export const createManualTask = createServerFn({ method: "POST" })
       RETURNING key, manual, column_key, assignee, note, due, title, tracker, ref,
                 created_by, updated_by, updated_at
     `;
-    return toState(rows[0], isoOrNull);
+    return toState(rows[0], isoOrNull, dayOrNull);
   });
 
 export const updateManualTask = createServerFn({ method: "POST" })
@@ -347,7 +377,7 @@ export const updateManualTask = createServerFn({ method: "POST" })
     const problem = validateManualTask(data);
     if (problem) throw new Error(problem);
 
-    const { db, isoOrNull } = await import("./db.server");
+    const { db, isoOrNull, dayOrNull } = await import("./db.server");
     const sql = await db();
     const rows = await sql<StateRow[]>`
       UPDATE tracker_tasks SET
@@ -359,7 +389,7 @@ export const updateManualTask = createServerFn({ method: "POST" })
                 created_by, updated_by, updated_at
     `;
     if (rows.length === 0) throw new Error("That task no longer exists.");
-    return toState(rows[0], isoOrNull);
+    return toState(rows[0], isoOrNull, dayOrNull);
   });
 
 /**

@@ -14,7 +14,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Plus, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Hash, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import {
   COLUMN_ORDER,
   TASK_COLUMNS,
@@ -122,6 +122,24 @@ function TasksPage() {
   const day = today();
   const overdue = shown.filter((t) => isOverdue(t, day)).length;
   const feeds = board.data?.feeds ?? [];
+  const slack = board.data?.slack;
+  const slackSync = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/slack/sync", { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `Slack sync failed (${res.status})`);
+      }
+      return (await res.json()) as { items: number };
+    },
+    onSuccess: invalidate,
+  });
+  const slackOff = useMutation({
+    mutationFn: async () => {
+      await fetch("/api/slack/disconnect", { method: "POST", credentials: "include" });
+    },
+    onSuccess: invalidate,
+  });
   const brokenFeeds = feeds.filter((f) => f.error != null);
 
   useRegisterTrackerActions(
@@ -227,6 +245,75 @@ function TasksPage() {
               ))}
           </span>
         </div>
+
+        {/* Slack: one person's own to-dos, and only ever their own. */}
+        <div className="flex flex-none flex-wrap items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5">
+          <Hash className="h-3.5 w-3.5 flex-none text-slate-400" aria-hidden="true" />
+          {slack?.connected ? (
+            <>
+              <span className="text-[12.5px] text-navy">
+                Your Slack reminders and saved messages are on this board.
+              </span>
+              <span className="text-[11.5px] text-slate-400">
+                {slack.syncedAt
+                  ? `pulled ${slack.syncedAt.slice(0, 16).replace("T", " ")}`
+                  : "not pulled yet"}{" "}
+                · refreshes itself every 15 minutes
+              </span>
+              <Button
+                variant="naboo-ghost"
+                size="naboo"
+                className="ml-auto"
+                disabled={slackSync.isPending}
+                onClick={() => slackSync.mutate()}
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${slackSync.isPending ? "animate-spin" : ""}`}
+                  aria-hidden="true"
+                />
+                {slackSync.isPending ? "Pulling…" : "Pull now"}
+              </Button>
+              <Button
+                variant="naboo-ghost"
+                size="naboo"
+                disabled={slackOff.isPending}
+                onClick={() => slackOff.mutate()}
+                title="Revokes the token at Slack and removes your Slack cards from this board"
+              >
+                Disconnect
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="text-[12.5px] text-navy">
+                Connect Slack to put your own reminders and saved messages on this board.
+              </span>
+              {/* Said plainly, because it is the part worth trusting: the grant asks for
+                  two personal scopes and can read nothing else. */}
+              <span className="text-[11.5px] text-slate-400">
+                Your reminders and saved items only — never a channel, never anyone else&apos;s.
+              </span>
+              <Button
+                variant="naboo"
+                size="naboo"
+                className="ml-auto"
+                onClick={() => {
+                  window.location.href = "/api/slack/connect";
+                }}
+              >
+                Connect Slack
+              </Button>
+            </>
+          )}
+        </div>
+        {(slack?.error != null || slackSync.isError || slackOff.isError) && (
+          <div
+            role="alert"
+            className="flex-none rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-[12.5px] text-rose-800"
+          >
+            Slack: {slack?.error ?? String(((slackSync.error ?? slackOff.error) as Error)?.message)}
+          </div>
+        )}
 
         {/* A feed that failed is named. A board silently missing a tracker reads as a
             tracker with nothing to do. */}
@@ -434,7 +521,17 @@ function TaskCard({
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {task.tracker ? (
+        {task.sourceLabel && !task.tracker ? (
+          <a
+            href={task.href ?? "#"}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center rounded-full bg-slate-100 px-2 py-[1px] text-[10px] font-medium text-slate-600 no-underline hover:bg-slate-200"
+            title="Open it in Slack"
+          >
+            {task.sourceLabel}
+          </a>
+        ) : task.tracker ? (
           <a
             href={task.href ?? "#"}
             className="inline-flex items-center rounded-full bg-slate-100 px-2 py-[1px] text-[10px] font-medium text-slate-600 no-underline hover:bg-slate-200"

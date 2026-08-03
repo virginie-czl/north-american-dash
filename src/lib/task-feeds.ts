@@ -14,6 +14,7 @@
 import { accepts, fmtAmount, needsDecision, nextMove, type CardRow } from "./card-tracking.ts";
 import type { CommissionRow } from "./commission.functions";
 import type { DerivedTask } from "./tasks";
+import type { StoredSlackTask } from "./slack-user.server";
 
 /** The largest single-currency figure on a provider, formatted. Never a total. */
 function providerAmount(row: CardRow): string | null {
@@ -78,6 +79,29 @@ export function commissionTasks(rows: CommissionRow[]): DerivedTask[] {
     });
   }
   return tasks;
+}
+
+/**
+ * Somebody's own Slack, as cards.
+ *
+ * Personal in a way no tracker feed is: these rows are only ever read for the session's
+ * own account, and they carry no tracker, so nothing about them is visible to anyone else
+ * on this shared board. The board does not interpret them — a reminder is a reminder, in
+ * the words the person wrote — and completing it in Slack is what closes it here.
+ */
+export function slackTasks(items: StoredSlackTask[]): DerivedTask[] {
+  return items.map((item) => ({
+    tracker: null,
+    kind: item.kind === "saved" ? "slack-saved" : "slack-reminder",
+    ref: item.slack_id,
+    title: item.title,
+    subject: item.kind === "saved" ? "Saved in Slack" : "Slack reminder",
+    amount: null,
+    owner: "us" as const,
+    permalink: item.permalink,
+    due: item.due,
+    sourceLabel: "My Slack",
+  }));
 }
 
 /** Re-exported so the feeds and their tests share one notion of "accepting". */

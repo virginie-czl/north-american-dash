@@ -54,8 +54,8 @@ export function columnTitle(column: TaskColumn): string {
  * Manual tasks never come through here — their key is `manual::<uuid>`, minted once by
  * the database so it cannot collide with a derived one.
  */
-export function derivedKey(tracker: TrackerKey, ref: string, kind: string): string {
-  return `${tracker}::${ref}::${kind}`.toLowerCase();
+export function derivedKey(tracker: TrackerKey | null, ref: string, kind: string): string {
+  return `${tracker ?? "slack"}::${ref}::${kind}`.toLowerCase();
 }
 
 export function isManualKey(key: string): boolean {
@@ -73,7 +73,12 @@ export function isManualKey(key: string): boolean {
  * the two pages never describe the same job differently.
  */
 export type DerivedTask = {
-  tracker: TrackerKey;
+  /**
+   * Null for a task that came from somebody's own Slack rather than from a tracker.
+   * Those are personal: the server only ever reads them for the session's own account,
+   * and they are never shown to anyone else on this shared board.
+   */
+  tracker: TrackerKey | null;
   kind: string;
   /** Booking ref, provider code — whatever the tracker's row is keyed on. */
   ref: string;
@@ -84,6 +89,12 @@ export type DerivedTask = {
   amount: string | null;
   /** Whose move the tracker says it is, when it has an opinion. */
   owner: "us" | "partner" | "client" | null;
+  /** Where to go when there is no tracker page — a Slack deep link. */
+  permalink?: string | null;
+  /** Slack items arrive with a date already on them. */
+  due?: string | null;
+  /** Shown on the card instead of a tracker name. */
+  sourceLabel?: string | null;
 };
 
 // ── What the board stores ───────────────────────────────────────────────────
@@ -113,6 +124,8 @@ export type Task = {
   key: string;
   column: TaskColumn;
   title: string;
+  /** "Card tracking NA", or "Slack" for somebody's own reminder. */
+  sourceLabel?: string | null;
   subject: string | null;
   amount: string | null;
   tracker: TrackerKey | null;
@@ -179,11 +192,13 @@ export function buildBoard(derived: DerivedTask[], stored: TaskState[]): Task[] 
       subject: item.subject,
       amount: item.amount,
       tracker: item.tracker,
-      href: trackerPath(item.tracker),
+      sourceLabel: item.sourceLabel ?? null,
+      href: item.tracker ? trackerPath(item.tracker) : (item.permalink ?? null),
       ref: item.ref,
       assignee: state.assignee,
       note: state.note,
-      due: state.due,
+      // A Slack reminder carries its own date; anything typed on the board wins.
+      due: state.due ?? item.due ?? null,
       manual: false,
       owner: item.owner,
       open: true,
@@ -277,7 +292,7 @@ export const NO_FILTER: TaskFilter = { trackers: [], assignee: null, search: "" 
 
 export function matchesFilter(task: Task, filter: TaskFilter): boolean {
   if (filter.trackers.length > 0) {
-    const key = task.manual ? "manual" : (task.tracker ?? "");
+    const key = task.manual ? "manual" : (task.tracker ?? "slack");
     if (!filter.trackers.includes(key)) return false;
   }
   if (filter.assignee != null && (task.assignee ?? "") !== filter.assignee) return false;
@@ -301,13 +316,13 @@ export function columnCounts(tasks: Task[]): Record<TaskColumn, number> {
 export function trackerCounts(tasks: Task[]): Array<{ key: string; label: string; n: number }> {
   const counts = new Map<string, number>();
   for (const task of tasks) {
-    const key = task.manual ? "manual" : (task.tracker ?? "manual");
+    const key = task.manual ? "manual" : (task.tracker ?? "slack");
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return [...counts]
     .map(([key, n]) => ({
       key,
-      label: isTrackerKey(key) ? trackerLabel(key) : "Added by hand",
+      label: isTrackerKey(key) ? trackerLabel(key) : key === "slack" ? "My Slack" : "Added by hand",
       n,
     }))
     .sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));

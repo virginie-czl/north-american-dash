@@ -252,6 +252,36 @@ const SCHEMA_STATEMENTS = [
      updated_at timestamptz NOT NULL DEFAULT now()
    )`,
   `CREATE INDEX IF NOT EXISTS tracker_tasks_column_idx ON tracker_tasks (column_key)`,
+
+  // A personal Slack grant, one row per person. Not the workspace bot — this token can
+  // read that person's own reminders and saved items and nothing else. Encrypted with
+  // the same key as the Gmail grant.
+  `CREATE TABLE IF NOT EXISTS slack_credentials (
+     user_email text PRIMARY KEY,
+     user_token text NOT NULL,
+     scopes text NOT NULL,
+     slack_user_id text NOT NULL,
+     team_name text,
+     connected_at timestamptz NOT NULL DEFAULT now(),
+     updated_at timestamptz NOT NULL DEFAULT now(),
+     synced_at timestamptz
+   )`,
+
+  // What the last pull found, per person.
+  //
+  // `owner_email` is the privacy rule and it is part of the primary key: a row belongs to
+  // one person, only ever written by their own sync, and only ever read back with their
+  // own session email. Two people who saved the same Slack message get a row each.
+  `CREATE TABLE IF NOT EXISTS slack_tasks (
+     owner_email text NOT NULL,
+     slack_id text NOT NULL,
+     kind text NOT NULL,
+     title text NOT NULL,
+     due date,
+     permalink text,
+     synced_at timestamptz NOT NULL DEFAULT now(),
+     PRIMARY KEY (owner_email, slack_id)
+   )`,
 ];
 
 /** Applies the schema once per instance. Every statement is idempotent. */
@@ -283,4 +313,18 @@ export function isoOrNull(value: unknown): string | null {
   if (value == null) return null;
   if (value instanceof Date) return value.toISOString();
   return String(value);
+}
+
+/**
+ * An ISO day from a `date` column.
+ *
+ * The driver hands a `date` back as a JS Date, and `String(date).slice(0, 10)` on one of
+ * those is "Sun Aug 02" — a plausible-looking string that is not a date at all and
+ * sorts alphabetically. Anything that reads a day goes through here.
+ */
+export function dayOrNull(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const text = String(value).trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : null;
 }

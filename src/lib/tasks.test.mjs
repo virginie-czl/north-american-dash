@@ -23,7 +23,7 @@ import {
   trackerCounts,
   validateManualTask,
 } from "./tasks.ts";
-import { cardTasks, commissionTasks } from "./task-feeds.ts";
+import { cardTasks, commissionTasks, slackTasks } from "./task-feeds.ts";
 import { buildRows, aggregateProviders, emptyTerms, NO_EVIDENCE } from "./card-tracking.ts";
 
 let pass = 0,
@@ -333,6 +333,130 @@ console.log("\n[the board's own rules are enforced on the server too]");
     "the board never invents a key for a typed task",
     /manual::\$\{crypto\.randomUUID\(\)\}/.test(src),
   );
+}
+
+// ── Somebody's own Slack ────────────────────────────────────────────────────
+// The rule that matters here is a privacy one, and half of it lives in SQL: these rows
+// are only ever read for the session's own account. What the model has to get right is
+// that a Slack card carries no tracker, so it can never be grouped, filtered or linked
+// as though it belonged to a shared page.
+console.log("\n[the Slack feed]");
+{
+  const items = [
+    {
+      slack_id: "Rm1",
+      kind: "reminder",
+      title: "Call the Fairmont back",
+      due: "2026-08-05",
+      permalink: null,
+    },
+    {
+      slack_id: "C123:1785.1",
+      kind: "saved",
+      title: "Invoice query from Arora",
+      due: null,
+      permalink: "https://naboo.slack.com/archives/C123/p1785",
+    },
+  ];
+  const tasks = slackTasks(items);
+  t("each item is a card", tasks.length === 2);
+  t(
+    "with no tracker on it",
+    tasks.every((x) => x.tracker === null),
+  );
+  t(
+    "labelled as the person's own Slack",
+    tasks.every((x) => x.sourceLabel === "My Slack"),
+  );
+  t(
+    "a reminder and a save are different kinds",
+    tasks[0].kind === "slack-reminder" && tasks[1].kind === "slack-saved",
+  );
+  t("the words are the person's own", tasks[0].title === "Call the Fairmont back");
+  t("a reminder's own date comes with it", tasks[0].due === "2026-08-05");
+  t(
+    "and a saved message links back to Slack",
+    tasks[1].permalink?.startsWith("https://naboo.slack.com"),
+  );
+  t(
+    "no figure is invented for it",
+    tasks.every((x) => x.amount === null),
+  );
+
+  const board = buildBoard(tasks, []);
+  t("they reach the board", board.length === 2);
+  t("keyed under slack, never under a tracker", board[0].key.startsWith("slack::"));
+  t(
+    "the card opens Slack rather than a tracker page",
+    board[1].href?.includes("slack.com") === true,
+  );
+  t("a Slack reminder's date is the card's due date", board[0].due === "2026-08-05");
+  // Board state still wins: a date typed here is the one that counts.
+  const dated = buildBoard(tasks, [{ ...state({ key: board[0].key }), due: "2026-08-10" }]);
+  t("a date typed on the card overrides Slack's", dated[0].due === "2026-08-10");
+  t(
+    "and it can be moved like any other card",
+    buildBoard(tasks, [{ ...state({ key: board[0].key }), column: "doing" }])[0].column === "doing",
+  );
+
+  const chips = trackerCounts(board);
+  t(
+    "they get their own chip",
+    chips.some((c) => c.label === "My Slack"),
+  );
+  t(
+    "and filter as their own group",
+    matchesFilter(board[0], { trackers: ["slack"], assignee: null, search: "" }) &&
+      !matchesFilter(board[0], { trackers: ["na-cards"], assignee: null, search: "" }),
+  );
+}
+
+console.log("\n[the connector can only read the connecting person]");
+{
+  const src = readFileSync(new URL("./slack-user.server.ts", import.meta.url), "utf8");
+  // The scopes are the promise. Neither can read a conversation.
+  t(
+    "two user scopes, and only two",
+    /SLACK_USER_SCOPES = \["reminders:read", "stars:read"\]/.test(src),
+  );
+  t("no channel scope is requested", !/channels:|groups:|im:|mpim:|search:/.test(src));
+  // The endpoints are caller-scoped by definition, and no other Slack method is called.
+  const methods = [...src.matchAll(/slack<[^>]*>\(email, "([^"]+)"\)/g)].map((m) => m[1]);
+  t("exactly two Slack methods are called", methods.length === 2, methods.join(", "));
+  t(
+    "and they are the personal ones",
+    methods.every((m) => /^reminders\.list|^stars\.list/.test(m)),
+    methods.join(", "),
+  );
+  t("nothing searches Slack", !/search\.messages|conversations\.history|users\.list/.test(src));
+  // Reads and writes are both keyed on the owner.
+  t("the read is scoped to one person", /WHERE owner_email = \$\{email\}/.test(src));
+  t("so is the replace", /DELETE FROM slack_tasks WHERE owner_email = \$\{email\}/.test(src));
+  t(
+    "disconnecting takes the tasks with it",
+    /DELETE FROM slack_tasks WHERE owner_email[\s\S]{0,200}DELETE FROM slack_credentials/.test(src),
+  );
+  t("and revokes at Slack, not just here", /auth\.revoke/.test(src));
+  t("the token is encrypted at rest", /encryptSecret\(input\.token\)/.test(src));
+
+  const board = readFileSync(new URL("./tasks.functions.ts", import.meta.url), "utf8");
+  // The privacy rule in one line: the address is the session's, never the client's.
+  t("the board reads Slack for the session only", /readSlackTasks\(session\.email\)/.test(board));
+  t("and reports only the caller's connection", /getSlackConnection\(session\.email\)/.test(board));
+  t("Slack is not a shared feed", !/tracker: "slack"/.test(board));
+
+  const cron = readFileSync(new URL("./cron-routes.server.ts", import.meta.url), "utf8");
+  t("the cron answers to a secret", /auth !== `Bearer \$\{secret\}`/.test(cron));
+  t("and refuses when there is none configured", /CRON_SECRET is not set/.test(cron));
+  t("it loops over grants, not over people", /connectedSlackUsers\(\)/.test(cron));
+  t(
+    "one person's failure is theirs alone",
+    /failed\.push\(\{ email, error: message \}\)/.test(cron),
+  );
+
+  const vercel = JSON.parse(readFileSync(new URL("../../vercel.json", import.meta.url), "utf8"));
+  t("every fifteen minutes", vercel.crons[0].schedule === "*/15 * * * *");
+  t("on the Slack job", vercel.crons[0].path === "/api/cron/slack-tasks");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
