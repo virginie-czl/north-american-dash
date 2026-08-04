@@ -15,7 +15,7 @@
  * Every card title is a verb phrase: the board says what to do, not what state a row is
  * in. The wording is the tracker's own, so the same job reads the same on both pages.
  */
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -71,8 +71,23 @@ import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/_authenticated/tasks")({
   ssr: false,
-  // No tracker gate: the board is everybody's, and each feed is gated on the server by
-  // the same check its own page uses — so a member with one tracker sees one feed.
+  /**
+   * Access to the board is given and taken like a tracker's.
+   *
+   * Presentation only — fetchBoard and every mutation ask again on the server, so a
+   * revoked person who keeps the URL gets a 403 rather than an empty page. Sending them
+   * to a tracker they do have beats a dead end; if they have none at all, the auth screen
+   * is the only honest destination.
+   */
+  beforeLoad: ({ context }) => {
+    const allowed = (context as { allowedTrackers?: string[] }).allowedTrackers ?? [];
+    if (!allowed.includes("tasks")) {
+      const fallback = TRACKERS.find((t) => allowed.includes(t.key));
+      throw redirect(
+        fallback ? { to: fallback.path } : { to: "/auth", search: { status: "no-tracker" } },
+      );
+    }
+  },
   component: TasksPage,
 });
 

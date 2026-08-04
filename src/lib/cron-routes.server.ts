@@ -41,12 +41,22 @@ export async function handleCronRequest(request: Request): Promise<Response | nu
  */
 async function runSlackTaskSync(): Promise<Response> {
   const { connectedSlackUsers, syncSlackTasks } = await import("./slack-user.server");
+  const { getAccess } = await import("./access.server");
   const emails = await connectedSlackUsers();
   let items = 0;
+  let skipped = 0;
   const failed: Array<{ email: string; error: string }> = [];
 
   for (const email of emails) {
     try {
+      // Somebody whose task board has been taken away is not read every quarter hour for
+      // a page they cannot open. The grant is left alone — it is theirs to revoke — but
+      // nothing is pulled with it until they have the board back.
+      const { trackers } = await getAccess(email);
+      if (!trackers.includes("tasks")) {
+        skipped += 1;
+        continue;
+      }
       const result = await syncSlackTasks(email);
       items += result.items;
     } catch (error) {
@@ -58,12 +68,14 @@ async function runSlackTaskSync(): Promise<Response> {
 
   const summary = {
     connected: emails.length,
-    synced: emails.length - failed.length,
+    synced: emails.length - failed.length - skipped,
+    skipped,
     items,
     failed: failed.length,
   };
   console.log(
     `Slack task cron: ${summary.synced}/${summary.connected} accounts, ${items} items` +
+      (skipped > 0 ? `, ${skipped} without board access` : "") +
       (failed.length > 0 ? `, ${failed.length} failed` : ""),
   );
   // 200 with the failures named rather than a 500: the round did what it could, and a

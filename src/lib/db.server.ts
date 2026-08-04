@@ -142,6 +142,29 @@ const SCHEMA_STATEMENTS = [
   // Existing deployments predate the column.
   `ALTER TABLE app_users ADD COLUMN IF NOT EXISTS trackers text[]
      NOT NULL DEFAULT ARRAY['loreal', 'veolia', 'na']::text[]`,
+  // The task board joined the list of things access is given to, and it is everybody's
+  // until an admin says otherwise — so it is in the default for anyone approved from here
+  // on.
+  `ALTER TABLE app_users ALTER COLUMN trackers
+     SET DEFAULT ARRAY['loreal', 'veolia', 'na', 'tasks']::text[]`,
+  // A ledger of the one-shot data changes, as opposed to the schema statements around it
+  // which are written to be safe to re-run. A backfill is not: repeating the one below
+  // would hand Tasks back to every person an admin had taken it from, silently, on the
+  // next deploy.
+  `CREATE TABLE IF NOT EXISTS schema_migrations (
+     id text PRIMARY KEY,
+     applied_at timestamptz NOT NULL DEFAULT now()
+   )`,
+  // Nobody loses the board because it became grantable. Existing people keep it, and the
+  // UPDATE only touches anything on the run that actually claimed the marker — so an
+  // admin's later "take it away" stands.
+  `WITH claimed AS (
+     INSERT INTO schema_migrations (id) VALUES ('app_users.trackers += tasks')
+     ON CONFLICT (id) DO NOTHING
+     RETURNING id
+   )
+   UPDATE app_users SET trackers = array_append(trackers, 'tasks')
+   WHERE EXISTS (SELECT 1 FROM claimed) AND NOT ('tasks' = ANY(trackers))`,
   `CREATE INDEX IF NOT EXISTS app_users_status_idx ON app_users (status)`,
   // Derived facts only — never subjects, bodies, thread ids or any message
   // content. Every user of the tracker may read these stickers, so anything added

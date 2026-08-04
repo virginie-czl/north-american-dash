@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ShieldCheck, ShieldOff, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
-import { TRACKERS, type TrackerKey } from "@/lib/trackers";
+import { ACCESS_AREAS, type AccessKey } from "@/lib/trackers";
 
 type AccessStatus = "pending" | "approved" | "blocked";
 type Role = "owner" | "admin" | "member";
@@ -18,7 +18,7 @@ type AppUser = {
   decided_at: string | null;
   decided_by: string | null;
   last_seen_at: string | null;
-  trackers: TrackerKey[];
+  trackers: AccessKey[];
 };
 
 export const Route = createFileRoute("/_authenticated/admin")({
@@ -65,7 +65,7 @@ function useDecide() {
     mutationFn: async (input: {
       email: string;
       action: "approve" | "block" | "make_admin" | "make_member" | "set_trackers";
-      trackers?: TrackerKey[];
+      trackers?: AccessKey[];
     }) => {
       const res = await fetch("/api/admin/decide", {
         method: "POST",
@@ -90,8 +90,9 @@ function Avatar({ user }: { user: AppUser }) {
 }
 
 /**
- * Which trackers a person may open. Separate from approval on purpose: someone can
- * be a trusted colleague and still have no business in the L'Oréal numbers.
+ * Which pages a person may open — the five trackers and the task board. Separate from
+ * approval on purpose: someone can be a trusted colleague and still have no business in
+ * the L'Oréal numbers.
  */
 function TrackerChoice({
   user,
@@ -100,12 +101,12 @@ function TrackerChoice({
 }: {
   user: AppUser;
   disabled: boolean;
-  onChange: (trackers: TrackerKey[]) => void;
+  onChange: (trackers: AccessKey[]) => void;
 }) {
   const owner = user.role === "owner";
   return (
     <span className="flex flex-wrap items-center gap-1.5">
-      {TRACKERS.map((t) => {
+      {ACCESS_AREAS.map((t) => {
         const on = owner || user.trackers.includes(t.key);
         return (
           <label
@@ -117,7 +118,7 @@ function TrackerChoice({
             } ${owner || disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
             title={
               owner
-                ? "Le propriétaire a accès à tous les trackers"
+                ? "Le propriétaire a accès à tout"
                 : on
                   ? `Retirer l'accès à ${t.label}`
                   : `Donner l'accès à ${t.label}`
@@ -162,8 +163,9 @@ function AdminPage() {
         <p className="mt-1 max-w-2xl text-[13px] text-slate-600">
           Un compte Google <strong>@naboo.app</strong> permet de se présenter, pas d'entrer. Chaque
           nouvelle personne apparaît ici et attend votre validation. Une fois validée, elle entre
-          directement à chaque connexion suivante — sans nouvelle demande. Cochez ensuite les
-          trackers auxquels elle a accès : la validation ouvre le compte, pas toutes les pages.
+          directement à chaque connexion suivante — sans nouvelle demande. Cochez ensuite les pages
+          auxquelles elle a accès — les trackers et le tableau des tâches : la validation ouvre le
+          compte, pas toutes les pages.
         </p>
       </header>
 

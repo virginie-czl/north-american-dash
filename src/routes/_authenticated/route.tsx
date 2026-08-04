@@ -146,11 +146,14 @@ function TopBar() {
             Card tracking NA
           </TrackerTab>
         )}
-        {/* Not gated: the board has no data of its own, and every feed on it is gated
-            on the server by the same check its own tracker page uses. */}
-        <TrackerTab to="/tasks" icon={<ListChecks className="h-4 w-4" aria-hidden="true" />}>
-          Tasks
-        </TrackerTab>
+        {/* Grantable in its own right: the board has no data of its own, but it is a page
+            an admin can take away, and the tab has to follow that. Each feed on it is
+            still gated again by its own tracker's check. */}
+        {allowed.includes("tasks") && (
+          <TrackerTab to="/tasks" icon={<ListChecks className="h-4 w-4" aria-hidden="true" />}>
+            Tasks
+          </TrackerTab>
+        )}
       </nav>
 
       <div className="ml-auto flex items-center gap-2">

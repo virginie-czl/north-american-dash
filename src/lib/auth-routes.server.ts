@@ -390,9 +390,24 @@ async function handleGmailDisconnect(request: Request): Promise<Response> {
 
 const SLACK_STATE_COOKIE = "naboo_slack_state";
 
+/**
+ * The personal Slack grant exists for one reason: putting somebody's own items on the task
+ * board. If an admin has taken the board away from them, connecting or pulling would feed
+ * a page they cannot open — so those three ask for the same access the board does.
+ *
+ * Disconnect deliberately does not: revoking your own token is something you should be
+ * able to do whatever your access says, and refusing it would strand a live grant at Slack.
+ */
+async function hasBoardAccess(email: string): Promise<boolean> {
+  const { getAccess } = await import("./access.server");
+  const { trackers } = await getAccess(email);
+  return trackers.includes("tasks");
+}
+
 async function handleSlackConnect(request: Request): Promise<Response> {
   const session = await getSessionFromRequest(request);
   if (!session) return redirect("/auth");
+  if (!(await hasBoardAccess(session.email))) return redirect("/auth");
   const origin = requestOrigin(request);
   const state = crypto.randomUUID();
   const { SLACK_AUTHORIZE_URL, SLACK_USER_SCOPES } = await import("./slack-user.server");
@@ -415,6 +430,8 @@ async function handleSlackConnect(request: Request): Promise<Response> {
 async function handleSlackCallback(request: Request): Promise<Response> {
   const session = await getSessionFromRequest(request);
   if (!session) return redirect("/auth");
+  // Access can have been taken away between the redirect out and the redirect back.
+  if (!(await hasBoardAccess(session.email))) return redirect("/auth");
   const origin = requestOrigin(request);
   const secure = isSecureOrigin(origin);
   const clearState = serializeCookie(SLACK_STATE_COOKIE, "", { maxAge: 0, secure });
@@ -471,6 +488,7 @@ async function handleSlackCallback(request: Request): Promise<Response> {
 async function handleSlackStatus(request: Request): Promise<Response> {
   const session = await getSessionFromRequest(request);
   if (!session) return new Response(null, { status: 401 });
+  if (!(await hasBoardAccess(session.email))) return new Response(null, { status: 403 });
   const { getSlackConnection } = await import("./slack-user.server");
   const connection = await getSlackConnection(session.email);
   return new Response(JSON.stringify({ connected: connection != null, ...connection }), {
@@ -491,6 +509,7 @@ async function handleSlackDisconnect(request: Request): Promise<Response> {
 async function handleSlackSync(request: Request): Promise<Response> {
   const session = await getSessionFromRequest(request);
   if (!session) return new Response(null, { status: 401 });
+  if (!(await hasBoardAccess(session.email))) return new Response(null, { status: 403 });
   const { syncSlackTasks } = await import("./slack-user.server");
   try {
     const result = await syncSlackTasks(session.email);

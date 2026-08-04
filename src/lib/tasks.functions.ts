@@ -185,8 +185,11 @@ const FEEDS: Array<{
 
 export const fetchBoard = createServerFn({ method: "GET" }).handler(
   async (): Promise<BoardPayload> => {
-    const { requireSession } = await import("./session.server");
-    const session = await requireSession();
+    const { requireTracker } = await import("./session.server");
+    // The board is grantable like a tracker: an admin can take it away, and every entry
+    // point has to ask, not just the page. Each feed is gated again on its own tracker
+    // below, so losing Tasks removes the board and nothing else.
+    const session = await requireTracker("tasks");
     const { getAccess, listUsers } = await import("./access.server");
     const { trackers } = await getAccess(session.email);
     const { buildBoard } = await import("./tasks");
@@ -312,8 +315,11 @@ export const saveTaskState = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data }): Promise<TaskState> => {
-    const { requireSession } = await import("./session.server");
-    const session = await requireSession();
+    const { requireTracker } = await import("./session.server");
+    // The board is grantable like a tracker: an admin can take it away, and every entry
+    // point has to ask, not just the page. Each feed is gated again on its own tracker
+    // below, so losing Tasks removes the board and nothing else.
+    const session = await requireTracker("tasks");
     const { db, isoOrNull, dayOrNull } = await import("./db.server");
     const sql = await db();
 
@@ -359,8 +365,11 @@ export const createManualTask = createServerFn({ method: "POST" })
     priority: isTaskPriority(input?.priority) ? input.priority : "normal",
   }))
   .handler(async ({ data }): Promise<TaskState> => {
-    const { requireSession } = await import("./session.server");
-    const session = await requireSession();
+    const { requireTracker } = await import("./session.server");
+    // The board is grantable like a tracker: an admin can take it away, and every entry
+    // point has to ask, not just the page. Each feed is gated again on its own tracker
+    // below, so losing Tasks removes the board and nothing else.
+    const session = await requireTracker("tasks");
     const { validateManualTask } = await import("./tasks");
     // The same rule the dialog checks, applied again here: a stale tab must not be able
     // to store a task with no title or a column that does not exist.
@@ -398,8 +407,11 @@ export const updateManualTask = createServerFn({ method: "POST" })
     priority: isTaskPriority(input?.priority) ? input.priority : "normal",
   }))
   .handler(async ({ data }): Promise<TaskState> => {
-    const { requireSession } = await import("./session.server");
-    const session = await requireSession();
+    const { requireTracker } = await import("./session.server");
+    // The board is grantable like a tracker: an admin can take it away, and every entry
+    // point has to ask, not just the page. Each feed is gated again on its own tracker
+    // below, so losing Tasks removes the board and nothing else.
+    const session = await requireTracker("tasks");
     const { isManualKey, validateManualTask } = await import("./tasks");
     // A derived card's words belong to its tracker. Editing them here would put the
     // board's opinion of a booking next to the tracker's and let the two drift.
@@ -434,8 +446,8 @@ export const updateManualTask = createServerFn({ method: "POST" })
 export const deleteTask = createServerFn({ method: "POST" })
   .validator((input: { key: string }) => ({ key: cleanKey(input?.key) }))
   .handler(async ({ data }): Promise<{ deleted: boolean; manual: boolean }> => {
-    const { requireSession } = await import("./session.server");
-    await requireSession();
+    const { requireTracker } = await import("./session.server");
+    await requireTracker("tasks");
     const { isManualKey } = await import("./tasks");
     const { db } = await import("./db.server");
     const sql = await db();

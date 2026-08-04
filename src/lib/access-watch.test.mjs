@@ -119,5 +119,67 @@ console.log("\n[the watcher]");
   t("a network failure is not an answer", /catch \{[\s\S]{0,200}return null;/.test(src));
 }
 
+// ── The board is something access is given to ───────────────────────────────
+// It has no data of its own, so the temptation is to leave it open to everyone who is
+// signed in. But it is a page, an admin can want it gone for somebody, and a gate that
+// exists only in the nav is decoration. Every entry point asks.
+console.log("\n[the task board is grantable]");
+{
+  const { ALL_ACCESS, ALL_TRACKERS, isAccessKey, isTrackerKey, areaLabel } =
+    await import("./trackers.ts");
+  t("tasks is an area access can be given to", isAccessKey("tasks"));
+  t("and it is listed with the trackers", ALL_ACCESS.includes("tasks"));
+  // The distinction that keeps it out of the tracker picker on a typed task, out of the
+  // board's own chips, and out of every count that means "which ledger is this about".
+  t("but it is not a tracker", !isTrackerKey("tasks") && !ALL_TRACKERS.includes("tasks"));
+  t("every tracker is still an area", ALL_TRACKERS.every(isAccessKey));
+  t("and nothing else is", !isAccessKey("admin") && !isAccessKey(""));
+  t("it has a name for the admin screen", areaLabel("tasks") === "Tasks");
+
+  const board = readFileSync(new URL("./tasks.functions.ts", import.meta.url), "utf8");
+  const asks = (board.match(/requireTracker\("tasks"\)/g) ?? []).length;
+  // Read plus four mutations: fetchBoard, saveTaskState, createManualTask,
+  // updateManualTask, deleteTask. A mutation left on requireSession would let a revoked
+  // person keep moving cards through the API.
+  t("every board entry point asks for it", asks === 5, String(asks));
+  t("none of them settle for a session", !/requireSession\(\)/.test(board));
+
+  const page = readFileSync(new URL("../routes/_authenticated/tasks.tsx", import.meta.url), "utf8");
+  t("the page redirects when it is not granted", /!allowed\.includes\("tasks"\)/.test(page));
+  const shell = readFileSync(
+    new URL("../routes/_authenticated/route.tsx", import.meta.url),
+    "utf8",
+  );
+  t("and the tab hides", /allowed\.includes\("tasks"\) && \(/.test(shell));
+
+  const admin = readFileSync(
+    new URL("../routes/_authenticated/admin.tsx", import.meta.url),
+    "utf8",
+  );
+  t("the admin screen offers every area", /ACCESS_AREAS\.map/.test(admin));
+
+  // The Slack connector feeds the board and nothing else, so it follows the same grant —
+  // except disconnect, which has to stay reachable so a live token can always be revoked.
+  const routes = readFileSync(new URL("./auth-routes.server.ts", import.meta.url), "utf8");
+  const gated = (routes.match(/hasBoardAccess\(session\.email\)/g) ?? []).length;
+  t("connect, callback, status and sync ask", gated === 4, String(gated));
+  t(
+    "disconnect does not",
+    !/hasBoardAccess[\s\S]{0,200}handleSlackDisconnect/.test(routes) &&
+      /async function handleSlackDisconnect[\s\S]{0,220}disconnectSlack/.test(routes),
+  );
+  const cron = readFileSync(new URL("./cron-routes.server.ts", import.meta.url), "utf8");
+  t("and the cron skips accounts without the board", /!trackers\.includes\("tasks"\)/.test(cron));
+
+  // Nobody loses the board because it became grantable — but the backfill that gives it
+  // to everyone must run once, or it would hand it back to each person an admin takes it
+  // from, on every deploy, silently.
+  const db = readFileSync(new URL("./db.server.ts", import.meta.url), "utf8");
+  t("new people get the board by default", /'na', 'tasks'\]::text\[\]/.test(db));
+  t("existing people are backfilled", /array_append\(trackers, 'tasks'\)/.test(db));
+  t("through a marker table", /INSERT INTO schema_migrations \(id\)/.test(db));
+  t("and only on the run that claims it", /WHERE EXISTS \(SELECT 1 FROM claimed\)/.test(db));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
