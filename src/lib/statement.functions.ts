@@ -95,6 +95,26 @@ docs AS (
     AND i.invoiceDirection = 'INCOME'
     AND ${clientInvoiceSql("i")}
 ),
+-- How fresh the warehouse is for the series this booking is billed in.
+--
+-- The last issue date across the whole series, not this booking's own documents: the
+-- question the statement's footnote answers is "how far has the sync got", and one booking
+-- may have had nothing issued for weeks while the entity has. Derived from the data rather
+-- than from the clock, because the clock always says today and that is exactly the claim
+-- that was wrong.
+sync AS (
+  SELECT MAX(CAST(DATE(i.issueDate) AS STRING)) AS synced_up_to
+  FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
+  WHERE i.invoiceDirection = 'INCOME'
+    AND ${clientInvoiceSql("i")}
+    AND REGEXP_EXTRACT(i.invoiceNumber, r'^([A-Za-z]+-[A-Za-z]{2}\\d{2})-') = (
+      SELECT REGEXP_EXTRACT(ANY_VALUE(j.invoiceNumber), r'^([A-Za-z]+-[A-Za-z]{2}\\d{2})-')
+      FROM \`naboo-app-365515.raw_naboo_data.invoices\` j
+      WHERE j.clientRequestReadableId = @ref
+        AND j.invoiceDirection = 'INCOME'
+        AND ${clientInvoiceSql("j")}
+    )
+),
 -- Client money in. COMPANY_PAYMENT inflows only.
 pays AS (
   SELECT
@@ -112,7 +132,7 @@ pays AS (
 )
 SELECT
   ev.company_name, ev.event_name, ev.start_date, ev.end_date, ev.billing_entity, ev.em_referent,
-  docs.billed_to, docs.seller_name,
+  docs.billed_to, docs.seller_name, sync.synced_up_to,
   TO_JSON_STRING(IFNULL(docs.items, CAST([] AS ARRAY<STRUCT<
     ref STRING, kind STRING, status STRING, currency STRING, amount FLOAT64,
     issued STRING, due STRING
@@ -120,7 +140,7 @@ SELECT
   TO_JSON_STRING(IFNULL(pays.items, CAST([] AS ARRAY<STRUCT<
     amount FLOAT64, currency STRING, paid_on STRING, label STRING
   >>))) AS payments_json
-FROM ev CROSS JOIN docs CROSS JOIN pays
+FROM ev CROSS JOIN docs CROSS JOIN pays CROSS JOIN sync
 `;
 
 type DocRow = {
@@ -186,6 +206,9 @@ export async function buildNaStatement(readableId: string): Promise<NaStatementD
     const { emContact } = await import("./em-email");
 
     const generatedOn = generationDay(new Date());
+    // How far the warehouse has caught up, from the data itself. Null when the booking has
+    // no document to read a series off — the footnote then says only what it can.
+    const syncedUpTo = row.synced_up_to == null ? null : String(row.synced_up_to).slice(0, 10);
 
     const documents = parseJsonArray<DocRow>(row.documents_json)
       .filter((d) => d.ref && d.currency && d.amount != null)
@@ -210,8 +233,18 @@ export async function buildNaStatement(readableId: string): Promise<NaStatementD
       }));
 
     const contact = emContact(row.em_referent == null ? null : String(row.em_referent));
-
     const ref = data.readable_id;
+
+    // The hand-typed stand-ins, and the cleanup of the ones the warehouse has caught up
+    // with. Deliberately here, in the request that assembles the statement: the delete is
+    // a side effect of using the document, needs no scheduled job, and is idempotent
+    // because a second generation finds nothing left to remove.
+    const { readManualEntries, deleteSuperseded } = await import("./manual-entries.functions");
+    const { reconcile } = await import("./manual-entries");
+    const entries = await readManualEntries(ref);
+    const merged = reconcile({ documents, payments, entries });
+    if (merged.supersededIds.length > 0) await deleteSuperseded(merged.supersededIds);
+
     const html = buildStatementHtml(
       {
         booking: {
@@ -226,9 +259,10 @@ export async function buildNaStatement(readableId: string): Promise<NaStatementD
           billing_entity: String(row.seller_name ?? row.billing_entity ?? "Naboo Group"),
           em_referent: row.em_referent == null ? null : String(row.em_referent),
         },
-        documents,
-        payments,
+        documents: merged.documents,
+        payments: merged.payments,
         generatedOn,
+        syncedUpTo,
       },
       { contact: { email: contact.email, name: contact.name } },
     );

@@ -9,6 +9,7 @@ import {
   paymentMethodFromLabel,
   paymentReferenceFromLabel,
   buildStatementHtml,
+  settleInvoices,
   DOCUMENT_CSS,
   printTitle,
 } from "./statement.ts";
@@ -147,15 +148,109 @@ console.log("\n[statementTotals — C-P222 acceptance figures]");
   t("balance due 23,332.39", totals[0].balance === 23332.39, totals[0].balance);
   t("two payments counted", totals[0].paymentCount === 2);
   t("six documents counted", totals[0].documentCount === 6);
-  t("due on the latest invoice's own due date", totals[0].dueOn === "2026-08-04", totals[0].dueOn);
+  // The oldest thing still unpaid, not the newest thing issued. C-P222's two payments cover
+  // the first two invoices exactly (their references name them); what is left open is the
+  // 23,710.20 re-issue, due 30 July on the cancelled original — the earliest open date.
+  t("due on the oldest open invoice", totals[0].dueOn === "2026-07-30", totals[0].dueOn);
+  t(
+    "and it is overdue on a later day",
+    statementTotals({ ...CP222, generatedOn: "2026-08-04" })[0].overdue === true,
+  );
+  t(
+    "but not before that date arrives",
+    statementTotals({ ...CP222, generatedOn: "2026-07-20" })[0].overdue === false,
+  );
 }
 {
   // A credit note's due date must never become the date the client is asked to pay by.
   const totals = statementTotals({
     ...CP222,
+    payments: [],
     documents: [doc("A", 100, { due: "2026-08-01" }), doc("B", -50, { due: "2026-12-31" })],
   });
   t("credit note due dates are ignored", totals[0].dueOn === "2026-08-01", totals[0].dueOn);
+  // Nor does a credit settle an invoice: it reduces what is owed, it is not money against
+  // a particular document, and letting it settle one moves the overdue date forward.
+  t("and a credit does not settle the invoice it does not name", totals[0].dueOn !== null);
+}
+{
+  // Nothing left open: no date to show, and never an overdue claim.
+  const settled = statementTotals({
+    ...CP222,
+    documents: [doc("A", 100, { due: "2026-01-01" })],
+    payments: [
+      {
+        paid_on: "2026-01-02",
+        amount: 100,
+        currency: "USD",
+        method: "Bank transfer",
+        reference: null,
+      },
+    ],
+  });
+  t("a settled statement has no due date", settled[0].dueOn === null);
+  t("and is not overdue", settled[0].overdue === false);
+}
+
+// ── Which invoice a payment settled ─────────────────────────────────────────
+// The date the client is chased on comes from this, so it uses what the client themselves
+// said: bank references name the invoice being paid far more often than not.
+console.log("\n[settleInvoices]");
+{
+  const invoices = [
+    doc("USI-US26-00002", 148056, { issued: "2026-06-10", due: "2026-06-17" }),
+    doc("USI-US26-00020", 16210.5, { issued: "2026-07-16", due: "2026-07-23" }),
+    doc("USI-US26-00024", 45023.3, { issued: "2026-07-17", due: "2026-07-24" }),
+    doc("USI-US26-00029", 57314.85, { issued: "2026-07-22", due: "2026-07-29" }),
+  ];
+  const named = (amount, ref) => ({
+    paid_on: "2026-07-23",
+    amount,
+    currency: "USD",
+    method: "Bank transfer",
+    reference: `Bland AI PAYING BILL ${ref} VIA RAMP; USD Operations`,
+  });
+  // The real C-U332 shape: three payments naming their invoices, one invoice left open.
+  const open = settleInvoices(invoices, [
+    named(148056, "USIUS2600002"),
+    named(16210.5, "USIUS2600020"),
+    named(57314.85, "USIUS2600029"),
+  ]);
+  t(
+    "the reference decides which invoice is settled",
+    open.oldestOpenDue === "2026-07-24",
+    open.oldestOpenDue,
+  );
+  t("and only one is left open", open.openCount === 1, String(open.openCount));
+
+  // Without references, oldest first is the only defensible guess.
+  const blind = settleInvoices(invoices, [
+    {
+      paid_on: "2026-07-23",
+      amount: 148056,
+      currency: "USD",
+      method: "Bank transfer",
+      reference: null,
+    },
+  ]);
+  t(
+    "an unattributed payment settles the oldest",
+    blind.oldestOpenDue === "2026-07-23",
+    blind.oldestOpenDue,
+  );
+
+  // A payment naming an invoice, for more than that invoice: the excess flows on.
+  const excess = settleInvoices(invoices.slice(0, 2), [named(164266.5, "USIUS2600002")]);
+  t("an overpayment settles the rest too", excess.oldestOpenDue === null, excess.oldestOpenDue);
+
+  // A part payment leaves its own invoice open.
+  const part = settleInvoices([invoices[0]], [named(100000, "USIUS2600002")]);
+  t("a part payment leaves the invoice open", part.oldestOpenDue === "2026-06-17");
+  t(
+    "nothing paid means the oldest is open",
+    settleInvoices(invoices, []).oldestOpenDue === "2026-06-17",
+  );
+  t("and no invoices at all is not an error", settleInvoices([], []).oldestOpenDue === null);
 }
 {
   const totals = statementTotals({

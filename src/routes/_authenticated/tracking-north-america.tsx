@@ -20,6 +20,19 @@ import {
 import { fmtAge } from "@/lib/card-tracking";
 import { partnerDisplayName, partnerLegalName, partnerMatches } from "@/lib/na-partners";
 import {
+  AddEntryBar,
+  ByHandChip,
+  EntryForm,
+  FreshnessLine,
+  RowActions,
+  draftOf,
+  emptyDraft,
+  useManualEntries,
+  type Draft,
+} from "@/components/manual-statement-lines";
+import { deleteManualEntry } from "@/lib/manual-entries.functions";
+import type { ManualEntry } from "@/lib/manual-entries";
+import {
   commissionStatementUrl,
   statementUrl,
   useDocumentDownload,
@@ -1309,6 +1322,45 @@ function NaPage() {
     [selRecovery],
   );
 
+  // ── The lines somebody typed because the warehouse has not caught up ──────
+  const manualQuery = useManualEntries(selRef);
+  const manualEntries = manualQuery.data ?? [];
+  const manualDocs = useMemo(
+    () =>
+      manualEntries
+        .filter((e) => e.kind !== "payment")
+        .sort((a, b) => (a.issued_on ?? "").localeCompare(b.issued_on ?? "")),
+    [manualEntries],
+  );
+  const manualPayments = useMemo(
+    () => manualEntries.filter((e) => e.kind === "payment"),
+    [manualEntries],
+  );
+  // What the form compares against: the warehouse's own references, for the series
+  // warning, and its payments, for the duplicate warning.
+  const knownDocuments = useMemo(
+    () =>
+      selInvoices
+        .filter((iv) => iv.party !== "PARTNER")
+        .map((iv) => ({ ref: iv.invoice_ref ?? "", issued: iv.emission_date ?? null })),
+    [selInvoices],
+  );
+  const knownPayments = useMemo(
+    () =>
+      (selRecovery?.receipts ?? []).map((r) => ({
+        paid_on: r.paid_on,
+        amount: r.amount ?? 0,
+        currency: r.currency ?? "",
+      })),
+    [selRecovery],
+  );
+  const selCurrency = sel?.currency_client ?? selInvoices[0]?.currency ?? "USD";
+  const [entryDraft, setEntryDraft] = useState<{ draft: Draft; entry?: ManualEntry } | null>(null);
+  const removeEntry = useMutation({
+    mutationFn: (input: { id: number; event_ref: string }) => deleteManualEntry({ data: input }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["manual-entries", selRef] }),
+  });
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
       {error != null && (
@@ -1833,7 +1885,11 @@ function NaPage() {
                           <StatementButton eventRef={selRef} download={download} tone="primary" />
                         </span>
                       </header>
-                      {selInvoices.length === 0 ? (
+                      <FreshnessLine
+                        documents={knownDocuments}
+                        manualCount={manualEntries.length}
+                      />
+                      {selInvoices.length === 0 && manualDocs.length === 0 ? (
                         <div className="px-9 py-9 text-center">
                           <div className="font-display text-[15px] font-bold">
                             No invoice issued yet
@@ -1912,12 +1968,69 @@ function NaPage() {
                                 </td>
                               </tr>
                             ))}
+                            {manualDocs.map((entry) => (
+                              <tr key={`manual-${entry.id}`}>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
+                                  {entry.document_ref ?? "—"}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(entry.issued_on)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(entry.due_on)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
+                                  <Money value={entry.amount} currency={entry.currency} />
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5">
+                                  <span className="flex flex-wrap items-center gap-1.5">
+                                    <ByHandChip entry={entry} />
+                                    <RowActions
+                                      entry={entry}
+                                      pending={removeEntry.isPending}
+                                      onEdit={() => setEntryDraft({ draft: draftOf(entry), entry })}
+                                      onDelete={() =>
+                                        removeEntry.mutate({ id: entry.id, event_ref: selRef })
+                                      }
+                                    />
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
                       )}
+                      {entryDraft ? (
+                        <EntryForm
+                          eventRef={selRef}
+                          initial={entryDraft.draft}
+                          entry={entryDraft.entry}
+                          documents={knownDocuments}
+                          payments={knownPayments}
+                          onDone={() => setEntryDraft(null)}
+                          onCancel={() => setEntryDraft(null)}
+                        />
+                      ) : (
+                        <AddEntryBar
+                          onAddDocument={() =>
+                            setEntryDraft({ draft: emptyDraft("invoice", selCurrency) })
+                          }
+                          onAddPayment={() =>
+                            setEntryDraft({ draft: emptyDraft("payment", selCurrency) })
+                          }
+                        />
+                      )}
                     </div>
-                    {selRecovery && selRecovery.receipts.length > 0 && (
-                      <ClientReceiptsCard receipts={selRecovery.receipts} />
+                    {(selRecovery?.receipts?.length || manualPayments.length > 0) && (
+                      <ClientReceiptsCard
+                        receipts={selRecovery?.receipts ?? []}
+                        manual={manualPayments}
+                        onEdit={(entry) => setEntryDraft({ draft: draftOf(entry), entry })}
+                        onDelete={(entry) =>
+                          removeEntry.mutate({ id: entry.id, event_ref: selRef })
+                        }
+                        removing={removeEntry.isPending}
+                      />
                     )}
                   </div>
                 )}
@@ -2926,7 +3039,20 @@ function ClientRecoveryCard({
 }
 
 /** Client cash received, itemised — the ledger the recovery email quotes. */
-function ClientReceiptsCard({ receipts }: { receipts: NaClientReceipt[] }) {
+function ClientReceiptsCard({
+  receipts,
+  manual = [],
+  onEdit,
+  onDelete,
+  removing = false,
+}: {
+  receipts: NaClientReceipt[];
+  /** Payments typed by hand while the warehouse catches up — same list, marked. */
+  manual?: ManualEntry[];
+  onEdit?: (entry: ManualEntry) => void;
+  onDelete?: (entry: ManualEntry) => void;
+  removing?: boolean;
+}) {
   return (
     <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
       <header className="flex items-center gap-2 border-b border-border px-3.5 py-2.5">
@@ -2934,7 +3060,7 @@ function ClientReceiptsCard({ receipts }: { receipts: NaClientReceipt[] }) {
         <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-slate-600">
           Payments received
         </span>
-        <span className="text-[10.5px] text-slate-400">{receipts.length}</span>
+        <span className="text-[10.5px] text-slate-400">{receipts.length + manual.length}</span>
       </header>
       <table className="w-full border-collapse">
         <tbody>
@@ -2951,6 +3077,33 @@ function ClientReceiptsCard({ receipts }: { receipts: NaClientReceipt[] }) {
               </td>
               <td className="border-b border-slate-100 px-3.5 py-2 text-right text-[12.5px] tabular-nums">
                 <Money value={r.amount} currency={r.currency} />
+              </td>
+            </tr>
+          ))}
+          {manual.map((entry) => (
+            <tr key={`manual-pay-${entry.id}`}>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-700">
+                {fmtDate(entry.issued_on)}
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-500">
+                {entry.method ?? "—"}
+              </td>
+              <td className="max-w-[280px] truncate border-b border-slate-100 px-3.5 py-2 text-[12px] text-slate-500">
+                <span className="inline-flex items-center gap-1.5">
+                  {entry.document_ref ?? "—"}
+                  <ByHandChip entry={entry} />
+                  {onEdit && onDelete && (
+                    <RowActions
+                      entry={entry}
+                      pending={removing}
+                      onEdit={() => onEdit(entry)}
+                      onDelete={() => onDelete(entry)}
+                    />
+                  )}
+                </span>
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-right text-[12.5px] tabular-nums">
+                <Money value={entry.amount} currency={entry.currency} />
               </td>
             </tr>
           ))}

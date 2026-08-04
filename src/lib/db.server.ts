@@ -280,6 +280,29 @@ const SCHEMA_STATEMENTS = [
   `ALTER TABLE tracker_tasks
      ADD COLUMN IF NOT EXISTS priority text NOT NULL DEFAULT 'normal'`,
 
+  // Documents and payments typed by hand because the warehouse has not caught up yet.
+  //
+  // A stand-in, not a record: when BigQuery finally reports the real invoice, the row here
+  // is deleted rather than flagged, because a placeholder whose original has arrived has
+  // nothing left to say and a union that keeps both bills the client twice. The delete
+  // happens while a statement is being assembled — see manual-entries.ts.
+  `CREATE TABLE IF NOT EXISTS manual_statement_entries (
+     id             bigserial PRIMARY KEY,
+     event_ref      text NOT NULL,
+     kind           text NOT NULL,
+     document_ref   text,
+     issued_on      date,
+     due_on         date,
+     amount         numeric(14,2) NOT NULL,
+     currency       text NOT NULL,
+     method         text,
+     note           text,
+     created_by     text NOT NULL,
+     created_at     timestamptz NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS manual_statement_entries_event
+     ON manual_statement_entries (event_ref)`,
+
   // A personal Slack grant, one row per person. Not the workspace bot — this token can
   // read that person's own reminders and saved items and nothing else. Encrypted with
   // the same key as the Gmail grant.

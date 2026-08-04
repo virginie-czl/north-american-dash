@@ -63,6 +63,16 @@ export type StatementInput = {
   payments: StatementPayment[];
   /** ISO day, computed at request time — never baked into the template. */
   generatedOn: string;
+  /**
+   * ISO day the warehouse has caught up to, from the last document issued in this
+   * booking's own invoice series. Null when there is no series to read.
+   *
+   * The footnote used to say only "generated on 4 August", which reads as a snapshot of
+   * today and quietly omits everything issued since the last sync. This is the number that
+   * makes the sentence honest: what the document knows, rather than a completeness it
+   * cannot have.
+   */
+  syncedUpTo?: string | null;
 };
 
 // ── Netting ─────────────────────────────────────────────────────────────────
@@ -123,12 +133,88 @@ export type StatementTotals = {
   balance: number;
   documentCount: number;
   paymentCount: number;
-  /** Latest due date across the invoices in this currency, ISO day. */
+  /**
+   * The oldest date the client was asked to settle by and has not, ISO day.
+   *
+   * The earliest, not the latest. A statement showing the last invoice's due date presents
+   * an overdue balance as future-dated: C-U332 read "Due 6 Aug 2026" while 45,023.30 had
+   * been outstanding since 24 July, which undermines the collection the document exists to
+   * support.
+   */
   dueOn: string | null;
+  /** True when that date has passed and money is still owed. */
+  overdue: boolean;
 };
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * Which invoices the money received has actually settled, and the oldest one it has not.
+ *
+ * A payment carries the number of the invoice it was made against far more often than not
+ * — bank references read "PAYING BILL USIUS2600020" — so that is used first: it is the
+ * client's own statement of what they were paying for, and no allocation rule beats it.
+ * What is left over is applied oldest first, which is the ordinary open-item convention and
+ * the only defensible guess when nobody said.
+ *
+ * Credit notes deliberately settle nothing. A credit reduces what is owed in total, but it
+ * is not money against a particular invoice, and treating it as such would silently move
+ * the "overdue since" date forward — on C-U332 it would report 31 July instead of the 24
+ * July an invoice has genuinely been outstanding since.
+ */
+export function settleInvoices(
+  documents: StatementDoc[],
+  payments: StatementPayment[],
+): { oldestOpenDue: string | null; openCount: number } {
+  const invoices = documents
+    .filter((d) => d.amount > 0)
+    .map((d) => ({
+      ref: normaliseDocRef(d.ref),
+      due: d.due,
+      remaining: d.amount,
+      issued: d.issued,
+    }))
+    .sort(
+      (a, b) =>
+        (a.due ?? a.issued ?? "").localeCompare(b.due ?? b.issued ?? "") ||
+        a.ref.localeCompare(b.ref),
+    );
+
+  let pool = 0;
+  for (const payment of payments) {
+    const reference = normaliseDocRef(payment.reference);
+    // Longest reference first, so USIUS2600020 is preferred over a shorter number that
+    // happens to be a substring of the same string.
+    const named = reference
+      ? invoices
+          .filter((i) => i.ref.length > 3 && reference.includes(i.ref) && i.remaining > 0.005)
+          .sort((a, b) => b.ref.length - a.ref.length)[0]
+      : undefined;
+    if (named) {
+      const applied = Math.min(named.remaining, payment.amount);
+      named.remaining -= applied;
+      pool += payment.amount - applied;
+    } else {
+      pool += payment.amount;
+    }
+  }
+
+  for (const invoice of invoices) {
+    if (pool <= 0.005) break;
+    const applied = Math.min(invoice.remaining, pool);
+    invoice.remaining -= applied;
+    pool -= applied;
+  }
+
+  const open = invoices.filter((i) => i.remaining > 0.005 && i.due);
+  return { oldestOpenDue: open[0]?.due ?? null, openCount: open.length };
+}
+
+/** Case, spacing and punctuation removed, so a bank reference can be searched for a number. */
+function normaliseDocRef(ref: string | null | undefined): string {
+  return (ref ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /**
@@ -147,6 +233,7 @@ export function statementTotals(input: StatementInput): StatementTotals[] {
       documentCount: 0,
       paymentCount: 0,
       dueOn: null,
+      overdue: false,
     };
     map.set(currency, cur);
     return cur;
@@ -156,14 +243,21 @@ export function statementTotals(input: StatementInput): StatementTotals[] {
     const t = of(d.currency);
     t.invoiced += d.amount;
     t.documentCount += 1;
-    // The date the client is asked to settle by is the latest invoice's own due
-    // date. Credit notes carry one too, and it means nothing here.
-    if (d.amount > 0 && d.due && (t.dueOn == null || d.due > t.dueOn)) t.dueOn = d.due;
   }
   for (const p of input.payments) {
     const t = of(p.currency);
     t.received += p.amount;
     t.paymentCount += 1;
+  }
+
+  // Which invoices are still open decides the date, so it is worked out per currency —
+  // see settleInvoices for how a payment is attributed to an invoice.
+  for (const t of map.values()) {
+    const open = settleInvoices(
+      input.documents.filter((d) => d.currency === t.currency),
+      input.payments.filter((p) => p.currency === t.currency),
+    );
+    t.dueOn = open.oldestOpenDue;
   }
 
   return [...map.values()]
@@ -172,6 +266,8 @@ export function statementTotals(input: StatementInput): StatementTotals[] {
       invoiced: round2(t.invoiced),
       received: round2(t.received),
       balance: round2(t.invoiced - t.received),
+      overdue:
+        t.dueOn != null && t.dueOn < input.generatedOn && round2(t.invoiced - t.received) > 0.005,
     }))
     .sort(
       (a, b) => Math.abs(b.balance) - Math.abs(a.balance) || a.currency.localeCompare(b.currency),
@@ -506,6 +602,9 @@ export const DOCUMENT_CSS = `
   color: #101F34;
   white-space: nowrap;
 }
+/* An overdue balance is not the same news as a due one, and the pill is where a reader
+   looks first. Red on the DS's own paper tone, not the naboo yellow. */
+.naboo-doc .pill-overdue { background: #FDECEC; color: #B4534B; font-weight: 600 }
 .naboo-doc .tile-figure { margin-top: 5px; font-size: 23px; font-weight: 700; line-height: 1.1 }
 .naboo-doc .tile-figure-received { color: #00B67A }
 .naboo-doc .tile-figure-due { font-weight: 800 }
@@ -725,7 +824,11 @@ function currencyBlock(
   <div>
     <div class="closing-title">Balance due${suffix}</div>
     <div class="closing-sub">Payable to ${esc(input.booking.billing_entity)} · ${
-      totals.dueOn ? `due ${esc(fmtDay(totals.dueOn))}` : "due on receipt"
+      totals.dueOn
+        ? totals.overdue
+          ? `overdue since ${esc(fmtDay(totals.dueOn))}`
+          : `due ${esc(fmtDay(totals.dueOn))}`
+        : "due on receipt"
     } · reference ${esc(input.booking.readable_id)}</div>
   </div>
   <div class="closing-figure">
@@ -772,7 +875,13 @@ export function buildStatementHtml(input: StatementInput, options: StatementHtml
   <div class="tile tile-due">
     <div class="tile-head">
       <span class="tile-label">Balance due</span>
-      ${t.dueOn ? `<span class="pill">Due ${esc(fmtDay(t.dueOn))}</span>` : ""}
+      ${
+        t.dueOn
+          ? t.overdue
+            ? `<span class="pill pill-overdue">Overdue since ${esc(fmtDay(t.dueOn))}</span>`
+            : `<span class="pill">Due ${esc(fmtDay(t.dueOn))}</span>`
+          : ""
+      }
     </div>
     <div class="tile-figure tile-figure-due num">${esc(fmtMoney(t.balance))}</div>
     <div class="tile-caption">Invoiced less received · ${esc(t.currency)}</div>
@@ -804,8 +913,11 @@ export function buildStatementHtml(input: StatementInput, options: StatementHtml
       { label: "Booking", value: input.booking.readable_id },
       { label: "Billing entity", value: input.booking.billing_entity },
     ],
+    entity: input.booking.billing_entity,
     bodyHtml: `${tiles}\n${blocks}`,
-    footnoteHtml: `Generated from Naboo's finance records on ${esc(generated)}.${esc(nettingNote)}
+    footnoteHtml: `Generated from Naboo's finance records on ${esc(generated)}${
+      input.syncedUpTo ? `, synchronised up to ${esc(fmtLongDay(input.syncedUpTo))}` : ""
+    }.${esc(nettingNote)}
     Amounts are shown including taxes${headline ? ` in ${esc(currencies)}` : ""}.
     Questions on this statement: <a href="mailto:${esc(email)}">${esc(email)}</a>${
       name ? ` (${esc(name)}, event manager)` : ""
@@ -831,6 +943,15 @@ export type DocumentShellOptions = {
   /** Already escaped, and may contain the contact's mailto link. */
   footnoteHtml: string;
   contactEmail: string;
+  /**
+   * The legal entity that issued the document, for the running footer.
+   *
+   * Taken from the booking rather than assumed: the footer read "Naboo Group" on a
+   * statement issued by NABOO US Inc., which the balance bar named correctly two
+   * centimetres above it. A document that disagrees with itself about who is owed the
+   * money invites a call rather than a payment.
+   */
+  entity?: string | null;
 };
 
 /**
@@ -859,7 +980,7 @@ export function documentShell(options: DocumentShellOptions): string {
   </span>
 </header>
 <footer class="running-footer">
-  <span>Naboo Group · ${esc(options.contactEmail)}</span>
+  <span>${esc(options.entity ?? "Naboo Group")} · ${esc(options.contactEmail)}</span>
   <span>${esc(options.footerLabel ?? options.kind)} ${ref} · ${esc(generated)}</span>
 </footer>
 <table class="page-frame" role="presentation">
