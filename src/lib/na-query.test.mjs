@@ -406,5 +406,42 @@ console.log("\n[the query carries both names]");
   );
 }
 
+// ── What "deleted" means on an invoice line ─────────────────────────────────
+// It does not mean the line is not on the invoice. A booking invoiced in instalments
+// restates the service at its current price on each document and carries a flagged
+// row taking off what the earlier documents already billed — so the flagged rows are
+// the deductions, and a sum that skips them counts the same service on every invoice
+// that mentions it. C-Q382 / Hubspot read 73,829.83 against a back office 38,629.83.
+//
+// The reason this needs guarding rather than just fixing: `deleted = false` is what
+// anyone would write, and it is right everywhere else in this file — on payments, on
+// client requests, on the free-invoicing table. It is wrong only where invoice lines
+// are being added up, and it is wrong silently.
+console.log("\n[an invoiced total counts every line row]");
+{
+  const summing = ["invoiced_client", "invoiced_by_quote"];
+  for (const name of summing) {
+    const cte = bodies.find((c) => c.name === name);
+    t(`${name} is still in the query`, cte != null);
+    if (!cte) continue;
+    // strip() has already removed the comments, so this is the code.
+    t(`${name} adds up the invoice lines`, /SUM\(IF\([\s\S]*total_incl_taxes/.test(cte.body));
+    t(
+      `${name} does not drop the flagged rows`,
+      !/\bli\.deleted\b/.test(cte.body),
+      cte.body.split("\n").find((l) => /deleted/.test(l)) ?? "",
+    );
+  }
+  // The two joins that only ask whether a commission document exists are a different
+  // question and keep the filter: 3,980 of the 3,981 commission notes carry a live
+  // FEE_OWNER line, so nothing is found by relaxing it and a reversal-only document
+  // would start counting as one.
+  const docs = bodies.find((c) => c.name === "commission_docs_by_quote");
+  t(
+    "the existence join still filters on it",
+    docs != null && /li\.deleted = false/.test(docs.body),
+  );
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

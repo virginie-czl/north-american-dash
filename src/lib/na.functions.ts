@@ -281,8 +281,23 @@ client_proposal_totals AS (
 -- SERVICE + FEE_CLIENT only. FEE_OWNER lines are our commission invoiced to the
 -- partner, not to the client, and would otherwise inflate the client total.
 -- All statuses, so a cancelled invoice and its credit note cancel each other.
--- Client invoices for the detail pane's invoicing tab. Income direction only:
--- partner invoices and commission notes belong elsewhere.
+--
+-- ⚠ And every line, including the ones the flag calls deleted. That flag does not mean
+-- "this line is not on the invoice". On a booking invoiced in instalments each
+-- document restates the service at its current price and then carries a flagged
+-- row taking off what the previous documents already billed, so the flagged rows
+-- are the deductions — dropping them leaves only the gross restatements and the
+-- same service is counted on every invoice that mentions it.
+--
+-- C-Q382 / Hubspot is the case that found it: NABI-FR26-03063 restates Food and
+-- Beverage at 24,000.00 and deducts the 10,800.00 already invoiced on 03062, and
+-- 03064 restates the whole stay at 32,353.65 and deducts the 24,250.00 before it.
+-- Counting only the live rows read 73,829.83 against a back office 38,629.83.
+--
+-- Measured over all 19,102 documents in the warehouse: summing every line row
+-- reproduces the document's own total exactly, on every single one. Excluding the
+-- flagged rows misses on 1,439 of them. Nine North American bookings were
+-- overstated, by 327,409.25 in total and 139,543.02 on C-N714 alone.
 invoiced_client AS (
   SELECT
     i.clientRequestReadableId AS rid,
@@ -296,7 +311,6 @@ invoiced_client AS (
   JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
     ON li.invoice_id = i.invoice_id
   WHERE i.invoiceDirection = 'INCOME'
-    AND li.deleted = false
     AND i.clientRequestReadableId IS NOT NULL
   GROUP BY rid
 ),
@@ -320,8 +334,15 @@ invoiced_by_quote AS (
   -- against a back office 49 830,47 USD.
   -- Only ISSUED and CANCELLED exist on client invoices, so nothing unissued
   -- slips in this way.
+  --
+  -- And every line, flagged or not, for the reason set out above
+  -- invoiced_client: on an instalment invoice the flagged rows are the deductions
+  -- for what earlier documents already billed. This figure drives payable_to_date
+  -- and so outstanding, which is what the recovery asks and the clawback split are
+  -- computed from — 16 North American partner quotes across 9 bookings read too
+  -- high, so a provider could be told they had been invoiced for work that had only
+  -- been restated.
   WHERE i.invoiceDirection = 'INCOME'
-    AND li.deleted = false
     AND li.quote_id IS NOT NULL
   GROUP BY li.quote_id
 ),
