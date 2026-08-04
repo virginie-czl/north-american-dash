@@ -22,6 +22,8 @@ export type NaDisbursement = {
   /** Derived from the label — see the disbursements CTE. */
   method: "card" | "wire" | null;
   reference: string | null;
+  /** "out" is money we sent; "in" is money the provider sent back. */
+  direction: "out" | "in";
 };
 
 /**
@@ -113,7 +115,14 @@ prov AS (
   )
   WHERE rn = 1
 ),
--- Every payment we made to a provider, for the recovery emails.
+-- Every payment that moved between us and a provider, for the recovery emails.
+--
+-- Both directions. A provider who has sent money back is not rare — 72 host payments
+-- on North American bookings are inflows, 423,431.22 USD of them, and 33 carry a
+-- house_id and so would land in this list — and totalling outflows alone told the
+-- provider we had paid them more than we had. Hotel Spero on C-S843 returned 782.99
+-- of a 3,719.20 payment; an email claiming 3,847.43 paid is one the provider can
+-- disprove from their own ledger in a minute.
 --
 -- Card vs wire is not stored: provider_payload_kind is PENNYLANE on both, because
 -- it says where the bank feed came from, not how we paid. The signature is in the
@@ -140,7 +149,8 @@ disbursements AS (
         REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*([^|]+?)\\s*\\|\\s*id:'),
         REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*(.+)$'),
         p.provider_payload_label
-      ) AS reference
+      ) AS reference,
+      IF(p.flow = 'INFLOW_PAYMENT', 'in', 'out') AS direction
     ) ORDER BY p.date) AS items
   FROM \`naboo-app-365515.raw_naboo_data.payments\` p
   -- Joined rather than filtered by IN: a subquery reading prov cannot be
@@ -148,7 +158,7 @@ disbursements AS (
   JOIN (SELECT DISTINCT crid FROM prov) pk ON pk.crid = p.client_request_id
   WHERE p.deleted = FALSE
     AND p.kind = 'HOST_PAYMENT'
-    AND p.flow = 'OUTFLOW_PAYMENT'
+    AND p.flow IN ('OUTFLOW_PAYMENT', 'INFLOW_PAYMENT')
   GROUP BY crid, p.house_id
 ),
 -- Commissionable lines and their rate, one line per pricing option.
@@ -226,7 +236,8 @@ SELECT
   prov.commission_ttc,
   IFNULL(cm.base_total_ht, 0) AS commissionable_base_ht,
   TO_JSON_STRING(IFNULL(d.items, CAST([] AS ARRAY<STRUCT<
-    amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
+    amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING,
+    direction STRING
   >>))) AS disbursements_json,
   TO_JSON_STRING(IFNULL(cm.items, CAST([] AS ARRAY<STRUCT<
     label STRING, base_ht FLOAT64, qty FLOAT64, unit STRING,
@@ -272,7 +283,9 @@ export const getCommissionDetail = createServerFn({ method: "POST" })
       .map((r) => ({
         event_ref: String(r.event_ref),
         house_code: String(r.house_code),
-        disbursements: parseJsonArray<NaDisbursement>(r.disbursements_json),
+        disbursements: parseJsonArray<Omit<NaDisbursement, "direction"> & { direction?: string }>(
+          r.disbursements_json,
+        ).map((d) => ({ ...d, direction: d.direction === "in" ? "in" : "out" })),
         commissionable: parseJsonArray<{
           label: string | null;
           base_ht: number | null;
