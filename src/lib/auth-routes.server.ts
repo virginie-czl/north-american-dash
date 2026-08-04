@@ -21,10 +21,15 @@ import {
   registerAndGetAccess,
 } from "./access.server";
 import {
+  PENDING_COOKIE,
+  PENDING_MAX_AGE_S,
   SESSION_COOKIE,
+  SESSION_MAX_AGE_S,
   STATE_COOKIE,
+  getPendingIdentity,
   parseCookies,
   serializeCookie,
+  signPendingIdentity,
   signSession,
   getSessionFromRequest,
 } from "./session.server";
@@ -138,25 +143,86 @@ async function handleCallback(request: Request): Promise<Response> {
 
   // Identity established. Access is a separate question: record the sign-in and
   // check standing before handing out a session.
-  const standing = await registerAndGetAccess({
-    email,
-    name: claims.name ?? null,
-    picture: claims.picture ?? null,
-  });
-  if (standing.status !== "approved") {
-    return redirect(`/auth?status=${standing.status}`, [clearState]);
-  }
-
-  const session = await signSession({
+  const identity = {
     id: claims.sub,
     email,
     name: claims.name ?? null,
     picture: claims.picture ?? null,
+  };
+  const standing = await registerAndGetAccess({
+    email,
+    name: identity.name,
+    picture: identity.picture,
   });
+  if (standing.status !== "approved") {
+    // Remember who is waiting, so the approval can reach the page they are looking at
+    // instead of requiring another trip through Google to discover it happened. The
+    // cookie grants nothing — see signPendingIdentity — and is only issued to someone
+    // whose access is genuinely pending; a refusal has nothing to wait for.
+    const cookies = [clearState];
+    if (standing.status === "pending") {
+      cookies.push(
+        serializeCookie(PENDING_COOKIE, await signPendingIdentity(identity), {
+          maxAge: PENDING_MAX_AGE_S,
+          secure,
+        }),
+      );
+    }
+    return redirect(`/auth?status=${standing.status}`, cookies);
+  }
+
   return redirect("/", [
     clearState,
-    serializeCookie(SESSION_COOKIE, session, { maxAge: 7 * 24 * 60 * 60, secure }),
+    serializeCookie(SESSION_COOKIE, await signSession(identity), {
+      maxAge: SESSION_MAX_AGE_S,
+      secure,
+    }),
+    // Nothing left to wait for.
+    serializeCookie(PENDING_COOKIE, "", { maxAge: 0, secure }),
   ]);
+}
+
+/**
+ * "Am I in yet?" — polled by the waiting screen.
+ *
+ * Answers for whoever the browser remembers: an approved session, or an identity still
+ * waiting for a decision. When the decision has landed and it was yes, this is also
+ * where the waiting identity becomes a real session, so the page that asked can simply
+ * reload into the app. That conversion re-reads the standing from the database first and
+ * is the only thing the waiting cookie can ever buy.
+ */
+async function handleAccessStatus(request: Request): Promise<Response> {
+  const secure = isSecureOrigin(requestOrigin(request));
+  const session = await getSessionFromRequest(request);
+  const identity = session ?? (await getPendingIdentity(request));
+
+  const body = (payload: Record<string, unknown>, cookies: string[] = []): Response => {
+    const headers = new Headers({
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    for (const c of cookies) headers.append("Set-Cookie", c);
+    return new Response(JSON.stringify(payload), { status: 200, headers });
+  };
+
+  if (!identity) return body({ status: "signed-out", trackers: [], ready: false });
+
+  const { status, role, trackers } = await getAccess(identity.email, { fresh: true });
+  // Approved with no page ticked is still a locked door — every tracker route bounces
+  // back to this screen — so it is not "ready". Admins always have the access page.
+  const ready = status === "approved" && (trackers.length > 0 || isAdmin(role));
+
+  const cookies: string[] = [];
+  if (status === "approved" && !session) {
+    cookies.push(
+      serializeCookie(SESSION_COOKIE, await signSession(identity), {
+        maxAge: SESSION_MAX_AGE_S,
+        secure,
+      }),
+      serializeCookie(PENDING_COOKIE, "", { maxAge: 0, secure }),
+    );
+  }
+  return body({ status, trackers, ready }, cookies);
 }
 
 async function handleMe(request: Request): Promise<Response> {
@@ -189,10 +255,12 @@ async function handleMe(request: Request): Promise<Response> {
 
 function handleLogout(request: Request): Response {
   const secure = isSecureOrigin(requestOrigin(request));
-  return new Response(null, {
-    status: 204,
-    headers: { "Set-Cookie": serializeCookie(SESSION_COOKIE, "", { maxAge: 0, secure }) },
-  });
+  const headers = new Headers();
+  headers.append("Set-Cookie", serializeCookie(SESSION_COOKIE, "", { maxAge: 0, secure }));
+  // Signing out of a waiting screen has to drop the waiting identity too, or the poll
+  // would keep answering for someone who just asked to be forgotten.
+  headers.append("Set-Cookie", serializeCookie(PENDING_COOKIE, "", { maxAge: 0, secure }));
+  return new Response(null, { status: 204, headers });
 }
 
 // --- Gmail connection (separate from sign-in) -------------------------------
@@ -313,6 +381,151 @@ async function handleGmailDisconnect(request: Request): Promise<Response> {
   return new Response(null, { status: 204 });
 }
 
+// --- Slack (personal, and only for the task board) ---------------------------
+//
+// A separate grant from the workspace bot that reads #finance-paiement-by-card. This one
+// is per person, asks for three user scopes — so it can only ever see what that person can
+// already see — and feeds nothing but that person's own cards on /tasks. Reminders, saved
+// items and their own Activity. See slack-user.server.ts.
+
+const SLACK_STATE_COOKIE = "naboo_slack_state";
+
+/**
+ * The personal Slack grant exists for one reason: putting somebody's own items on the task
+ * board. If an admin has taken the board away from them, connecting or pulling would feed
+ * a page they cannot open — so those three ask for the same access the board does.
+ *
+ * Disconnect deliberately does not: revoking your own token is something you should be
+ * able to do whatever your access says, and refusing it would strand a live grant at Slack.
+ */
+async function hasBoardAccess(email: string): Promise<boolean> {
+  const { getAccess } = await import("./access.server");
+  const { trackers } = await getAccess(email);
+  return trackers.includes("tasks");
+}
+
+async function handleSlackConnect(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return redirect("/auth");
+  if (!(await hasBoardAccess(session.email))) return redirect("/auth");
+  const origin = requestOrigin(request);
+  const state = crypto.randomUUID();
+  const { SLACK_AUTHORIZE_URL, SLACK_USER_SCOPES } = await import("./slack-user.server");
+  const params = new URLSearchParams({
+    client_id: requiredEnv("SLACK_CLIENT_ID"),
+    redirect_uri: `${origin}/api/slack/callback`,
+    // user_scope, not scope: this asks for a token that acts as the person, and only for
+    // the things they are being asked to share.
+    user_scope: SLACK_USER_SCOPES.join(","),
+    state,
+  });
+  return redirect(`${SLACK_AUTHORIZE_URL}?${params.toString()}`, [
+    serializeCookie(SLACK_STATE_COOKIE, state, {
+      maxAge: 600,
+      secure: isSecureOrigin(origin),
+    }),
+  ]);
+}
+
+async function handleSlackCallback(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return redirect("/auth");
+  // Access can have been taken away between the redirect out and the redirect back.
+  if (!(await hasBoardAccess(session.email))) return redirect("/auth");
+  const origin = requestOrigin(request);
+  const secure = isSecureOrigin(origin);
+  const clearState = serializeCookie(SLACK_STATE_COOKIE, "", { maxAge: 0, secure });
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const cookies = parseCookies(request.headers.get("cookie"));
+
+  if (!code || !state || cookies[SLACK_STATE_COOKIE] !== state) {
+    return redirect("/tasks?slack=error", [clearState]);
+  }
+
+  const response = await fetch("https://slack.com/api/oauth.v2.access", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: requiredEnv("SLACK_CLIENT_ID"),
+      client_secret: requiredEnv("SLACK_CLIENT_SECRET"),
+      redirect_uri: `${origin}/api/slack/callback`,
+    }),
+  });
+  const body = (await response.json()) as {
+    ok?: boolean;
+    error?: string;
+    team?: { name?: string };
+    authed_user?: { id?: string; access_token?: string; scope?: string };
+  };
+  const user = body.authed_user;
+  if (!response.ok || body.ok !== true || !user?.access_token || !user.id) {
+    console.error("Slack token exchange failed:", body.error ?? response.status);
+    return redirect("/tasks?slack=error", [clearState]);
+  }
+
+  const { storeSlackToken, syncSlackTasks } = await import("./slack-user.server");
+  await storeSlackToken({
+    email: session.email,
+    token: user.access_token,
+    scopes: user.scope ?? "",
+    slackUserId: user.id,
+    teamName: body.team?.name ?? null,
+  });
+  // Pull straight away rather than leaving the board empty until the cron runs: the
+  // person just connected an account and expects to see something for it.
+  try {
+    await syncSlackTasks(session.email);
+  } catch (error) {
+    console.error("first Slack sync failed (the cron will retry):", error);
+    return redirect("/tasks?slack=connected-empty", [clearState]);
+  }
+  return redirect("/tasks?slack=connected", [clearState]);
+}
+
+async function handleSlackStatus(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  if (!(await hasBoardAccess(session.email))) return new Response(null, { status: 403 });
+  const { getSlackConnection } = await import("./slack-user.server");
+  const connection = await getSlackConnection(session.email);
+  return new Response(JSON.stringify({ connected: connection != null, ...connection }), {
+    status: 200,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+
+async function handleSlackDisconnect(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  const { disconnectSlack } = await import("./slack-user.server");
+  await disconnectSlack(session.email);
+  return new Response(null, { status: 204 });
+}
+
+/** The button on the board: pull my own items now rather than waiting for the cron. */
+async function handleSlackSync(request: Request): Promise<Response> {
+  const session = await getSessionFromRequest(request);
+  if (!session) return new Response(null, { status: 401 });
+  if (!(await hasBoardAccess(session.email))) return new Response(null, { status: 403 });
+  const { syncSlackTasks } = await import("./slack-user.server");
+  try {
+    const result = await syncSlackTasks(session.email);
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  } catch (error) {
+    // A sync that fails must say so: the board would otherwise look up to date.
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+      { status: 502, headers: { "content-type": "application/json" } },
+    );
+  }
+}
+
 // --- Access administration ---------------------------------------------------
 
 async function handleAdminUsers(request: Request): Promise<Response> {
@@ -360,6 +573,7 @@ export async function handleAuthRequest(request: Request): Promise<Response | nu
   if (
     !pathname.startsWith("/api/auth/") &&
     !pathname.startsWith("/api/gmail/") &&
+    !pathname.startsWith("/api/slack/") &&
     !pathname.startsWith("/api/admin/")
   ) {
     return null;
@@ -371,6 +585,21 @@ export async function handleAuthRequest(request: Request): Promise<Response | nu
     }
     if (pathname === "/api/admin/decide" && request.method === "POST") {
       return await handleAdminDecide(request);
+    }
+    if (pathname === "/api/slack/connect" && request.method === "GET") {
+      return await handleSlackConnect(request);
+    }
+    if (pathname === "/api/slack/callback" && request.method === "GET") {
+      return await handleSlackCallback(request);
+    }
+    if (pathname === "/api/slack/status" && request.method === "GET") {
+      return await handleSlackStatus(request);
+    }
+    if (pathname === "/api/slack/disconnect" && request.method === "POST") {
+      return await handleSlackDisconnect(request);
+    }
+    if (pathname === "/api/slack/sync" && request.method === "POST") {
+      return await handleSlackSync(request);
     }
     if (pathname === "/api/gmail/connect" && request.method === "GET") {
       return await handleGmailConnect(request);
@@ -389,6 +618,9 @@ export async function handleAuthRequest(request: Request): Promise<Response | nu
       return await handleCallback(request);
     }
     if (pathname === "/api/auth/me" && request.method === "GET") return await handleMe(request);
+    if (pathname === "/api/auth/status" && request.method === "GET") {
+      return await handleAccessStatus(request);
+    }
     if (pathname === "/api/auth/logout" && request.method === "POST") {
       return handleLogout(request);
     }

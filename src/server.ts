@@ -44,9 +44,16 @@ export default {
       const authResponse = await handleAuthRequest(request);
       if (authResponse) return authResponse;
 
+      // Scheduled work, before anything user-facing: it answers to a secret, not a
+      // session, so it must never fall through to the app's own auth.
       const { handleCronRequest } = await import("./lib/cron-routes.server");
       const cronResponse = await handleCronRequest(request);
       if (cronResponse) return cronResponse;
+
+      // The PDF endpoints: a file response, so they need the headers themselves.
+      const { handleDocumentRequest } = await import("./lib/document-routes.server");
+      const documentResponse = await handleDocumentRequest(request);
+      if (documentResponse) return documentResponse;
 
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);

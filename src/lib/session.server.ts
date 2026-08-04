@@ -6,7 +6,15 @@ import { SignJWT, jwtVerify } from "jose";
 
 export const SESSION_COOKIE = "naboo_session";
 export const STATE_COOKIE = "naboo_oauth_state";
-const SESSION_MAX_AGE_S = 7 * 24 * 60 * 60; // 7 days
+export const PENDING_COOKIE = "naboo_pending";
+export const SESSION_MAX_AGE_S = 7 * 24 * 60 * 60; // 7 days
+/**
+ * A waiting identity is deliberately short-lived. It grants nothing on its own, but it
+ * is what lets an approval be picked up without a second trip through Google — so it
+ * should not outlive the afternoon someone spent waiting for it. Past that, signing in
+ * again re-proves the account still exists.
+ */
+export const PENDING_MAX_AGE_S = 12 * 60 * 60;
 
 export interface SessionUser {
   /** Google account `sub` — stable unique id */
@@ -31,10 +39,17 @@ export async function signSession(user: SessionUser): Promise<string> {
     .sign(getSecret());
 }
 
-export async function verifySessionToken(token: string): Promise<SessionUser | null> {
+async function verifyToken(token: string, use: "session" | "pending"): Promise<SessionUser | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
     if (!payload.sub || typeof payload.email !== "string") return null;
+    // Both tokens are signed with the same secret, so the claim is what separates them.
+    // A waiting identity carries `use: "pending"` and must never be accepted as a
+    // session: moving the cookie's value across by hand would otherwise be a way into
+    // the app without an approval. Sessions predate the claim and so carry none, which
+    // is why this is a rejection of "pending" rather than a demand for "session".
+    if (use === "session" && payload.use === "pending") return null;
+    if (use === "pending" && payload.use !== "pending") return null;
     return {
       id: payload.sub,
       email: payload.email,
@@ -44,6 +59,33 @@ export async function verifySessionToken(token: string): Promise<SessionUser | n
   } catch {
     return null;
   }
+}
+
+export async function verifySessionToken(token: string): Promise<SessionUser | null> {
+  return verifyToken(token, "session");
+}
+
+/**
+ * A verified identity with no access at all.
+ *
+ * Someone signing in for the first time has proved who they are and then has to wait for
+ * an admin. Issuing them no cookie meant the browser forgot them entirely: the approval
+ * could not reach the page they were looking at, and they had to go back through Google
+ * to discover it had happened. This cookie remembers the identity — nothing more. Every
+ * gate reads the session cookie, so holding this one opens no door; it exists so that
+ * `/api/auth/status` can answer "you're in now" and hand over a real session.
+ */
+export async function signPendingIdentity(user: SessionUser): Promise<string> {
+  return new SignJWT({ email: user.email, name: user.name, picture: user.picture, use: "pending" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(user.id)
+    .setIssuedAt()
+    .setExpirationTime(`${PENDING_MAX_AGE_S}s`)
+    .sign(getSecret());
+}
+
+export async function verifyPendingToken(token: string): Promise<SessionUser | null> {
+  return verifyToken(token, "pending");
 }
 
 export function parseCookies(header: string | null): Record<string, string> {
@@ -76,6 +118,14 @@ export async function getSessionFromRequest(request: Request): Promise<SessionUs
   return verifySessionToken(token);
 }
 
+/** The identity of someone waiting for approval, if their browser still remembers it. */
+export async function getPendingIdentity(request: Request): Promise<SessionUser | null> {
+  const cookies = parseCookies(request.headers.get("cookie"));
+  const token = cookies[PENDING_COOKIE];
+  if (!token) return null;
+  return verifyPendingToken(token);
+}
+
 /**
  * Thrown by server functions. A thrown `Response` gets serialised into the
  * function's return value, so the client ends up with `{ error: ... }` where it
@@ -94,15 +144,16 @@ export class AuthError extends Error {
  * For use inside TanStack server functions: reads the current request's session
  * cookie and throws when the caller is not an approved user.
  */
-export async function requireSession(): Promise<SessionUser> {
-  const { getRequest } = await import("@tanstack/react-start/server");
-  const request = getRequest();
-  const session = request ? await getSessionFromRequest(request) : null;
+/**
+ * The approval rule itself, shared by both entry points below.
+ *
+ * A valid cookie is not enough: access can have been revoked since it was issued, and
+ * cookies live for a week.
+ */
+async function requireApproved(session: SessionUser | null): Promise<SessionUser> {
   if (!session) {
     throw new AuthError("Session expirée — reconnectez-vous.", 401);
   }
-  // A valid cookie is not enough: access can have been revoked since it was
-  // issued, and cookies live for a week.
   const { getAccess } = await import("./access.server");
   const { status } = await getAccess(session.email);
   if (status !== "approved") {
@@ -116,13 +167,38 @@ export async function requireSession(): Promise<SessionUser> {
   return session;
 }
 
+export async function requireSession(): Promise<SessionUser> {
+  const { getRequest } = await import("@tanstack/react-start/server");
+  const request = getRequest();
+  return requireApproved(request ? await getSessionFromRequest(request) : null);
+}
+
+/**
+ * Same, for a handler holding the Request itself.
+ *
+ * The document endpoints run in the fetch handler, ahead of the framework, so there is
+ * no ambient request context to read — they must be able to apply the identical rule
+ * rather than a second, looser copy of it.
+ */
+export async function requireSessionFor(request: Request): Promise<SessionUser> {
+  return requireApproved(await getSessionFromRequest(request));
+}
+
 /**
  * Requires an approved session that is allowed to open a given tracker. Every
  * tracker's data query goes through this: hiding a tab in the nav is presentation,
  * not access control — the endpoint has to refuse.
  */
 export async function requireTracker(tracker: string): Promise<SessionUser> {
-  const session = await requireSession();
+  return allowedOnTracker(await requireSession(), tracker);
+}
+
+/** Same, for a handler holding the Request itself. */
+export async function requireTrackerFor(request: Request, tracker: string): Promise<SessionUser> {
+  return allowedOnTracker(await requireSessionFor(request), tracker);
+}
+
+async function allowedOnTracker(session: SessionUser, tracker: string): Promise<SessionUser> {
   const { getAccess } = await import("./access.server");
   const { trackers } = await getAccess(session.email);
   if (!trackers.includes(tracker as never)) {

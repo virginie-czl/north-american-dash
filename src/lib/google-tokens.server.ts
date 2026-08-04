@@ -10,6 +10,11 @@ import { decryptSecret, encryptSecret } from "./crypto.server";
 export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.compose",
+  // Read-only access to Gmail *settings* — added so a draft or send can carry the
+  // sender's own signature (`gmail.server.ts#getSignatureHtml`). A user connected
+  // before this was added does not have it yet and must reconnect Gmail; until they
+  // do, sends fail soft to no signature rather than breaking outright.
+  "https://www.googleapis.com/auth/gmail.settings.basic",
 ];
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";

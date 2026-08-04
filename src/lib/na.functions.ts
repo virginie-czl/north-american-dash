@@ -1,32 +1,26 @@
 import { createServerFn } from "@tanstack/react-start";
-
-export type NaDisbursement = {
-  amount: number | null;
-  currency: string | null;
-  /** dd/mm/yy, as recorded in the bank feed. */
-  paid_on: string | null;
-  /** Derived from the label — see the disbursements CTE. */
-  method: "card" | "wire" | null;
-  reference: string | null;
-};
-
-export type NaCommissionableItem = {
-  label: string | null;
-  base_ht: number | null;
-  /** Percentage, e.g. 7 for 7%. */
-  rate_pct: number | null;
-};
+import { commissionNoteSql } from "./invoice-series";
 
 export interface NaPartnerLine {
   /** Owner code (O-XXXX) — matches credit-card approvals in #finance-paiement-by-card. */
   owner_code: string | null;
-  /** Every payment we made to this provider on this booking. */
-  disbursements: NaDisbursement[] | null;
-  /** The lines a commission is applied to, and its rate. */
-  commissionable: NaCommissionableItem[] | null;
-  /** Sum of the commissionable lines, before tax. */
-  commissionable_base_ht: number | null;
+  /** House code (H-XXXX): the venue, and the key a commission statement is drawn on. */
+  house_code: string | null;
+  /** How many NABCO commission documents exist for this provider on this booking. */
+  commission_doc_count: number | null;
+  /**
+   * Who invoices us: the owner's company name. This is the partner's *identity* here —
+   * every stored key (email facts, statuses, the recovery log) is derived from it, so it
+   * must not change when the display does.
+   */
   name: string | null;
+  /**
+   * What was booked: the house's own title — "Hotel Healdsburg" where the owner is
+   * "Piazza Hospitality Group". This is what the screen shows, because it is what the
+   * person reading the booking recognises, and because two houses under one owner are
+   * otherwise two identical lines. Null on a provision leg, which has no house.
+   */
+  house_name: string | null;
   email: string | null;
   /** The contact's own first name (owners.firstname) — distinct from the venue/company name. */
   contact_first_name: string | null;
@@ -48,14 +42,41 @@ export interface NaPartnerLine {
 }
 
 export interface NaInvoiceLine {
+  invoice_id: string | null;
   invoice_ref: string | null;
+  /** CLIENT for documents billed to the client, PARTNER for our commission notes. */
+  party: string | null;
+  /** INVOICE or CREDIT_NOTE. */
+  doc_kind: string | null;
   status: string | null;
   currency: string | null;
   amount_ttc: number | null;
   emission_date: string | null;
   due_date: string | null;
   is_sent: boolean | null;
+  /** The invoice this credit note reverses, when it reverses one. */
+  cancels_invoice_id: string | null;
+  pdf_url: string | null;
+  /** The Naboo entity that issued it, e.g. "NABOO US Inc." */
+  seller_name: string | null;
+  /** The address the invoice was addressed to, when recorded. */
+  buyer_email: string | null;
+  /** BANK_TRANSFER, CARD… — how this invoice asks to be settled. */
+  payment_means: string | null;
+  /** The receiving account as printed on this very invoice. */
+  bank_details: string | null;
 }
+
+/** One receipt of client cash on a booking, for the recovery email's ledger. */
+export type NaClientReceipt = {
+  amount: number | null;
+  currency: string | null;
+  /** ISO date. */
+  paid_on: string | null;
+  /** Derived from the provider — see the client_receipts CTE. */
+  method: string | null;
+  reference: string | null;
+};
 
 export interface NaRow {
   readable_id: string | null;
@@ -83,80 +104,112 @@ export interface NaRow {
   balance_ccy: number | null;
   partners_json: string | null;
   invoices_json: string | null;
+  /** Every euro/dollar of client cash received on the booking, itemised. */
+  client_receipts_json: string | null;
+  /** Who to write to about the money: the booking's client contact. */
+  client_contact_email: string | null;
+  client_contact_name: string | null;
 }
 
 const QUERY = `
 WITH
--- Disbursements to each provider, for the recovery emails.
+-- How many commission documents exist per provider quote. Only used to decide
+-- whether a partner card offers a commission statement at all: a card with no
+-- commission document must not offer a button that produces an empty page.
 --
--- Card vs wire is not stored: provider_payload_kind is PENNYLANE on both, because
--- it says where the bank feed came from, not how we paid. The signature is in the
--- label — an MCC between pipes, or two bare codes joined by a slash — a rule that
--- classifies all 865 North American host payments with nothing left over.
--- It parses a bank feed format, so it will degrade silently if that format
--- changes: see paymentMethodFromLabel and its tests.
-disbursements AS (
-  SELECT
-    p.client_request_id AS crid,
-    p.house_id AS house_id,
-    ARRAY_AGG(STRUCT(
-      CAST(ROUND(p.amount / 10000, 2) AS FLOAT64) AS amount,
-      p.currency AS currency,
-      FORMAT_DATETIME('%d/%m/%y', p.date) AS paid_on,
-      IF(
-        REGEXP_CONTAINS(IFNULL(p.provider_payload_label, ''), r'\\|\\s*\\d{4}\\s*\\|')
-          OR REGEXP_CONTAINS(
-               IFNULL(p.provider_payload_label, ''),
-               r'\\b[HCO]-[A-Za-z0-9]+\\s*/\\s*[HCO]-[A-Za-z0-9]+\\b'),
-        'card', 'wire'
-      ) AS method,
-      COALESCE(
-        REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*([^|]+?)\\s*\\|\\s*id:'),
-        REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*(.+)$'),
-        p.provider_payload_label
-      ) AS reference
-    ) ORDER BY p.date) AS items
-  FROM \`naboo-app-365515.raw_naboo_data.payments\` p
-  WHERE p.deleted = FALSE
-    AND p.kind = 'HOST_PAYMENT'
-    AND p.flow = 'OUTFLOW_PAYMENT'
-  GROUP BY crid, p.house_id
-),
--- Commissionable lines and their rate. The table holds duplicate rows per item,
--- hence the DISTINCT before aggregating, and the rate is stored in
--- hundred-thousandths (70000 = 7%).
-commissionable AS (
-  SELECT
-    quote_id,
-    ARRAY_AGG(STRUCT(label, base_ht, rate_pct) ORDER BY base_ht DESC) AS items,
-    ROUND(SUM(base_ht), 2) AS base_total_ht
-  FROM (
-    SELECT DISTINCT
-      cpi.quote_id AS quote_id,
-      cpi.object_data_label AS label,
-      ROUND(cpi.object_data_prices_price_base_price_price_without_vat / 10000, 2) AS base_ht,
-      ROUND(cpi.price_option_fees_owner_fees_rate / 1000, 2) AS rate_pct
-    FROM \`naboo-app-365515.raw_naboo_data.client_pricing_items\` cpi
-    WHERE cpi.type != 'OWNER_FEES'
-      AND IFNULL(cpi.price_option_fees_owner_fees_rate, 0) > 0
-      AND cpi.object_data_label IS NOT NULL
-  )
+-- The commission series is every prefix ending in CO — NABCO for the French entity, USCO,
+-- CACO, DECO, ESCO, BIZCO for the others (invoice-series.ts). Testing NABCO-% alone hid
+-- the commission documents on 35 North American bookings, which is precisely the case
+-- where the button was wanted. The FEE_OWNER line items are what attach one to a quote,
+-- and they corroborate the number: no other series carries them.
+commission_docs_by_quote AS (
+  SELECT li.quote_id AS quote_id, COUNT(DISTINCT i.invoice_id) AS doc_count
+  FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
+  JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+    ON li.invoice_id = i.invoice_id AND li.deleted = false
+  WHERE ${commissionNoteSql("i")}
+    AND li.line_type = 'FEE_OWNER'
   GROUP BY quote_id
 ),
 client_invoices AS (
   SELECT
     inv.clientRequestId AS crid,
     ARRAY_AGG(STRUCT(
+      inv.invoice_id    AS invoice_id,
       inv.invoiceNumber AS invoice_ref,
+      -- CLIENT vs PARTNER: an INCOME document can also be our own commission note
+      -- to a provider. The client recovery email must never list one of those, so
+      -- the distinction travels with the row rather than being filtered away here.
+      inv.kind          AS party,
+      inv.invoiceKind   AS doc_kind,
       inv.status        AS status,
       inv.currency      AS currency,
       CAST(ROUND(inv.totals.totalamountincludingtaxes.amount / 100, 2) AS FLOAT64) AS amount_ttc,
       CAST(inv.issueDate AS STRING) AS emission_date,
       CAST(inv.dueDate   AS STRING) AS due_date,
-      (COALESCE(ARRAY_LENGTH(JSON_EXTRACT_ARRAY(inv.send_events)), 0) > 0) AS is_sent
+      (COALESCE(ARRAY_LENGTH(JSON_EXTRACT_ARRAY(inv.send_events)), 0) > 0) AS is_sent,
+      -- Credit notes point back at the invoice they reverse. That link is what
+      -- lets a document and its reversal be recognised as a pair that nets to
+      -- nothing, instead of being chased as two live figures.
+      inv.cancelledInvoiceId AS cancels_invoice_id,
+      inv.pdfUrl AS pdf_url,
+      inv.seller.legalName AS seller_name,
+      NULLIF(inv.buyer.email, '') AS buyer_email,
+      inv.payment.means AS payment_means,
+      -- The receiving account as printed on this very invoice: the one figure the
+      -- client can check against the document in their own hands. Entities hold
+      -- several accounts, so it is carried per invoice, never per entity.
+      NULLIF(ARRAY_TO_STRING([
+        NULLIF(TRIM(IFNULL(inv.payment.bankAccount.accountHolderName, '')), ''),
+        IF(inv.payment.bankAccount.iban IS NOT NULL,
+           CONCAT('IBAN ', inv.payment.bankAccount.iban), NULL),
+        IF(inv.payment.bankAccount.iban IS NULL AND inv.payment.bankAccount.bankAccountNumber IS NOT NULL,
+           CONCAT('account ', inv.payment.bankAccount.bankAccountNumber), NULL),
+        IF(inv.payment.bankAccount.bic IS NOT NULL,
+           CONCAT('BIC ', inv.payment.bankAccount.bic), NULL),
+        IF(inv.payment.bankAccount.iban IS NULL AND inv.payment.bankAccount.sortCode IS NOT NULL,
+           CONCAT('sort code ', inv.payment.bankAccount.sortCode), NULL)
+      ], ' · '), '') AS bank_details
     ) ORDER BY inv.issueDate) AS items
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
   WHERE inv.invoiceDirection = 'INCOME'
+  GROUP BY crid
+),
+-- Client cash received, itemised, for the recovery email's "Payments received".
+--
+-- COMPANY_PAYMENT and MANUAL_PAYMENT inflows together reproduce
+-- client_request_free_invoicing.collectedTotal to the cent on every booking
+-- checked (C-O621: 45 183,33 + 2 508,69 + 1 114,98 + 26 975,12 + 43 834,29 =
+-- 119 616,41), which is the figure the tracker already shows as Received — so the
+-- itemised list in the email always adds up to the total next to it.
+--
+-- Inflows only. Outflows on the same kinds are not client refunds netted out of
+-- that total (bookings exist with a zero collected total and a non-zero outflow),
+-- and counting them would make the listed payments disagree with the total.
+client_receipts AS (
+  SELECT
+    p.client_request_id AS crid,
+    ARRAY_AGG(STRUCT(
+      CAST(ROUND(p.amount / 10000, 2) AS FLOAT64) AS amount,
+      p.currency AS currency,
+      CAST(DATE(p.date) AS STRING) AS paid_on,
+      CASE p.provider_payload_kind
+        WHEN 'STRIPE' THEN 'card'
+        WHEN 'MANUAL' THEN 'recorded manually'
+        ELSE 'bank transfer'
+      END AS method,
+      -- Bank feeds put the useful part after "reference:", Stripe after "email :".
+      -- Labels carry embedded newlines, hence the whitespace squeeze.
+      NULLIF(TRIM(REGEXP_REPLACE(COALESCE(
+        REGEXP_EXTRACT(p.provider_payload_label, r'reference:\\s*([^|;]+)'),
+        REGEXP_EXTRACT(p.provider_payload_label, r'email\\s*:\\s*(\\S+)'),
+        p.provider_payload_label
+      ), r'\\s+', ' ')), '') AS reference
+    ) ORDER BY p.date) AS items
+  FROM \`naboo-app-365515.raw_naboo_data.payments\` p
+  WHERE p.deleted = FALSE
+    AND p.kind IN ('COMPANY_PAYMENT', 'MANUAL_PAYMENT')
+    AND p.flow = 'INFLOW_PAYMENT'
   GROUP BY crid
 ),
 fi_base AS (
@@ -228,8 +281,23 @@ client_proposal_totals AS (
 -- SERVICE + FEE_CLIENT only. FEE_OWNER lines are our commission invoiced to the
 -- partner, not to the client, and would otherwise inflate the client total.
 -- All statuses, so a cancelled invoice and its credit note cancel each other.
--- Client invoices for the detail pane's invoicing tab. Income direction only:
--- partner invoices and commission notes belong elsewhere.
+--
+-- ⚠ And every line, including the ones the flag calls deleted. That flag does not mean
+-- "this line is not on the invoice". On a booking invoiced in instalments each
+-- document restates the service at its current price and then carries a flagged
+-- row taking off what the previous documents already billed, so the flagged rows
+-- are the deductions — dropping them leaves only the gross restatements and the
+-- same service is counted on every invoice that mentions it.
+--
+-- C-Q382 / Hubspot is the case that found it: NABI-FR26-03063 restates Food and
+-- Beverage at 24,000.00 and deducts the 10,800.00 already invoiced on 03062, and
+-- 03064 restates the whole stay at 32,353.65 and deducts the 24,250.00 before it.
+-- Counting only the live rows read 73,829.83 against a back office 38,629.83.
+--
+-- Measured over all 19,102 documents in the warehouse: summing every line row
+-- reproduces the document's own total exactly, on every single one. Excluding the
+-- flagged rows misses on 1,439 of them. Nine North American bookings were
+-- overstated, by 327,409.25 in total and 139,543.02 on C-N714 alone.
 invoiced_client AS (
   SELECT
     i.clientRequestReadableId AS rid,
@@ -243,7 +311,6 @@ invoiced_client AS (
   JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
     ON li.invoice_id = i.invoice_id
   WHERE i.invoiceDirection = 'INCOME'
-    AND li.deleted = false
     AND i.clientRequestReadableId IS NOT NULL
   GROUP BY rid
 ),
@@ -267,8 +334,15 @@ invoiced_by_quote AS (
   -- against a back office 49 830,47 USD.
   -- Only ISSUED and CANCELLED exist on client invoices, so nothing unissued
   -- slips in this way.
+  --
+  -- And every line, flagged or not, for the reason set out above
+  -- invoiced_client: on an instalment invoice the flagged rows are the deductions
+  -- for what earlier documents already billed. This figure drives payable_to_date
+  -- and so outstanding, which is what the recovery asks and the clawback split are
+  -- computed from — 16 North American partner quotes across 9 bookings read too
+  -- high, so a provider could be told they had been invoiced for work that had only
+  -- been restated.
   WHERE i.invoiceDirection = 'INCOME'
-    AND li.deleted = false
     AND li.quote_id IS NOT NULL
   GROUP BY li.quote_id
 ),
@@ -281,16 +355,21 @@ partners_rm_dedup AS (
       NULLIF(rm.partner_name, ''),
       'Prestataire inconnu'
     ) AS name,
+    -- What was booked, as opposed to who invoices for it: Hotel Healdsburg rather than
+    -- Piazza Hospitality Group, and "Nitro City Racing - Rohnert Park" rather than a
+    -- second line also called Nitro Racing. The owner name stays in the name field because
+    -- every stored partner key is derived from it — see partnerDisplayName for how the two
+    -- are used. h.title is the house's own title; venue_name is the view's copy of it and is
+    -- there for the rows where the house join misses.
+    COALESCE(
+      NULLIF(h.title, ''),
+      IF(q.provision_name IS NULL, NULLIF(rm.venue_name, ''), NULL)
+    ) AS house_name,
     NULLIF(COALESCE(rm.owner_email, rm.service_owner_email, rm.partner_email), '') AS email,
     NULLIF(o.firstname, '') AS contact_first_name,
     o.readable_id AS owner_code,
-    IFNULL(d.items, CAST([] AS ARRAY<STRUCT<
-      amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
-    >>)) AS disbursements,
-    IFNULL(cm.items, CAST([] AS ARRAY<STRUCT<
-      label STRING, base_ht FLOAT64, rate_pct FLOAT64
-    >>)) AS commissionable,
-    IFNULL(cm.base_total_ht, 0) AS commissionable_base_ht,
+    h.readable_id AS house_code,
+    IFNULL(cd.doc_count, 0) AS commission_doc_count,
     rm.currency_partner AS currency,
     CAST(rm.p_live_net_gmv_ttc_pcurrency AS FLOAT64) AS gmv_ttc,
     -- p_disbursed_total_pcurrency's sign is inconsistent across bookings (the
@@ -338,19 +417,24 @@ partners_rm_dedup AS (
   FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = rm.house_owner_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q ON q.quote_id = rm.quote_id
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = rm.house_mongo_id
+  LEFT JOIN commission_docs_by_quote cd ON cd.quote_id = rm.quote_id
   LEFT JOIN invoiced_by_quote ibq ON ibq.quote_id = rm.quote_id
-  LEFT JOIN disbursements d
-    ON d.crid = rm.client_request_id AND d.house_id = rm.house_mongo_id
-  LEFT JOIN commissionable cm ON cm.quote_id = rm.quote_id
   WHERE rm.is_current_proposal_phase_quote = TRUE
     AND rm.booking_status = 'ACCEPTED'
 ),
 partners_rm AS (
   SELECT
     rid,
+    -- ⚠ This struct, partners_fi_fallback's, and the typed empty array in base must
+    -- stay identical: same fields, same order, same types. COALESCE picks between
+    -- them, so a field added to one and not the others is either a hard SQL error or
+    -- — worse — a silently empty partner array. na-query.test.mjs asserts all three
+    -- agree, and that every alias a CTE references is actually joined in it: adding
+    -- commission_doc_count here without its join broke the page in production.
     ARRAY_AGG(STRUCT(
-      name, email, contact_first_name, owner_code, disbursements, commissionable,
-      commissionable_base_ht, currency, gmv_ttc, paid, outstanding, raw_outstanding,
+      name, house_name, email, contact_first_name, owner_code, house_code, commission_doc_count,
+      currency, gmv_ttc, paid, outstanding, raw_outstanding,
       payable, payable_to_date, commission, locked, locked_by_admin, locked_by_client, locked_by_owner,
       is_provision, payment_method,
       CAST(NULL AS STRING) AS vat_raw,
@@ -375,6 +459,10 @@ partners_rm AS (
 partners_fi_fallback AS (
   SELECT
     e.client_request_readable_id AS rid,
+    -- ⚠ Must match partners_rm's struct and base's typed empty array field for
+    -- field, in order — see the note above partners_rm. Every alias used in here
+    -- also has to be joined in here: this branch has no rm, so quote keys are
+    -- part.quoteId.
     ARRAY_AGG(STRUCT(
       COALESCE(
         NULLIF(o.company_name, ''),
@@ -382,16 +470,12 @@ partners_fi_fallback AS (
         NULLIF(q.provision_name, ''),
         'Prestataire inconnu'
       ) AS name,
+      NULLIF(h.title, '') AS house_name,
       NULLIF(o.email, '') AS email,
       NULLIF(o.firstname, '') AS contact_first_name,
       o.readable_id AS owner_code,
-      CAST([] AS ARRAY<STRUCT<
-        amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
-      >>) AS disbursements,
-      CAST([] AS ARRAY<STRUCT<
-        label STRING, base_ht FLOAT64, rate_pct FLOAT64
-      >>) AS commissionable,
-      CAST(0 AS FLOAT64) AS commissionable_base_ht,
+      h.readable_id AS house_code,
+      IFNULL(cd.doc_count, 0) AS commission_doc_count,
       part.currency AS currency,
       CAST(ROUND((part.liveConfirmed.netPayable.withTaxes
                   + part.liveConfirmed.commission.withTaxes) / 10000, 2) AS FLOAT64) AS gmv_ttc,
@@ -430,6 +514,11 @@ partners_fi_fallback AS (
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = q.house_id
   LEFT JOIN \`naboo-app-365515.raw_naboo_data.owners\` o ON o.owner_id = part.houseOwnerId
   LEFT JOIN invoiced_by_quote ibq ON ibq.quote_id = part.quoteId
+  -- Keyed on part.quoteId, not rm.quote_id: this branch never sees the
+  -- reconciliation master. The count is real here — C-U775 falls back and its quote
+  -- carries a NABCO document — so hard-coding zero would hide a commission
+  -- statement that exists.
+  LEFT JOIN commission_docs_by_quote cd ON cd.quote_id = part.quoteId
   WHERE e.bk_market = 'North America'
     AND e.booking_status = 'ACCEPTED'
     AND part.quoteCancelledAt IS NULL
@@ -458,13 +547,13 @@ base AS (
     IFNULL(ic.client_service_fees_ttc, 0) AS client_service_fees_ttc,
     COALESCE(CAST(ar.total_paid_client_ccy AS FLOAT64), fi.paid) AS paid_ccy,
     CAST(ar.balance_client_ccy AS FLOAT64) AS ar_balance_ccy,
+    -- ⚠ This type declares the shape both partner branches must produce; COALESCE
+    -- between the three requires them identical. See the note above partners_rm.
     TO_JSON_STRING(
       IFNULL(p.items, IFNULL(pfb.items, CAST([] AS ARRAY<STRUCT<
-        name STRING, email STRING, contact_first_name STRING, owner_code STRING,
-        disbursements ARRAY<STRUCT<amount FLOAT64, currency STRING, paid_on STRING,
-          method STRING, reference STRING>>,
-        commissionable ARRAY<STRUCT<label STRING, base_ht FLOAT64, rate_pct FLOAT64>>,
-        commissionable_base_ht FLOAT64, currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
+        name STRING, house_name STRING, email STRING, contact_first_name STRING, owner_code STRING,
+        house_code STRING, commission_doc_count INT64,
+        currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
         outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, payable_to_date FLOAT64,
         commission FLOAT64,
         locked BOOL, locked_by_admin BOOL, locked_by_client BOOL, locked_by_owner BOOL,
@@ -473,10 +562,22 @@ base AS (
     ) AS partners_json,
     TO_JSON_STRING(
       IFNULL(civ.items, CAST([] AS ARRAY<STRUCT<
-        invoice_ref STRING, status STRING, currency STRING, amount_ttc FLOAT64,
-        emission_date STRING, due_date STRING, is_sent BOOL
+        invoice_id STRING, invoice_ref STRING, party STRING, doc_kind STRING,
+        status STRING, currency STRING, amount_ttc FLOAT64,
+        emission_date STRING, due_date STRING, is_sent BOOL,
+        cancels_invoice_id STRING, pdf_url STRING, seller_name STRING,
+        buyer_email STRING, payment_means STRING, bank_details STRING
       >>))
-    ) AS invoices_json
+    ) AS invoices_json,
+    TO_JSON_STRING(
+      IFNULL(rcp.items, CAST([] AS ARRAY<STRUCT<
+        amount FLOAT64, currency STRING, paid_on STRING, method STRING, reference STRING
+      >>))
+    ) AS client_receipts_json,
+    NULLIF(cr.contact_snapshot_email, '') AS client_contact_email,
+    NULLIF(TRIM(CONCAT(
+      IFNULL(cr.contact_snapshot_firstname, ''), ' ', IFNULL(cr.contact_snapshot_lastname, '')
+    )), '') AS client_contact_name
   FROM \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` e
   LEFT JOIN \`naboo-app-365515.finance_gld_vw_prd.vw_balance_agee_ar\` ar
     ON ar.readable_id = e.client_request_readable_id
@@ -484,6 +585,9 @@ base AS (
   LEFT JOIN client_proposal_totals cpt ON cpt.rid = e.client_request_readable_id
   LEFT JOIN invoiced_client ic ON ic.rid = e.client_request_readable_id
   LEFT JOIN client_invoices civ ON civ.crid = e.clientRequestId
+  LEFT JOIN client_receipts rcp ON rcp.crid = e.clientRequestId
+  LEFT JOIN \`naboo-app-365515.raw_naboo_data.client_requests\` cr
+    ON cr.request_id = e.clientRequestId AND cr.deleted = false
   LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
   LEFT JOIN partners_fi_fallback pfb ON pfb.rid = e.client_request_readable_id
   WHERE e.bk_market = 'North America'
@@ -494,6 +598,7 @@ SELECT
   currency_client, event_name, start_date, end_date, event_type, transaction_kind, participants, billing_entity, booking_url,
   client_service_fees_ttc,
   gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy, invoices_json,
+  client_receipts_json, client_contact_email, client_contact_name,
   -- What is still to be collected from the client: invoiced less received.
   -- Not gmv - paid: the whole-event total includes amounts not yet invoiced, so
   -- that read as outstanding money the client does not owe us yet (C-U775 showed
@@ -580,6 +685,16 @@ export function parseNaInvoices(json: string | null): NaInvoiceLine[] {
   try {
     const v = JSON.parse(json);
     return Array.isArray(v) ? (v as NaInvoiceLine[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function parseNaClientReceipts(json: string | null): NaClientReceipt[] {
+  if (!json) return [];
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? (v as NaClientReceipt[]) : [];
   } catch {
     return [];
   }

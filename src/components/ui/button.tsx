@@ -16,12 +16,22 @@ const buttonVariants = cva(
         secondary: "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        // The two Naboo buttons from the design system. They press rather than change
+        // colour, and they take a navy focus outline rather than the browser's blue —
+        // stated here once so no page has to re-derive it in a className.
+        naboo:
+          "border-0 bg-naboo font-semibold text-navy hover:bg-naboo-hover active:scale-[0.97] focus-visible:[outline:2px_solid_#101F34]! focus-visible:outline-offset-2 focus-visible:ring-0",
+        "naboo-ghost":
+          "border border-slate-300 bg-white font-medium text-navy shadow-[0_1px_2px_rgba(16,31,52,0.06)] hover:bg-slate-50 active:scale-[0.97] focus-visible:[outline:2px_solid_#101F34]! focus-visible:outline-offset-2 focus-visible:ring-0",
       },
       size: {
         default: "h-9 px-4 py-2",
         sm: "h-8 rounded-md px-3 text-xs",
         lg: "h-10 rounded-md px-8",
         icon: "h-9 w-9",
+        /** The design system's own two heights: 32px, and 30px inside a queue card. */
+        naboo: "h-8 gap-1.5 rounded-md px-3 text-[12px]",
+        "naboo-sm": "h-[30px] gap-1.5 rounded-md px-3 text-[12px]",
       },
     },
     defaultVariants: {

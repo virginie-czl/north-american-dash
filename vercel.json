@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/cron/refresh-card-approvals",
+      "path": "/api/cron/slack-tasks",
       "schedule": "*/15 * * * *"
     }
   ]

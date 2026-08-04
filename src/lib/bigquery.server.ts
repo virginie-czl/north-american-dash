@@ -122,6 +122,101 @@ function convertValue(value: unknown, type: string): unknown {
   }
 }
 
+/**
+ * How many rows to ask for per page, and how many pages to walk.
+ *
+ * `jobs.query` returns one page: capped by a row count *and* by a ~10 MB
+ * response, whichever comes first. Nothing here relied on that before, so a query
+ * that outgrew a page had the rest of its rows silently dropped — on a tracker
+ * whose rows are bookings and money. The page cap is a runaway guard: hitting it
+ * throws rather than returning a short answer.
+ */
+export const RESULT_PAGE_SIZE = 20_000;
+export const MAX_RESULT_PAGES = 20;
+
+/** BigQuery's own default is 10 s, which the Marketplace NA query outgrew. */
+export const QUERY_TIMEOUT_MS = 120_000;
+
+type SchemaField = { name: string; type: string };
+
+export type BigQueryPage = {
+  jobComplete?: boolean;
+  schema?: { fields: SchemaField[] };
+  rows?: Array<{ f: Array<{ v: unknown }> }>;
+  pageToken?: string;
+  /** A string in the REST response, e.g. "265". */
+  totalRows?: string;
+  jobReference?: { jobId?: string; location?: string; projectId?: string };
+};
+
+function mapRows(page: BigQueryPage, schema: SchemaField[]): BigQueryRow[] {
+  return (page.rows || []).map((row) => {
+    const obj: BigQueryRow = {};
+    row.f.forEach((cell, i) => {
+      const field = schema[i];
+      if (!field) return;
+      obj[field.name] = convertValue(cell.v, field.type) as BigQueryValue;
+    });
+    return obj;
+  });
+}
+
+/**
+ * Walks every page of a result set and refuses to return a partial one.
+ *
+ * Two guarantees, both of which the single-page read never gave:
+ *
+ *  - Every page is read. `pageToken` is followed until it is absent.
+ *  - The result is complete or it is an error. `totalRows` is what BigQuery says
+ *    the answer holds; if fewer rows arrive, this throws instead of handing back a
+ *    plausible-looking short list. A missing booking with no error shown is worse
+ *    than a failed page load, because nobody goes looking for it.
+ *
+ * Separated from the HTTP call so the paging itself can be tested.
+ */
+export async function collectQueryPages(
+  first: BigQueryPage,
+  nextPage: (pageToken: string) => Promise<BigQueryPage>,
+  maxPages = MAX_RESULT_PAGES,
+): Promise<BigQueryRow[]> {
+  // A timed-out job returns HTTP 200 with no rows, so an incomplete job has to be
+  // caught explicitly or it reads as an empty result.
+  if (first.jobComplete === false) {
+    throw new Error("BigQuery job did not complete in time — please retry.");
+  }
+
+  const schema = first.schema?.fields ?? [];
+  const rows = mapRows(first, schema);
+  let token = first.pageToken;
+  let pages = 1;
+  let totalRows = first.totalRows;
+
+  while (token) {
+    if (pages >= maxPages) {
+      throw new Error(
+        `BigQuery result spans more than ${maxPages} pages (${rows.length} rows so far) — ` +
+          "narrow the query rather than reading a partial result.",
+      );
+    }
+    const page = await nextPage(token);
+    if (page.jobComplete === false) {
+      throw new Error("BigQuery job did not complete in time — please retry.");
+    }
+    rows.push(...mapRows(page, page.schema?.fields ?? schema));
+    // Later pages restate it; the last word wins.
+    if (page.totalRows != null) totalRows = page.totalRows;
+    token = page.pageToken;
+    pages += 1;
+  }
+
+  const expected = totalRows == null ? null : Number(totalRows);
+  if (expected != null && Number.isFinite(expected) && expected !== rows.length) {
+    throw new Error(`BigQuery returned ${rows.length} of ${expected} rows — result was truncated.`);
+  }
+
+  return rows;
+}
+
 export async function runBigQuery(
   query: string,
   params?: Record<string, string | number>,
@@ -134,6 +229,11 @@ export async function runBigQuery(
     useLegacySql: false,
     location,
     maximumBytesBilled: "5368709120", // 5 GB safety cap
+    // Explicit, so the page size is ours rather than whatever the API defaults to.
+    maxResults: RESULT_PAGE_SIZE,
+    // Milliseconds the API waits for the job before answering with jobComplete
+    // false. The default 10 s is shorter than the heavier tracker queries take.
+    timeoutMs: QUERY_TIMEOUT_MS,
   };
 
   if (params && Object.keys(params).length > 0) {
@@ -157,36 +257,38 @@ export async function runBigQuery(
     },
   );
 
-  if (!response.ok) {
-    const raw = await response.text();
-    let message = raw;
-    try {
-      message = (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? raw;
-    } catch {
-      /* keep the raw body */
+  if (!response.ok) throw new Error(`BigQuery: ${await errorMessage(response)}`);
+
+  const first = (await response.json()) as BigQueryPage;
+  const jobId = first.jobReference?.jobId;
+  const jobLocation = first.jobReference?.location ?? location;
+
+  return collectQueryPages(first, async (pageToken) => {
+    if (!jobId) {
+      throw new Error("BigQuery returned a paged result without a job reference.");
     }
-    throw new Error(`BigQuery: ${message}`);
-  }
+    const url = new URL(
+      `https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/queries/${encodeURIComponent(
+        jobId,
+      )}`,
+    );
+    url.searchParams.set("pageToken", pageToken);
+    url.searchParams.set("maxResults", String(RESULT_PAGE_SIZE));
+    url.searchParams.set("location", jobLocation);
+    url.searchParams.set("timeoutMs", String(QUERY_TIMEOUT_MS));
 
-  const result = (await response.json()) as {
-    jobComplete?: boolean;
-    schema?: { fields: Array<{ name: string; type: string }> };
-    rows?: Array<{ f: Array<{ v: unknown }> }>;
-  };
-
-  // A timed-out job returns 200 with no rows; treat that as an error rather than
-  // reporting an empty result (or, for writes, a silent no-op).
-  if (result.jobComplete === false) {
-    throw new Error("BigQuery job did not complete in time — please retry.");
-  }
-  const schema = result.schema?.fields || [];
-
-  return (result.rows || []).map((row) => {
-    const obj: BigQueryRow = {};
-    row.f.forEach((cell, i) => {
-      const field = schema[i];
-      obj[field.name] = convertValue(cell.v, field.type) as BigQueryValue;
-    });
-    return obj;
+    const page = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!page.ok) throw new Error(`BigQuery (page): ${await errorMessage(page)}`);
+    return (await page.json()) as BigQueryPage;
   });
+}
+
+/** The API puts the useful part in `error.message`; fall back to the raw body. */
+async function errorMessage(response: Response): Promise<string> {
+  const raw = await response.text();
+  try {
+    return (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? raw;
+  } catch {
+    return raw;
+  }
 }

@@ -19,6 +19,8 @@
  * refund to ask the partner for.
  */
 import type { NaRow, NaPartnerLine } from "./na.functions";
+import type { NaCommissionDetail } from "./commission-detail.functions";
+import { reconcileAgainst } from "./commission-statement.ts";
 
 export type NaClawback = { commission: number; refund: number };
 
@@ -32,6 +34,26 @@ export function partnerClawback(p: NaPartnerLine): NaClawback {
   const commPart = Math.min(overpaid, comm);
   const refundPart = Math.max(overpaid - comm, 0);
   return { commission: commPart, refund: refundPart };
+}
+
+/**
+ * What this provider can actually be asked for, and in which order.
+ *
+ * This is the rule a partner card's next move hangs on. It has to outrank the
+ * action tree's own verdict, because that tree only ever looks at what is still
+ * owed *to* the provider: an overpayment leaves nothing owed, so it comes back
+ * "settled" — which on its own printed "Nothing to do" beside a refund somebody
+ * still has to go and ask for.
+ *
+ * Keyed off the clawback rather than a negative outstanding: paying ahead of what
+ * has been invoiced to the client leaves a line overpaid *to date* with nothing to
+ * claw back, and asking for that money back would be wrong.
+ */
+export function partnerRecoveryAsk(p: NaPartnerLine): "refund" | "commission" | null {
+  const { commission, refund } = partnerClawback(p);
+  if (refund > 0.01) return "refund";
+  if (commission > 0.01) return "commission";
+  return null;
 }
 
 export type NaClawbackSplit = { commission: Map<string, number>; refund: Map<string, number> };
@@ -103,38 +125,103 @@ export type NaComposed = { subject: string; body: string };
  * The commission section, spelled out: which lines carry a commission, the base
  * they are computed on, the rate, and the resulting amount. A bare total invites
  * a "where does that come from?" reply and a second round trip.
+ *
+ * The itemisation only appears when it *adds up*. The pricing table holds sibling
+ * rows that double-count — Hyatt's quote on C-P222 lists Guestrooms alongside two
+ * ROH Default rows at the same unit price — so the base is chosen by the same
+ * reconciliation the commission statement uses: the subset of lines whose
+ * commission equals the commission being asked for. When no subset does, the email
+ * states the amount and nothing else, rather than a base the provider can multiply
+ * out and disprove.
+ *
+ * The detail is fetched per provider on demand (getCommissionDetail); without it
+ * the email still goes out, just without the breakdown.
  */
-function commissionBlock(partner: NaPartnerLine, commission: number): string {
+function commissionBlock(
+  partner: NaPartnerLine,
+  commission: number,
+  detail: NaCommissionDetail | null | undefined,
+): string {
   const ccy = partner.currency;
-  const items = partner.commissionable ?? [];
-  const names = items
-    .map((i) => i.label)
-    .filter(Boolean)
-    .join(", ");
-  const base = partner.commissionable_base_ht ?? null;
-  const rates = [...new Set(items.map((i) => i.rate_pct).filter((r) => r != null))];
-  const rate =
-    rates.length === 1
-      ? `${rates[0]}%`
-      : rates.length > 1
-        ? rates.map((r) => `${r}%`).join(" / ")
-        : "—";
-
   const lines: string[] = [];
-  if (names) lines.push(`• Commissionable items: ${names}`);
-  if (base != null && base > 0.01) lines.push(`• Commissionable base: ${fmtMoney(base, ccy)}`);
-  if (rate !== "—") lines.push(`• Commission rate: ${rate}`);
+
+  const services = (detail?.commissionable ?? []).map((i) => ({
+    service: i.label ?? "—",
+    qty: i.qty,
+    unit: i.unit,
+    unit_excl_tax: i.unit_excl_tax,
+    rate_pct: i.rate_pct,
+  }));
+  // Reconciled against the commission excluding tax where finance records one:
+  // that is the figure a rate applied to a base can actually produce.
+  const target = detail?.commission_ht ?? commission;
+  const rec = services.length > 0 ? reconcileAgainst(services, target) : null;
+
+  // The commission the booking carries, as against the part of it still to collect.
+  // They differ whenever some of it has already come back to us, and the difference is
+  // exactly what a base and a rate would otherwise fail to explain — see below.
+  const full = round2(Math.max(partner.commission ?? 0, 0));
+  const settled = round2(full - commission);
+  // The workings are only printable when the figure the rate implies is the same
+  // figure the arithmetic starts from. Where finance's ex-tax commission and the
+  // amount we are claiming disagree by more than rounding, three lines that do not
+  // add up would be worse than no breakdown at all.
+  const workings = rec?.ok === true && settled > 0.01 && Math.abs(round2(target) - full) <= 0.01;
+  // A base is printed only when the amounts printed beside it actually follow from
+  // it. Hotel Spero on C-S843 read "3,336.60 at 12%" above "Commission due 128.23":
+  // the hotel multiplies that out, gets 400.39, and writes back — the breakdown was
+  // describing the whole commission while the amount was the part still outstanding.
+  const showBase = rec?.ok === true && (settled <= 0.01 || workings);
+
+  if (showBase && rec) {
+    const names = rec.services
+      .map((s) => s.service)
+      .filter(Boolean)
+      .join(", ");
+    if (names) lines.push(`• Commissionable items: ${names}`);
+    lines.push(`• Commissionable base: ${fmtMoney(rec.base, ccy)}`);
+    // A rate above 100% is not a rate — it is a unit error upstream, and this text
+    // goes to the provider we are billing. Say nothing rather than quote a figure
+    // that cannot be true; the base and the amount below still stand on their own.
+    const rates = rec.rates.filter((r) => r > 0 && r <= 100);
+    if (rates.length > 0) lines.push(`• Commission rate: ${rates.map((r) => `${r}%`).join(" / ")}`);
+  }
+
+  if (settled > 0.01) {
+    // Both figures named, so the provider can check the deduction against their own
+    // ledger instead of taking it on trust: what they invoiced, and what has reached
+    // them net of anything they have already sent back.
+    lines.push(`• Commission on this booking: ${fmtMoney(full, ccy)}`);
+    lines.push(
+      `• Already settled: ${fmtMoney(settled, ccy)} — you invoiced ` +
+        `${fmtMoney(invoiceDue(partner), ccy)} and we have paid ${fmtMoney(partner.paid, ccy)} to date`,
+    );
+    lines.push(`• Commission still due incl. tax: ${fmtMoney(commission, ccy)}`);
+    return lines.join("\n");
+  }
+
   lines.push(`• Commission due incl. tax: ${fmtMoney(commission, ccy)}`);
   return lines.join("\n");
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 /**
- * Every payment we made, listed. Naming the date, the method and the bank
+ * Every payment that moved, listed. Naming the date, the method and the bank
  * reference is what lets the other side find it in their own ledger instead of
  * disputing the total.
+ *
+ * Money the provider sent back is listed with it and subtracted from the total.
+ * Summing only what went out states a figure the provider knows is too high — the
+ * one thing guaranteed to turn a settlement into an argument.
  */
-function paymentsBlock(partner: NaPartnerLine): string {
-  const rows = partner.disbursements ?? [];
+function paymentsBlock(
+  partner: NaPartnerLine,
+  detail: NaCommissionDetail | null | undefined,
+): string {
+  const rows = detail?.disbursements ?? [];
   if (rows.length === 0) {
     return `• Total paid by Naboo: ${fmtMoney(partner.paid, partner.currency)}`;
   }
@@ -142,11 +229,17 @@ function paymentsBlock(partner: NaPartnerLine): string {
     .map((d) => {
       const method = d.method ? ` by ${d.method}` : "";
       const ref = d.reference ? ` (ref: ${d.reference})` : "";
-      return `   • ${fmtMoney(d.amount, d.currency ?? partner.currency)} paid on ${d.paid_on ?? "—"}${method}${ref}`;
+      const money = fmtMoney(Math.abs(d.amount ?? 0), d.currency ?? partner.currency);
+      const verb = d.direction === "in" ? "returned by you on" : "paid on";
+      return `   • ${d.direction === "in" ? "−" : ""}${money} ${verb} ${d.paid_on ?? "—"}${method}${ref}`;
     })
     .join("\n");
-  const total = rows.reduce((t, d) => t + (d.amount ?? 0), 0);
-  return `• Amounts paid by Naboo:\n${listed}\n• Total paid by Naboo: ${fmtMoney(total, partner.currency)}`;
+  const total = rows.reduce(
+    (t, d) => t + (d.direction === "in" ? -1 : 1) * Math.abs(d.amount ?? 0),
+    0,
+  );
+  const net = rows.some((d) => d.direction === "in") ? " (net of what you returned)" : "";
+  return `• Amounts paid by Naboo:\n${listed}\n• Total paid by Naboo${net}: ${fmtMoney(total, partner.currency)}`;
 }
 
 /** What the provider actually invoiced us: the payable before our commission. */
@@ -159,6 +252,7 @@ export function composeNaCommissionRequest(
   row: NaRow,
   partner: NaPartnerLine,
   to: { name: string | null },
+  detail?: NaCommissionDetail | null,
 ): NaComposed | null {
   const { commission } = partnerClawback(partner);
   if (commission <= 0.01) return null;
@@ -179,7 +273,7 @@ Thanks again for taking such good care of the ${client} group!
 
 I'm reaching out about the commission for that program. Here's what we have on our end:
 
-${commissionBlock(partner, commission)}
+${commissionBlock(partner, commission, detail)}
 
 Would you be able to confirm those figures? Once you give me the green light, I'll issue our commission invoice right away and send it over with our wire details.
 
@@ -199,6 +293,7 @@ export function composeNaRefundRequest(
   row: NaRow,
   partner: NaPartnerLine,
   to: { name: string | null },
+  detail?: NaCommissionDetail | null,
 ): NaComposed | null {
   const { refund } = partnerClawback(partner);
   if (refund <= 0.01) return null;
@@ -237,6 +332,7 @@ export function composeNaCombinedRequest(
   row: NaRow,
   partner: NaPartnerLine,
   to: { name: string | null },
+  detail?: NaCommissionDetail | null,
 ): NaComposed | null {
   const { commission, refund } = partnerClawback(partner);
   if (commission <= 0.01 || refund <= 0.01) return null;
@@ -255,11 +351,11 @@ Hope you're doing well!
 I've just finished reconciling the ${client} program and wanted to send you everything in one place rather than in pieces. There are two items open on our side — the commission we're owed, and an overpayment on the invoice.
 
 1) Commission
-• Commission due incl. tax: ${fmtMoney(commission, ccy)}
+${commissionBlock(partner, commission, detail)}
 
 2) Overpayment
 • Total invoice due: ${fmtMoney(invoiceDue(partner), ccy)}
-${paymentsBlock(partner)}
+${paymentsBlock(partner, detail)}
 • Refund due to Naboo: ${fmtMoney(refund, ccy)}
 
 Total to be paid to Naboo (commission + overpayment): ${fmtMoney(commission + refund, ccy)}

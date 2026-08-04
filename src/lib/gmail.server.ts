@@ -118,19 +118,46 @@ export async function findContactThreads(
   return results;
 }
 
-function buildMime(to: string, subject: string, body: string): string {
+function buildMime(to: string, subject: string, htmlBody: string, cc?: string | null): string {
   // Subject is RFC 2047 encoded so accents survive.
   const encodedSubject = `=?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`;
   const mime = [
     `To: ${to}`,
+    // A copy for the event manager, when the caller asks for one. Cc rather than Bcc
+    // on purpose: the counterparty should see who else is on the thread, and a reply
+    // to all reaches the person who knows the booking.
+    ...(cc ? [`Cc: ${cc}`] : []),
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Type: text/html; charset="UTF-8"',
     "Content-Transfer-Encoding: base64",
     "",
-    Buffer.from(body, "utf8").toString("base64"),
+    Buffer.from(htmlBody, "utf8").toString("base64"),
   ].join("\r\n");
   return Buffer.from(mime, "utf8").toString("base64url");
+}
+
+/**
+ * The sender's own signature, as Gmail's compose UI would insert it — HTML, from
+ * whichever send-as alias is their default.
+ *
+ * There is no API flag that does this for you (see `email-signature.ts`), so it is
+ * fetched here and stitched onto the body by hand. Requires the
+ * `gmail.settings.basic` scope: a user connected before that scope existed gets a
+ * 403 here, so this fails soft to no signature rather than failing the whole send —
+ * the alternative is a recovery email that never goes out at all over a signature.
+ */
+async function getSignatureHtml(email: string): Promise<string | null> {
+  try {
+    const { sendAs } = await gmail<{
+      sendAs?: Array<{ signature?: string; isDefault?: boolean; isPrimary?: boolean }>;
+    }>(email, "/settings/sendAs");
+    const entries = sendAs ?? [];
+    const chosen = entries.find((s) => s.isDefault) ?? entries.find((s) => s.isPrimary) ?? entries[0];
+    return chosen?.signature?.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function createDraft(
@@ -138,11 +165,13 @@ export async function createDraft(
   to: string,
   subject: string,
   body: string,
+  cc?: string | null,
 ): Promise<{ draftId: string; link: string }> {
+  const { composeHtmlBody } = await import("./email-signature");
+  const signature = await getSignatureHtml(email);
   const draft = await gmail<{ id: string; message?: { id: string } }>(email, "/drafts", {
     method: "POST",
-    // insertSignature=true asks Gmail to append the user's configured signature.
-    body: { message: { raw: buildMime(to, subject, body) }, insertSignature: true },
+    body: { message: { raw: buildMime(to, subject, composeHtmlBody(body, signature), cc) } },
   });
   return {
     draftId: draft.id,
@@ -155,11 +184,13 @@ export async function sendMessage(
   to: string,
   subject: string,
   body: string,
+  cc?: string | null,
 ): Promise<{ messageId: string; threadId: string }> {
+  const { composeHtmlBody } = await import("./email-signature");
+  const signature = await getSignatureHtml(email);
   const sent = await gmail<{ id: string; threadId: string }>(email, "/messages/send", {
     method: "POST",
-    // insertSignature=true asks Gmail to append the user's configured signature.
-    body: { raw: buildMime(to, subject, body), insertSignature: true },
+    body: { raw: buildMime(to, subject, composeHtmlBody(body, signature), cc) },
   });
   return { messageId: sent.id, threadId: sent.threadId };
 }

@@ -22,7 +22,8 @@ statuses, PO first-emission dates) lives in a small Postgres store attached in V
    annotations exported from the previous version.
 5. **Optional — Gmail** — add `TOKEN_ENCRYPTION_KEY` (`openssl rand -base64 32`),
    then add these scopes to the OAuth client's consent screen:
-   `gmail.readonly` and `gmail.compose`. Add
+   `gmail.readonly`, `gmail.compose` and `gmail.settings.basic` (the last one reads
+   the sender's signature — see below). Add
    `https://<domain>/api/gmail/callback` to the authorized redirect URIs.
    With an *Internal* consent screen no Google security assessment is required.
    Each user connects their own mailbox from the account menu; sign-in never
@@ -36,6 +37,15 @@ event drawer, *Email history* shows whether each partner was contacted and wheth
 they replied, and *Reminder* drafts or sends a message. Reads only happen when the
 user clicks, searches are narrowed to the partner addresses on that event, and
 sending is one recipient at a time behind a confirmation step.
+
+**Every draft and send carries the sender's own signature**, fetched live from
+`users.settings.sendAs` and stitched onto the body as HTML (`src/lib/email-signature.ts`
+does the merge, pure and unit-tested; `gmail.server.ts#getSignatureHtml` fetches it).
+There is no Gmail API flag that inserts it for you — `insertSignature` on
+`drafts.create` / `messages.send` looks like it should exist and is silently a no-op
+on both. Reading the signature needs the `gmail.settings.basic` scope: anyone who
+connected Gmail before it was added must disconnect and reconnect once to grant it;
+until they do, sends fail soft to no signature rather than failing outright.
 
 ## Develop / deploy
 
@@ -245,10 +255,87 @@ Naboo BO or from the tech team). Without it the panel shows an error but
 everything else keeps working.
 
 
-### Card acceptance: two sources, both explicit
+### Card tracking NA: two questions, two columns
 
-A card verdict decides whether a partner is ever asked for an IBAN, so it has to be
-earned. Two independent sources, in order of strength:
+`/card-tracking-na` (tracker key `na-cards`) lists every service provider we have an
+accepted North American booking with — 447 of them — and records whether they take
+card. Two columns that look like one:
+
+- **Provider takes card** is about them, derived from evidence: an approved card in
+  `#finance-paiement-by-card` matched on the `O-` owner code, or an explicit
+  acceptance in the Gmail scan. `Card OK if fee` is a *display* of `Card OK` plus a
+  recorded fee, not a stored fourth state, so the status and the fee cannot
+  contradict each other.
+- **Naboo pays by card** is about us, and is always a human decision. We may decline a
+  provider who happily takes card — the fee is not worth it, the amount is over the
+  card limit, Pliant refused them before. When they accept and we decline, the reason
+  is **mandatory**: it is the only thing that will answer "why is this one being
+  wired?" later. When the provider refuses, no justification is asked for.
+
+Two fields say the opposite of the truth if read as acceptance, and both are enforced
+against in `src/lib/card-tracking.ts` (92 tests):
+
+1. **`partner_payment_method` is not acceptance.** 435 of the 447 providers carry
+   `CREDIT_CARD`; it is the method *we* intend to use. Nothing in the derivation reads
+   it — it is carried for display only.
+2. **A Slack refusal is Naboo refusing.** `Credit Card Request Refused / Refused by:
+   <approver>` is our own approver declining to issue a card. `CardEvidence` therefore
+   has no field for it: only `Approved` is evidence, and only positively.
+
+Reading the approvals mirror **never calls Slack** — it used to refresh itself when
+stale, which made an unlucky page load pay for the whole Slack walk. Only the
+`Refresh card approvals` button syncs, and both this page and Marketplace NA show the
+mirror's age (`synced 3 h ago`) so the staleness is visible rather than assumed. The
+existing 15-minute cron keeps `slack_card_approvals_cache` warm, so a sync usually
+copies that cache into the mirror without touching Slack at all.
+
+The amounts are aggregated in TypeScript, not SQL, and per currency: this data mixes
+USD, CAD, EUR and IDR — BizAway carries 281,000,000 IDR on one booking — so a single
+`SUM` across them would be meaningless. The grain is the **quote**, not the row and
+not the booking: the reconciliation master repeats a quote (847 raw rows for 609
+owner/quote pairs) and one booking can carry two quotes from the same provider with
+two real payables (Pknik on F-B333 is −500.00 and −6,239.65 CAD).
+
+
+### Statements are pages, printed by the browser
+
+Marketplace NA issues two documents — a client statement of account per booking
+(`/statement/:ref`) and a per-provider commission statement
+(`/commission/:ref/:houseCode`). Both are ordinary authenticated routes: the loader
+reads BigQuery at request time (never the tracker's 5-minute cache), dates the
+document server-side, and the page prints itself once the webfonts have settled.
+
+There is deliberately **no PDF engine in this project**, and adding one is not the
+fix for anything:
+
+- Vercel runs this app on the **Node** runtime. A Python renderer (WeasyPrint) has no
+  interpreter to run in — committing the script only moves the failure from
+  *renderer not found* to *python3 not found*.
+- A bundled headless Chrome (`puppeteer-core` + `@sparticuz/chromium`) does work, at
+  the cost of a heavy function, a cold start, and a second rendering engine that has
+  to be kept in agreement with the browser the design was authored for.
+
+So the browser renders it. Flex, grid, `break-inside` and Google Fonts all behave as
+specified, which is why the stylesheet needs none of the workarounds a print engine
+forces. The `<title>` is the intended file name without its extension — browsers
+offer it as the default PDF name and append `.pdf` themselves.
+
+The document declares `@page { margin: 0 }` and no paper size: size belongs to the
+print dialog, and the screen-only toolbar (`.no-print`) says to choose Letter. The
+same stylesheet unwinds the tracker's own full-height shell at print time
+(`[data-app-shell]`, `.doc-viewport`) — left alone, a flex column with a scrolling
+main crops the document to one screen. Every rule is scoped under `.naboo-doc` so the
+document cannot restyle the app it renders inside.
+
+Verified by printing: one page, 612 × 792 pts, with C-P222 at
+300,909.90 / 277,577.51 / 23,332.39 and C-P222 / H-A9319 at 50,193.00 × 7% =
+3,513.51.
+
+
+### Card acceptance: two sources, and one rule about silence
+
+A card verdict decides whether a partner is ever asked for an IBAN, so acceptance has
+to be earned. Two independent sources, in order of strength:
 
 1. **An approved credit card request in #finance-paiement-by-card** (`C09GQEKBEAX`).
    The Finance Bot posts a structured message per request; only
@@ -256,11 +343,21 @@ earned. Two independent sources, in order of strength:
    refusals are ignored. Matching is on the **`O-` owner code**, so it is exact with
    no name fuzzing (`src/lib/slack-cards.server.ts`, 11 tests). This means a Pliant
    card was actually issued, which is stronger evidence than any email.
-2. **An explicit yes in the partner's own reply.** Loose keyword matching produced
-   false positives — "le paiement par carte serait possible mais je dois vérifier"
-   and our own question echoed back both read as acceptance. Acceptance now needs a
-   directed affirmative ("oui … carte", "nous acceptons la carte", "card works for
-   us"); 15 tests cover the phrases that must and must not count.
+2. **The partner's own reply**, read two ways:
+   - An explicit yes, or a payment link (Stripe, PayPal, Square — a partner cannot
+     send one without being able to charge a card), reads as acceptance. Loose
+     keyword matching produced false positives — "le paiement par carte serait
+     possible mais je dois vérifier" and our own question echoed back both read as
+     acceptance under it — so a bare mention of "carte"/"card" is not enough; 15
+     tests cover the phrases that must and must not count.
+   - Once we have directly asked whether they take card, a reply that does neither —
+     bank details, a different topic, no answer on card at all — **is** the refusal.
+     A partner who takes card says so or sends the link; anything else, once asked,
+     means no in practice. A thread with no reply yet stays `unknown`.
+
+Both live in `src/lib/email-facts.ts` (`extractFacts`, `cardVerdict`); the fresher of
+two verdicts across a partner's bookings wins in either direction — an old
+acceptance does not outlive a recent refusal, or the reverse.
 
 Requires `SLACK_BOT_TOKEN` with `channels:history`. Without it the Slack source is
 skipped and the email signal still works — the page does not break.

@@ -9,16 +9,21 @@
 /** Always an admin, and approved on sight — otherwise nobody could approve anyone. */
 export const OWNER_EMAIL = "shayma.ndiaye@naboo.app";
 
-import { ALL_TRACKERS, isTrackerKey, type TrackerKey } from "./trackers";
+import { ALL_ACCESS, isAccessKey, type AccessKey } from "./trackers";
 
 export type AccessStatus = "pending" | "approved" | "blocked";
 export type Role = "owner" | "admin" | "member";
 
-export type Access = { status: AccessStatus; role: Role; trackers: TrackerKey[] };
+/**
+ * `trackers` is every area this person may open — the five trackers and the task board.
+ * The name is kept because it is the column, the API field and the word the admin screen
+ * has always used; what widened is the set of values it can hold. See ACCESS_AREAS.
+ */
+export type Access = { status: AccessStatus; role: Role; trackers: AccessKey[] };
 
 export type AppUser = {
   email: string;
-  trackers: TrackerKey[];
+  trackers: AccessKey[];
   name: string | null;
   picture: string | null;
   status: AccessStatus;
@@ -74,17 +79,25 @@ export async function registerAndGetAccess(user: {
   `;
   const row = rows[0];
   const result: Access = isOwner
-    ? { status: "approved", role: "owner", trackers: ALL_TRACKERS }
+    ? { status: "approved", role: "owner", trackers: ALL_ACCESS }
     : {
         status: row?.status ?? "pending",
         role: row?.role ?? "member",
-        trackers: (row?.trackers ?? []).filter(isTrackerKey),
+        trackers: (row?.trackers ?? []).filter(isAccessKey),
       };
   cache.set(email, { ...result, at: Date.now() });
   return result;
 }
 
-export async function getAccess(email: string): Promise<Access> {
+/**
+ * Someone's standing.
+ *
+ * `fresh` skips the cache read. The waiting page's poll asks this question for the sole
+ * purpose of noticing a decision that was just taken, quite possibly on another instance
+ * whose cache this one cannot see — served from a 45-second-old copy it would report
+ * "still pending" for up to that long after the admin clicked approve.
+ */
+export async function getAccess(email: string, opts: { fresh?: boolean } = {}): Promise<Access> {
   const key = email.toLowerCase();
 
   // The owner is approved by definition, with no database round trip. Deriving it
@@ -92,10 +105,10 @@ export async function getAccess(email: string): Promise<Access> {
   // their own instance — which is exactly what happened when the registry was
   // introduced while a valid session was already in flight.
   if (key === OWNER_EMAIL.toLowerCase()) {
-    return { status: "approved", role: "owner", trackers: ALL_TRACKERS };
+    return { status: "approved", role: "owner", trackers: ALL_ACCESS };
   }
 
-  const hit = cache.get(key);
+  const hit = opts.fresh ? undefined : cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
     return { status: hit.status, role: hit.role, trackers: hit.trackers };
   }
@@ -121,7 +134,7 @@ export async function getAccess(email: string): Promise<Access> {
   const result: Access = {
     status: row?.status ?? "pending",
     role: row?.role ?? "member",
-    trackers: (row?.trackers ?? []).filter(isTrackerKey),
+    trackers: (row?.trackers ?? []).filter(isAccessKey),
   };
   cache.set(key, { ...result, at: Date.now() });
   return result;
@@ -144,7 +157,7 @@ export async function listUsers(): Promise<AppUser[]> {
   `;
   return rows.map((r) => ({
     ...(r as unknown as AppUser),
-    trackers: (Array.isArray(r.trackers) ? (r.trackers as string[]) : []).filter(isTrackerKey),
+    trackers: (Array.isArray(r.trackers) ? (r.trackers as string[]) : []).filter(isAccessKey),
     requested_at: isoOrNull(r.requested_at),
     decided_at: isoOrNull(r.decided_at),
     last_seen_at: isoOrNull(r.last_seen_at),
@@ -180,7 +193,7 @@ export async function decideAccess(
   const { db } = await import("./db.server");
   const sql = await db();
   if (action === "set_trackers") {
-    const clean = (trackers ?? []).filter(isTrackerKey);
+    const clean = (trackers ?? []).filter(isAccessKey);
     await sql`
       UPDATE app_users
       SET trackers = ${clean}::text[], decided_at = now(), decided_by = ${actor.email}

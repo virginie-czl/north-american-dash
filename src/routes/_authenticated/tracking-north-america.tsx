@@ -10,20 +10,63 @@ import {
 } from "@/components/na-commission-request-dialog";
 import {
   partnerClawback,
+  partnerRecoveryAsk,
   rowClawbackSplit,
   naContactFor,
   composeNaCommissionRequest,
   composeNaRefundRequest,
   composeNaCombinedRequest,
 } from "@/lib/na-commission-requests";
+import { fmtAge } from "@/lib/card-tracking";
+import { partnerDisplayName, partnerLegalName, partnerMatches } from "@/lib/na-partners";
+import {
+  AddEntryBar,
+  ByHandChip,
+  EntryForm,
+  FreshnessLine,
+  RowActions,
+  draftOf,
+  emptyDraft,
+  useManualEntries,
+  type Draft,
+} from "@/components/manual-statement-lines";
+import { deleteManualEntry } from "@/lib/manual-entries.functions";
+import type { ManualEntry } from "@/lib/manual-entries";
+import {
+  commissionStatementUrl,
+  statementUrl,
+  useDocumentDownload,
+  type DocumentDownload,
+} from "@/lib/use-document-download";
+import {
+  RECOVERY_GRACE_DAYS,
+  naClientRecovery,
+  naClientContactFor,
+  composeNaClientRecovery,
+  type NaClientRecovery,
+} from "@/lib/na-client-recovery";
 import {
   fetchNaFinancialSummaries,
   generateNaFinancialSummary,
   type NaFinancialSummary,
 } from "@/lib/na-financial-summary.functions";
+import {
+  getCommissionDetail,
+  indexCommissionDetail,
+  commissionDetailKey,
+  type NaCommissionDetail,
+} from "@/lib/commission-detail.functions";
 import { partnerKey } from "@/lib/annotations.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
-import { useGmailConnection, useFactScan } from "@/lib/use-gmail";
+import { useGmailConnection, useFactScan, useRecoveryLog } from "@/lib/use-gmail";
+import {
+  chaseProgress,
+  chasedLabel,
+  fullyChased,
+  recoveryKey,
+  recoverySentLabel,
+  type RecoverySend,
+} from "@/lib/recovery-log";
 import {
   useAddComment,
   useCommentSummaries,
@@ -40,6 +83,7 @@ import {
   sumPartners,
   type NaRow,
   type NaPartnerLine,
+  type NaClientReceipt,
 } from "@/lib/na.functions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -62,7 +106,8 @@ import {
 } from "@/components/ui/table";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { syncCardApprovals } from "@/lib/slack-cards.functions";
-import { parseNaInvoices } from "@/lib/na.functions";
+import { parseNaInvoices, parseNaClientReceipts } from "@/lib/na.functions";
+import { emContact } from "@/lib/em-email";
 import {
   GROUP_META,
   GROUP_ORDER,
@@ -76,9 +121,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   ArrowUpDown,
   Banknote,
+  Check,
   ChevronDown,
   ChevronRight,
+  Download,
   ExternalLink,
+  Loader2,
   Lock,
   MessageSquare,
   ReceiptText,
@@ -320,6 +368,9 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     "Client invoiced",
     "Client paid",
     "Client outstanding",
+    // Both: the house is what was booked, the partner name is who invoices for it, and a
+    // reconciliation needs to tie one to the other.
+    "House",
     "Partner name",
     "Partner email",
     "Partner currency",
@@ -361,6 +412,7 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
         lines.push(
           [
             ...base,
+            partnerDisplayName(p),
             p.name ?? "",
             p.email ?? "",
             p.currency ?? "",
@@ -428,6 +480,7 @@ function exportRecoverCsv(
           row.event_name ?? "",
           row.sales_referent ?? "",
           row.em_referent ?? "",
+          partnerDisplayName(p),
           p.name ?? "",
           p.email ?? "",
           p.currency ?? "",
@@ -441,6 +494,55 @@ function exportRecoverCsv(
     }
   }
   downloadCsv(lines, `na-to-recover-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+/** The client side of the same list: balances aged past both grace periods. */
+function exportClientRecoveryCsv(rows: Array<{ row: NaRow; recovery: NaClientRecovery }>) {
+  const headers = [
+    "Start date",
+    "Booking",
+    "Company",
+    "Billing entity",
+    "Event name",
+    "Sales",
+    "EM",
+    "Client contact",
+    "Currency",
+    "Invoiced",
+    "Received",
+    "Balance due",
+    "Last invoice issued",
+    "Days since event",
+    "Days since last invoice",
+    "Live documents",
+  ];
+  const lines: string[] = [headers.join(",")];
+  for (const { row, recovery } of rows) {
+    if (!recovery.eligible) continue;
+    lines.push(
+      [
+        row.start_date ?? "",
+        row.readable_id ?? "",
+        row.company_name ?? "",
+        row.billing_entity ?? "",
+        row.event_name ?? "",
+        row.sales_referent ?? "",
+        row.em_referent ?? "",
+        naClientContactFor(row, recovery.docs).address ?? "",
+        recovery.currency ?? "",
+        recovery.invoiced.toFixed(2),
+        recovery.paid.toFixed(2),
+        recovery.outstanding.toFixed(2),
+        recovery.lastInvoiceDay ?? "",
+        recovery.daysSinceEvent ?? "",
+        recovery.daysSinceInvoice ?? "",
+        recovery.docs.map((d) => d.invoice_ref ?? "").join(" | "),
+      ]
+        .map(csvEscape)
+        .join(","),
+    );
+  }
+  downloadCsv(lines, `na-client-recovery-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 function NaPage() {
@@ -462,20 +564,34 @@ function NaPage() {
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedRef, setSelectedRef] = useState<string>("");
-  const [scope, setScope] = useState<"move" | "commission" | "refund" | "client_refund" | "all">(
-    "move",
-  );
+  const [scope, setScope] = useState<
+    "move" | "commission" | "refund" | "client_refund" | "client_recovery" | "all"
+  >("move");
   const [detailTab, setDetailTab] = useState<
     "partners" | "invoices" | "emails" | "docs" | "comments"
   >("partners");
 
-  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const rows = useMemo<NaRow[]>(() => data?.rows ?? [], [data]);
   /** How stale the figures are, so the header can say so. */
   const cachedAge = data?.cachedAgeSeconds ?? null;
   const { data: commentSummaries } = useCommentSummaries();
 
+  // Client invoicing and receipts are decoded once per row alongside the partner
+  // lines: the recovery position, the list pill, the scope count and the email
+  // then all read the same numbers.
   const decorated = useMemo(
-    () => rows.map((r) => ({ row: r, partners: parseNaPartners(r.partners_json) })),
+    () =>
+      rows.map((r) => {
+        const invoices = parseNaInvoices(r.invoices_json);
+        const receipts = parseNaClientReceipts(r.client_receipts_json);
+        return {
+          row: r,
+          partners: parseNaPartners(r.partners_json),
+          invoices,
+          receipts,
+          recovery: naClientRecovery(r, invoices, receipts),
+        };
+      }),
     [rows],
   );
 
@@ -528,7 +644,10 @@ function NaPage() {
         row.sales_referent,
         row.em_referent,
         row.billing_entity,
+        // Both names: somebody searching "healdsburg" is looking for the hotel, not for
+        // Piazza Hospitality Group, and the reverse is just as true from an invoice.
         ...partners.map((p) => p.name ?? ""),
+        ...partners.map((p) => p.house_name ?? ""),
       ]
         .filter(Boolean)
         .join(" ")
@@ -602,8 +721,13 @@ function NaPage() {
     [sorted],
   );
 
-  const { factsMap, actionFor, eventNeedsScan, cardApprovedCodes } = useActionIndex();
+  const { factsMap, actionFor, eventNeedsScan, cardApprovedCodes, cardsSyncedAgeSeconds } =
+    useActionIndex();
   const { data: gmailConnection } = useGmailConnection();
+  // What the team has already sent. Every button that opens an email checks it, so
+  // nobody is offered a chase a colleague has already made.
+  const download = useDocumentDownload();
+  const { data: recoveryLog } = useRecoveryLog();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const commissionRefundDialog = useNaCommissionRequestDialog();
   const queryClient = useQueryClient();
@@ -611,6 +735,12 @@ function NaPage() {
   const syncCards = useMutation({
     mutationFn: () => syncCardApprovals(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["slack-card-approvals"] }),
+    // Refresh here re-syncs the approvals as a side effect of recomputing the page, so
+    // there is no button of its own to hang a message off. It must still not fail in
+    // silence: the age badge beside the cache indicator shows the mirror standing
+    // still, and this puts the reason in the runtime logs. Card tracking NA is where
+    // the failure is shown in full.
+    onError: (error) => console.error("Card approvals sync failed:", error),
   });
 
   const { data: financialSummaries } = useQuery({
@@ -650,59 +780,197 @@ function NaPage() {
   // a refund beyond that, or both. One email per partner, never combined
   // across different partners on the same booking — a booking can have
   // several unrelated vendors, and a venue should never see a caterer's figures.
-  const commissionRefundTargets = useMemo<NaCommissionTarget[]>(() => {
-    const targets: NaCommissionTarget[] = [];
+  // Each plan is one email waiting to be written: the booking, the provider and
+  // which ask applies. Composing is deferred because the itemised breakdown — what
+  // we paid out, which services carry a commission — is no longer in the page
+  // payload. It is fetched for the bookings in play when the dialog opens, which is
+  // what took a ~109 MB pricing-item scan off every page load.
+  type RecoveryPlan = {
+    eventRef: string;
+    row: NaRow;
+    partner: NaPartnerLine;
+    contact: { address: string; name: string | null };
+    mode: "commission" | "refund" | "combined";
+  };
+
+  const recoveryPlans = useMemo<RecoveryPlan[]>(() => {
+    const plans: RecoveryPlan[] = [];
     for (const { row: r, partners: ps } of sorted) {
       const eventRef = r.readable_id ?? "";
       for (const p of ps) {
         if (p.is_provision) continue;
         const cb = partnerClawback(p);
         if (cb.commission <= 0.01 && cb.refund <= 0.01) continue;
-
         const contact = naContactFor(p);
         if (!contact.address) continue;
-
-        if (cb.commission > 0.01 && cb.refund > 0.01) {
-          const combined = composeNaCombinedRequest(r, p, contact);
-          if (combined) {
-            targets.push({
-              eventRef,
-              partnerName: p.name,
-              address: contact.address,
-              contactName: contact.name,
-              ...combined,
-              mode: "combined",
-            });
-          }
-        } else if (cb.commission > 0.01) {
-          const commission = composeNaCommissionRequest(r, p, contact);
-          if (commission) {
-            targets.push({
-              eventRef,
-              partnerName: p.name,
-              address: contact.address,
-              contactName: contact.name,
-              ...commission,
-              mode: "commission",
-            });
-          }
-        } else {
-          const refund = composeNaRefundRequest(r, p, contact);
-          if (refund) {
-            targets.push({
-              eventRef,
-              partnerName: p.name,
-              address: contact.address,
-              contactName: contact.name,
-              ...refund,
-              mode: "refund",
-            });
-          }
-        }
+        plans.push({
+          eventRef,
+          row: r,
+          partner: p,
+          contact: { address: contact.address, name: contact.name },
+          mode:
+            cb.commission > 0.01 && cb.refund > 0.01
+              ? "combined"
+              : cb.commission > 0.01
+                ? "commission"
+                : "refund",
+        });
       }
     }
-    return targets;
+    return plans;
   }, [sorted]);
+
+  /**
+   * The event manager's mailbox, for the copy on a recovery ask.
+   *
+   * Same derivation as the address a client statement tells the reader to write to
+   * (emContact), with one difference: when the name cannot be turned into a mailbox
+   * that function falls back to finance@, and finance is already the one sending these
+   * — so no copy is added rather than one nobody reads.
+   */
+  const ccFor = useCallback((r: NaRow): string | null => {
+    const contact = emContact(r.em_referent);
+    return contact.derived ? contact.email : null;
+  }, []);
+
+  const composePlan = useCallback(
+    (plan: RecoveryPlan, detail: NaCommissionDetail | null): NaCommissionTarget | null => {
+      const composed =
+        plan.mode === "combined"
+          ? composeNaCombinedRequest(plan.row, plan.partner, plan.contact, detail)
+          : plan.mode === "commission"
+            ? composeNaCommissionRequest(plan.row, plan.partner, plan.contact, detail)
+            : composeNaRefundRequest(plan.row, plan.partner, plan.contact, detail);
+      if (!composed) return null;
+      return {
+        eventRef: plan.eventRef,
+        // The name the dialog lists and the recovery log records — the same one the card
+        // shows, so nobody has to work out that "Piazza Hospitality Group" is the hotel
+        // they just clicked. The log is keyed on the address, so this is display only.
+        partnerName: partnerDisplayName(plan.partner),
+        address: plan.contact.address,
+        contactName: plan.contact.name,
+        cc: ccFor(plan.row),
+        ...composed,
+        mode: plan.mode,
+      };
+    },
+    [ccFor],
+  );
+
+  // Without the detail: enough to count the asks, show the buttons and check the
+  // ledger. The itemisation is added when the dialog opens.
+  const commissionRefundTargets = useMemo<NaCommissionTarget[]>(
+    () =>
+      recoveryPlans
+        .map((plan) => composePlan(plan, null))
+        .filter((t): t is NaCommissionTarget => t != null),
+    [recoveryPlans, composePlan],
+  );
+
+  const commissionDetail = useMutation({
+    mutationFn: (eventRefs: string[]) => getCommissionDetail({ data: { event_refs: eventRefs } }),
+  });
+
+  /**
+   * Opens the dialog with the breakdown filled in.
+   *
+   * The detail is a separate query now, so it is fetched for the bookings the round
+   * covers and the emails are composed with it. If that fetch fails the emails
+   * still go out — the composers leave the breakdown out rather than the amount.
+   */
+  const openRecoveryDialog = useCallback(
+    async (wanted: NaCommissionTarget[]) => {
+      const keys = new Set(
+        wanted.map((t) => `${t.eventRef}::${t.address.toLowerCase()}::${t.mode}`),
+      );
+      const plans = recoveryPlans.filter((plan) =>
+        keys.has(`${plan.eventRef}::${plan.contact.address.toLowerCase()}::${plan.mode}`),
+      );
+      if (plans.length === 0) {
+        commissionRefundDialog.open(wanted);
+        return;
+      }
+      let index = new Map<string, NaCommissionDetail>();
+      try {
+        const rows = await commissionDetail.mutateAsync([...new Set(plans.map((p) => p.eventRef))]);
+        index = indexCommissionDetail(rows);
+      } catch (error) {
+        console.error("commission detail unavailable — composing without the breakdown:", error);
+      }
+      const composed = plans
+        .map((plan) =>
+          composePlan(
+            plan,
+            index.get(commissionDetailKey(plan.eventRef, plan.partner.house_code)) ?? null,
+          ),
+        )
+        .filter((t): t is NaCommissionTarget => t != null);
+      commissionRefundDialog.open(composed.length > 0 ? composed : wanted);
+    },
+    [recoveryPlans, composePlan, commissionDetail, commissionRefundDialog],
+  );
+
+  // Client recoveries: one email per booking, to the address its invoices were
+  // billed to. A booking with no contact on file is left out rather than sent to
+  // whoever happens to be on the brief.
+  const clientRecoveryTargets = useMemo<NaCommissionTarget[]>(() => {
+    const targets: NaCommissionTarget[] = [];
+    for (const { row: r, recovery } of sorted) {
+      if (!recovery.eligible) continue;
+      const contact = naClientContactFor(r, recovery.docs);
+      if (!contact.address) continue;
+      const composed = composeNaClientRecovery(r, recovery);
+      if (!composed) continue;
+      targets.push({
+        eventRef: r.readable_id ?? "",
+        partnerName: r.company_name,
+        address: contact.address,
+        contactName: contact.name,
+        cc: ccFor(r),
+        ...composed,
+        mode: "client",
+      });
+    }
+    return targets;
+  }, [sorted, ccFor]);
+
+  const clientRecoveryCount = useMemo(
+    () => sorted.filter(({ recovery }) => recovery.eligible).length,
+    [sorted],
+  );
+
+  // Already sent, by whoever got there first. The targets themselves are kept so
+  // the dialog can show the send as evidence; only the buttons count what is left
+  // to do, and a target with nothing left turns into a "Sent on … by …" label.
+  const sentFor = useCallback(
+    (t: NaCommissionTarget): RecoverySend | undefined =>
+      recoveryLog?.get(recoveryKey(t.eventRef, t.address, t.mode)),
+    [recoveryLog],
+  );
+  const unsentPartnerTargets = useMemo(
+    () => commissionRefundTargets.filter((t) => !sentFor(t)),
+    [commissionRefundTargets, sentFor],
+  );
+  // How far each booking's partner chase has got, from the same plans the buttons and
+  // the dialog work from. Once every provider with a claim has been written to, the
+  // booking is no longer ours to move — see moveFor.
+  const partnerChase = useMemo(
+    () =>
+      chaseProgress(
+        recoveryPlans.map((plan) => ({
+          eventRef: plan.eventRef,
+          address: plan.contact.address,
+          mode: plan.mode,
+        })),
+        recoveryLog,
+      ),
+    [recoveryPlans, recoveryLog],
+  );
+  const unsentClientTargets = useMemo(
+    () => clientRecoveryTargets.filter((t) => !sentFor(t)),
+    [clientRecoveryTargets, sentFor],
+  );
 
   useRegisterTrackerActions(
     {
@@ -723,189 +991,284 @@ function NaPage() {
           onClick: () => exportRecoverCsv(sorted),
           disabled: recoverCount === 0,
         },
+        {
+          label: "Export client recovery",
+          onClick: () => exportClientRecoveryCsv(sorted),
+          disabled: clientRecoveryCount === 0,
+        },
       ],
     },
-    [isFetching, sorted.length, recoverCount],
+    [isFetching, sorted.length, recoverCount, clientRecoveryCount],
   );
 
   // ── Split view ────────────────────────────────────────────────────────────
   // Presentation only. Amounts, tags, email actions and the commission/refund
   // dialogs all come from the same hooks and helpers as the previous layout.
 
-  // One move per booking, derived from the same helpers the partner cards use so
-  // the pills, the scope counts and the dialog agree.
-  const moveFor = useCallback(
-    (r: NaRow, ps: ReturnType<typeof parseNaPartners>): Move => {
+  /**
+   * Every move a booking is waiting on, not just the most urgent one.
+   *
+   * A booking is routinely two jobs at once: one provider to pay and another to claw a
+   * commission back from. Returning a single winner hid the loser completely — the
+   * payment vanished from "Ours to move" because the claim outranked it, and the only
+   * way to find it was to open the booking and read the partner cards. So the three
+   * sides are collected independently and the booking appears under each group it owes
+   * something to, with its own figure on each line.
+   *
+   * The partner claim and the partner payment are genuinely independent; the client
+   * side is one question with several answers, so it yields at most one move. Derived
+   * from the same helpers the partner cards use, so the pills, the chip counts and the
+   * dialog still agree.
+   */
+  const movesFor = useCallback(
+    (r: NaRow, ps: ReturnType<typeof parseNaPartners>, recovery: NaClientRecovery): Move[] => {
       const ccy = ps.find((p) => p.currency)?.currency ?? r.currency_client;
       const fmt = (v: number) => `${fmtAmount(v)} ${ccyLabel(ccy)}`;
       const live = ps.filter((p) => !p.is_provision);
 
       if (live.length === 0) {
-        return {
-          group: "blocked",
-          label: "No partner line",
-          headline: "—",
-          headlineLabel: "nothing priced",
-        };
+        return [
+          {
+            group: "blocked",
+            label: "No partner line",
+            headline: "—",
+            headlineLabel: "nothing priced",
+          },
+        ];
       }
 
       // Commission and refund are two different claims: one is revenue we never
       // collected, the other is cash we paid out by mistake. They go out as
       // different emails to different counterparties, so they are never merged
       // into a single "to recover" figure.
-      const claw = rowClawbackSplit(ps);
-      const commissionDue = [...claw.commission.values()].reduce((a, b) => a + b, 0);
-      const refundDue = [...claw.refund.values()].reduce((a, b) => a + b, 0);
-      if (commissionDue > 0.01 || refundDue > 0.01) {
-        const both = commissionDue > 0.01 && refundDue > 0.01;
-        // Chasing a commission or a refund before the dust settles is premature:
-        // amounts still move in the fortnight after an event.
-        const age = daysSinceEvent(r);
-        if (age != null && age < 14) {
-          return {
-            group: "waiting",
-            label: "Nothing to do yet — pending",
-            headline: both
-              ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
-              : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
-            headlineLabel: `pending ${14 - age}d ${ccyLabel(ccy)}`,
-          };
-        }
-        return {
-          group: "ours",
-          label: both
-            ? `Recover ${fmt(commissionDue)} commission + ${fmt(refundDue)} refund`
-            : commissionDue > 0.01
-              ? `Recover ${fmt(commissionDue)} commission`
-              : `Recover ${fmt(refundDue)} refund`,
-          headline: both
+      const claimMove = (): Move | null => {
+        const claw = rowClawbackSplit(ps);
+        const commissionDue = [...claw.commission.values()].reduce((a, b) => a + b, 0);
+        const refundDue = [...claw.refund.values()].reduce((a, b) => a + b, 0);
+        if (commissionDue > 0.01 || refundDue > 0.01) {
+          const both = commissionDue > 0.01 && refundDue > 0.01;
+          // Chasing a commission or a refund before the dust settles is premature:
+          // amounts still move in the fortnight after an event.
+          const age = daysSinceEvent(r);
+          if (age != null && age < 14) {
+            return {
+              group: "waiting",
+              label: "Nothing to do yet — pending",
+              headline: both
+                ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
+                : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
+              headlineLabel: `pending ${14 - age}d ${ccyLabel(ccy)}`,
+            };
+          }
+          const headline = both
             ? `${fmt(commissionDue)} + ${fmt(refundDue)}`
-            : fmt(commissionDue > 0.01 ? commissionDue : refundDue),
-          headlineLabel: both
+            : fmt(commissionDue > 0.01 ? commissionDue : refundDue);
+          const headlineLabel = both
             ? `commission + refund ${ccyLabel(ccy)}`
             : commissionDue > 0.01
               ? `commission to recover ${ccyLabel(ccy)}`
-              : `refund to recover ${ccyLabel(ccy)}`,
-        };
-      }
-
-      const toPay = rowPartnerToPay(r, ps);
-      const payTotal = [...toPay.values()].reduce((a, b) => a + b, 0);
-      if (payTotal > 0.01) {
-        // Whose move it is depends on whether we can actually pay yet.
-        const actions = live.map((p) =>
-          actionFor(
-            r.readable_id ?? "",
-            {
-              name: p.name,
-              email: p.email,
-              amount_due: p.outstanding,
-              vat_raw: null,
-              tax_identifier: null,
-              country: null,
-              cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
-            },
-            true,
-            { taxTracked: false },
-          ),
-        );
-        // Having the means is not enough: the booking must actually hold enough
-        // client cash to settle at least one provider, otherwise the next move is
-        // the client's.
-        const cash = availableCash(r, live);
-        const coversSomeone = live.some(
-          (p) => (p.outstanding ?? 0) > 0.01 && cash + 0.01 >= (p.outstanding ?? 0),
-        );
-        const canPay = actions.some((a) => a.code === "ours_pay") && coversSomeone;
-        const waiting = actions.some((a) => a.code === "await_reply");
-        if (canPay) {
+              : `refund to recover ${ccyLabel(ccy)}`;
+          // The email has gone out to everyone it was owed to, so the next move is
+          // theirs: the money comes back or it does not. Leaving it under "Ours to move"
+          // read as an email nobody had sent, which is how the same provider got chased
+          // twice. The figure and its caption do not change, so the Commission and Refund
+          // chips still count this booking.
+          const chase = partnerChase.get(r.readable_id ?? "");
+          if (fullyChased(chase)) {
+            return { group: "partner", label: chasedLabel(chase!), headline, headlineLabel };
+          }
           return {
             group: "ours",
-            label: "Pay the partner",
-            headline: fmt(payTotal),
-            headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            label: both
+              ? `Recover ${fmt(commissionDue)} commission + ${fmt(refundDue)} refund`
+              : commissionDue > 0.01
+                ? `Recover ${fmt(commissionDue)} commission`
+                : `Recover ${fmt(refundDue)} refund`,
+            headline,
+            headlineLabel,
           };
         }
-        if (waiting) {
+        return null;
+      };
+
+      const payMove = (): Move | null => {
+        const toPay = rowPartnerToPay(r, ps);
+        const payTotal = [...toPay.values()].reduce((a, b) => a + b, 0);
+        if (payTotal > 0.01) {
+          // Whose move it is depends on whether we can actually pay yet.
+          const actions = live.map((p) =>
+            actionFor(
+              r.readable_id ?? "",
+              {
+                name: p.name,
+                email: p.email,
+                amount_due: p.outstanding,
+                vat_raw: null,
+                tax_identifier: null,
+                country: null,
+                cardOnThisEvent: p.payment_method === "CREDIT_CARD" ? "accepted" : undefined,
+              },
+              true,
+              { taxTracked: false },
+            ),
+          );
+          // Having the means is not enough: the booking must actually hold enough
+          // client cash to settle at least one provider, otherwise the next move is
+          // the client's.
+          const cash = availableCash(r, live);
+          const coversSomeone = live.some(
+            (p) => (p.outstanding ?? 0) > 0.01 && cash + 0.01 >= (p.outstanding ?? 0),
+          );
+          const canPay = actions.some((a) => a.code === "ours_pay") && coversSomeone;
+          const waiting = actions.some((a) => a.code === "await_reply");
+          if (canPay) {
+            return {
+              group: "ours",
+              label: "Pay the partner",
+              headline: fmt(payTotal),
+              headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            };
+          }
+          if (waiting) {
+            return {
+              group: "waiting",
+              label: "Waiting on a reply",
+              headline: fmt(payTotal),
+              headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            };
+          }
+          // We hold the means but not the cash: nothing moves until the client pays,
+          // so this is their move even though a provider is owed.
+          if (!coversSomeone) {
+            // Named "first" so it reads distinctly from the client branch's own
+            // "Client to pay": this line carries what the *provider* is owed, and the
+            // other carries what the client owes, and a booking can now show both.
+            return {
+              group: "client",
+              label: "Client to pay first",
+              headline: fmt(payTotal),
+              headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            };
+          }
           return {
-            group: "waiting",
-            label: "Waiting on a reply",
+            group: "partner",
+            label: "Ask for details",
             headline: fmt(payTotal),
             headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
           };
         }
-        // We hold the means but not the cash: nothing moves until the client pays,
-        // so this is their move even though a provider is owed.
-        if (!coversSomeone) {
+        return null;
+      };
+
+      // A client balance that has aged past both grace periods is a recovery we
+      // act on, not a wait: the email exists, the figures are settled, someone
+      // has to send it. Before that it is just an invoice out in the world.
+      const clientMove = (): Move | null => {
+        if (recovery.eligible) {
+          const rc = recovery.currency;
           return {
             group: "client",
-            label: "Client to pay",
-            headline: fmt(payTotal),
-            headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
+            label: `Recover ${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)} from the client`,
+            headline: `${fmtAmount(recovery.outstanding)} ${ccyLabel(rc)}`,
+            headlineLabel: `client to recover ${ccyLabel(rc)}`,
           };
         }
-        return {
-          group: "partner",
-          label: "Ask for details",
-          headline: fmt(payTotal),
-          headlineLabel: `partner to pay ${ccyLabel(ccy)}`,
-        };
-      }
 
-      if ((r.balance_ccy ?? 0) > 0.01) {
-        return {
-          group: "client",
-          label: "Client to pay",
-          headline: `${fmtAmount(r.balance_ccy)} ${ccyLabel(r.currency_client)}`,
-          headlineLabel: `client outstanding ${ccyLabel(r.currency_client)}`,
-        };
-      }
+        if ((r.balance_ccy ?? 0) > 0.01) {
+          // Nothing to say about a client's balance until the event is a week behind us.
+          // An unpaid invoice on an event that has not happened is not a chase, it is a
+          // deposit doing its job. 39 of the 92 North American bookings carrying a client
+          // balance were on the list this way, and 37 of those had not happened yet —
+          // enough noise to bury the ones somebody actually has to write to. The grace
+          // after the last invoice stays a countdown below rather than a second gate,
+          // because that clock restarts every time a document is issued.
+          const sinceEvent = recovery.daysSinceEvent ?? daysSinceEvent(r);
+          if (sinceEvent == null || sinceEvent < RECOVERY_GRACE_DAYS) return null;
 
-      // A negative balance means the client paid more than we invoiced: we owe
-      // them the difference. Same fortnight of grace as the partner recoveries —
-      // a late invoice often closes the gap on its own.
-      const clientCredit = -(r.balance_ccy ?? 0);
-      if (clientCredit > 0.01) {
-        const age = daysSinceEvent(r);
-        if (age != null && age < 14) {
+          // Named as pending while the dust settles, so the list never reads as a
+          // chase that nobody is sending.
+          const waitLeft =
+            recovery.outstanding > 0.01 && recovery.daysSinceInvoice != null
+              ? Math.max(RECOVERY_GRACE_DAYS - recovery.daysSinceInvoice, 0)
+              : 0;
           return {
-            group: "waiting",
-            label: "Nothing to do yet — pending",
-            headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
-            headlineLabel: `pending ${14 - age}d ${ccyLabel(r.currency_client)}`,
+            group: "client",
+            label: waitLeft > 0 ? `Client to pay — chase in ${waitLeft}d` : "Client to pay",
+            headline: `${fmtAmount(r.balance_ccy)} ${ccyLabel(r.currency_client)}`,
+            headlineLabel: `client outstanding ${ccyLabel(r.currency_client)}`,
           };
         }
-        return {
-          group: "ours",
-          label: `Refund the client ${fmtAmount(clientCredit)}`,
-          headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
-          headlineLabel: `client to refund ${ccyLabel(r.currency_client)}`,
-        };
-      }
 
-      return {
-        group: "done",
-        label: "Nothing to do",
-        headline: fmt(0),
-        headlineLabel: `settled ${ccyLabel(ccy)}`,
+        // A negative balance means the client paid more than we invoiced: we owe
+        // them the difference. Same fortnight of grace as the partner recoveries —
+        // a late invoice often closes the gap on its own.
+        const clientCredit = -(r.balance_ccy ?? 0);
+        if (clientCredit > 0.01) {
+          const age = daysSinceEvent(r);
+          if (age != null && age < 14) {
+            return {
+              group: "waiting",
+              label: "Nothing to do yet — pending",
+              headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
+              headlineLabel: `pending ${14 - age}d ${ccyLabel(r.currency_client)}`,
+            };
+          }
+          return {
+            group: "ours",
+            label: `Refund the client ${fmtAmount(clientCredit)}`,
+            headline: `${fmtAmount(clientCredit)} ${ccyLabel(r.currency_client)}`,
+            headlineLabel: `client to refund ${ccyLabel(r.currency_client)}`,
+          };
+        }
+
+        return null;
       };
+
+      const moves = [claimMove(), payMove(), clientMove()].filter((m): m is Move => m != null);
+      // Two collectors can land on the same pill — the no-cash payment and a client
+      // balance both speak for the client. One job, one line.
+      const seen = new Set<string>();
+      const distinct = moves.filter((m) => {
+        const key = `${m.group}::${m.label}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (distinct.length > 0) return distinct;
+
+      return [
+        {
+          group: "done",
+          label: "Nothing to do",
+          headline: fmt(0),
+          headlineLabel: `settled ${ccyLabel(ccy)}`,
+        },
+      ];
     },
-    [actionFor],
+    [actionFor, partnerChase],
   );
 
   const withMove = useMemo(
-    () => filtered.map((item) => ({ ...item, move: moveFor(item.row, item.partners) })),
-    [filtered, moveFor],
+    () =>
+      filtered.map((item) => ({
+        ...item,
+        moves: movesFor(item.row, item.partners, item.recovery),
+      })),
+    [filtered, movesFor],
   );
 
   // One predicate per scope, shared by the filter and the chip counts below so a
   // chip can never claim a number the list does not show.
   const SCOPE_TEST: Record<typeof scope, (x: (typeof withMove)[number]) => boolean> = useMemo(
     () => ({
-      move: (x) => needsAMove(x.move.group),
-      commission: (x) => x.move.headlineLabel.includes("commission"),
-      refund: (x) => x.move.headlineLabel.includes("refund to recover"),
-      client_refund: (x) => x.move.headlineLabel.includes("client to refund"),
+      move: (x) => x.moves.some((m) => needsAMove(m.group)),
+      commission: (x) => x.moves.some((m) => m.headlineLabel.includes("commission")),
+      refund: (x) => x.moves.some((m) => m.headlineLabel.includes("refund to recover")),
+      client_refund: (x) => x.moves.some((m) => m.headlineLabel.includes("client to refund")),
+      // Keyed off the recovery itself, not the move label: a booking can owe us a
+      // client balance *and* carry a partner claim, and only one of those can be
+      // the headline. The chip has to agree with the Client recovery button.
+      client_recovery: (x) => x.recovery.eligible,
       all: () => true,
     }),
     [],
@@ -919,17 +1282,24 @@ function NaPage() {
       commission: withMove.filter(SCOPE_TEST.commission).length,
       refund: withMove.filter(SCOPE_TEST.refund).length,
       clientRefund: withMove.filter(SCOPE_TEST.client_refund).length,
+      clientRecovery: withMove.filter(SCOPE_TEST.client_recovery).length,
       all: withMove.length,
     }),
     [withMove, SCOPE_TEST],
   );
 
   const groups = useMemo(() => {
-    const byGroup = new Map<MoveGroup, typeof scoped>();
+    // One entry per booking *and move*: the booking with a payment and a claim is a
+    // line under "Ours to move" for the payment and another for the claim, each with
+    // its own figure. Anything else hides half the work.
+    type Line = (typeof scoped)[number] & { move: Move };
+    const byGroup = new Map<MoveGroup, Line[]>();
     for (const item of scoped) {
-      const list = byGroup.get(item.move.group) ?? [];
-      list.push(item);
-      byGroup.set(item.move.group, list);
+      for (const move of item.moves) {
+        const list = byGroup.get(move.group) ?? [];
+        list.push({ ...item, move });
+        byGroup.set(move.group, list);
+      }
     }
     return GROUP_ORDER.filter((g) => (byGroup.get(g)?.length ?? 0) > 0).map((g) => ({
       key: g,
@@ -948,7 +1318,53 @@ function NaPage() {
   const selPartners = selected?.partners ?? [];
   const selRef = sel?.readable_id ?? "";
   const selTotals = useMemo(() => sumPartners(selPartners), [selPartners]);
-  const selInvoices = useMemo(() => parseNaInvoices(sel?.invoices_json ?? null), [sel]);
+  const selInvoices = selected?.invoices ?? [];
+  const selRecovery = selected?.recovery ?? null;
+  // Which documents the recovery actually counts, so the invoicing tab can show
+  // what the email leaves out instead of quietly disagreeing with it.
+  const selLiveDocIds = useMemo(
+    () => new Set((selRecovery?.docs ?? []).map((d) => d.invoice_id ?? d.invoice_ref ?? "")),
+    [selRecovery],
+  );
+
+  // ── The lines somebody typed because the warehouse has not caught up ──────
+  const manualQuery = useManualEntries(selRef);
+  const manualEntries = manualQuery.data ?? [];
+  const manualDocs = useMemo(
+    () =>
+      manualEntries
+        .filter((e) => e.kind !== "payment")
+        .sort((a, b) => (a.issued_on ?? "").localeCompare(b.issued_on ?? "")),
+    [manualEntries],
+  );
+  const manualPayments = useMemo(
+    () => manualEntries.filter((e) => e.kind === "payment"),
+    [manualEntries],
+  );
+  // What the form compares against: the warehouse's own references, for the series
+  // warning, and its payments, for the duplicate warning.
+  const knownDocuments = useMemo(
+    () =>
+      selInvoices
+        .filter((iv) => iv.party !== "PARTNER")
+        .map((iv) => ({ ref: iv.invoice_ref ?? "", issued: iv.emission_date ?? null })),
+    [selInvoices],
+  );
+  const knownPayments = useMemo(
+    () =>
+      (selRecovery?.receipts ?? []).map((r) => ({
+        paid_on: r.paid_on,
+        amount: r.amount ?? 0,
+        currency: r.currency ?? "",
+      })),
+    [selRecovery],
+  );
+  const selCurrency = sel?.currency_client ?? selInvoices[0]?.currency ?? "USD";
+  const [entryDraft, setEntryDraft] = useState<{ draft: Draft; entry?: ManualEntry } | null>(null);
+  const removeEntry = useMutation({
+    mutationFn: (input: { id: number; event_ref: string }) => deleteManualEntry({ data: input }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["manual-entries", selRef] }),
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
@@ -1044,6 +1460,11 @@ function NaPage() {
                     label: "Client to refund",
                     count: scopeCounts.clientRefund,
                   },
+                  {
+                    key: "client_recovery" as const,
+                    label: "Client recovery",
+                    count: scopeCounts.clientRecovery,
+                  },
                   { key: "all" as const, label: "All", count: scopeCounts.all },
                 ] as const
               ).map((s) => {
@@ -1063,14 +1484,25 @@ function NaPage() {
                   </button>
                 );
               })}
-              {gmailConnection?.connected && commissionRefundTargets.length > 0 && (
+              {/* Counts what is left to send, not what exists: an ask a colleague has
+                  already sent is shown inside the dialog but never offered again. */}
+              {gmailConnection?.connected && unsentPartnerTargets.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => commissionRefundDialog.open(commissionRefundTargets)}
+                  onClick={() => void openRecoveryDialog(commissionRefundTargets)}
                   className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
                 >
-                  Recover from {commissionRefundTargets.length} partner
-                  {commissionRefundTargets.length > 1 ? "s" : ""}
+                  Recover from {unsentPartnerTargets.length} partner
+                  {unsentPartnerTargets.length > 1 ? "s" : ""}
+                </button>
+              )}
+              {gmailConnection?.connected && unsentClientTargets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => commissionRefundDialog.open(clientRecoveryTargets)}
+                  className="rounded-full bg-navy px-2.5 py-[3px] text-[11.5px] font-semibold text-white"
+                >
+                  Client recovery ({unsentClientTargets.length})
                 </button>
               )}
               {/* Say when the figures were computed, so a cached page never looks
@@ -1083,6 +1515,15 @@ function NaPage() {
                   il y a {cachedAge < 90 ? `${cachedAge} s` : `${Math.round(cachedAge / 60)} min`}
                 </span>
               )}
+              {/* The approved cards come from a mirror that only the Refresh button
+                  syncs, so its age has to be visible here too — otherwise a card
+                  approved this morning looks like a provider who never had one. */}
+              <span
+                className="rounded-full px-2 py-[3px] text-[11.5px] text-slate-400"
+                title="Cartes approuvées dans #finance-paiement-by-card, lues depuis le miroir Postgres. Rafraîchir resynchronise."
+              >
+                cartes {fmtAge(cardsSyncedAgeSeconds)}
+              </span>
             </div>
           </div>
 
@@ -1128,7 +1569,9 @@ function NaPage() {
                     const isSel = selRef === ref;
                     return (
                       <button
-                        key={ref}
+                        // A booking can hold two jobs in the same group — the payment
+                        // and the claim are both ours — so the ref alone is not unique.
+                        key={`${ref}::${move.label}`}
                         type="button"
                         onClick={() => {
                           setSelectedRef(ref);
@@ -1233,6 +1676,7 @@ function NaPage() {
                         Back office
                       </a>
                     )}
+                    <StatementButton eventRef={selRef} download={download} />
                     {/* Same targets as the list-level button, narrowed to this booking. */}
                     {(() => {
                       if (!gmailConnection?.connected) return null;
@@ -1240,17 +1684,43 @@ function NaPage() {
                       // bank details and tax numbers are a L'Oreal concern.
                       const mine = commissionRefundTargets.filter((t) => t.eventRef === selRef);
                       if (mine.length === 0) return null;
-                      const anyRefund = mine.some((t) => t.mode !== "commission");
+                      const left = mine.filter((t) => !sentFor(t));
+                      // Every provider on this booking has already been written to:
+                      // say who did it rather than offering the round again.
+                      if (left.length === 0) {
+                        return <SentButton send={latestSend(mine.map(sentFor))} />;
+                      }
+                      const anyRefund = left.some((t) => t.mode !== "commission");
                       return (
                         <button
                           type="button"
-                          onClick={() => commissionRefundDialog.open(mine)}
+                          onClick={() => void openRecoveryDialog(mine)}
                           className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-naboo px-3 text-[12.5px] font-bold text-navy"
                         >
                           <Send className="h-3.5 w-3.5" aria-hidden="true" />
                           {anyRefund
-                            ? `Recover from ${mine.length} partner${mine.length > 1 ? "s" : ""}`
-                            : `Ask ${mine.length} partner${mine.length > 1 ? "s" : ""} for the commission`}
+                            ? `Recover from ${left.length} partner${left.length > 1 ? "s" : ""}`
+                            : `Ask ${left.length} partner${left.length > 1 ? "s" : ""} for the commission`}
+                        </button>
+                      );
+                    })()}
+                    {/* Same targets as the list-level Client recovery button. */}
+                    {(() => {
+                      if (!gmailConnection?.connected) return null;
+                      const mine = clientRecoveryTargets.filter((t) => t.eventRef === selRef);
+                      if (mine.length === 0) return null;
+                      const left = mine.filter((t) => !sentFor(t));
+                      if (left.length === 0) {
+                        return <SentButton send={latestSend(mine.map(sentFor))} />;
+                      }
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => commissionRefundDialog.open(mine)}
+                          className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-navy px-3 text-[12.5px] font-bold text-white"
+                        >
+                          <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                          Client recovery
                         </button>
                       );
                     })()}
@@ -1370,6 +1840,7 @@ function NaPage() {
                 {detailTab === "partners" && (
                   <PartnerSectionCard
                     id={selRef}
+                    download={download}
                     partners={selPartners}
                     totals={selTotals}
                     actionFor={actionFor}
@@ -1383,78 +1854,188 @@ function NaPage() {
                           t.eventRef === selRef &&
                           t.address.toLowerCase() === (p.email ?? "").toLowerCase(),
                       );
-                      if (mine.length > 0) commissionRefundDialog.open(mine);
+                      if (mine.length > 0) void openRecoveryDialog(mine);
                       else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
                     }}
+                    // Whoever already wrote to this provider about this booking.
+                    sentFor={(p) =>
+                      latestSend(
+                        commissionRefundTargets
+                          .filter(
+                            (t) =>
+                              t.eventRef === selRef &&
+                              t.address.toLowerCase() === (p.email ?? "").toLowerCase(),
+                          )
+                          .map(sentFor),
+                      )
+                    }
                   />
                 )}
                 {detailTab === "invoices" && (
-                  <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
-                    <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
-                      <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
-                      Client invoicing
-                    </header>
-                    {selInvoices.length === 0 ? (
-                      <div className="px-9 py-9 text-center">
-                        <div className="font-display text-[15px] font-bold">
-                          No invoice issued yet
+                  <div className="flex flex-col gap-3">
+                    {selRecovery && (
+                      <ClientRecoveryCard
+                        recovery={selRecovery}
+                        sent={latestSend(
+                          clientRecoveryTargets.filter((t) => t.eventRef === selRef).map(sentFor),
+                        )}
+                      />
+                    )}
+                    <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+                      <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
+                        <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
+                        Client invoicing
+                        {/* The statement is the client-facing view of this very table. */}
+                        <span className="ml-auto">
+                          <StatementButton eventRef={selRef} download={download} tone="primary" />
+                        </span>
+                      </header>
+                      <FreshnessLine
+                        documents={knownDocuments}
+                        manualCount={manualEntries.length}
+                      />
+                      {selInvoices.length === 0 && manualDocs.length === 0 ? (
+                        <div className="px-9 py-9 text-center">
+                          <div className="font-display text-[15px] font-bold">
+                            No invoice issued yet
+                          </div>
+                          <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-slate-500">
+                            Nothing has been billed to the client on this booking so far.
+                          </p>
                         </div>
-                        <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-slate-500">
-                          Nothing has been billed to the client on this booking so far.
-                        </p>
-                      </div>
-                    ) : (
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr>
-                            {["Invoice", "Issued", "Due", "Amount", "Status"].map((h, i) => (
-                              <th
-                                key={h}
-                                className={`border-b border-slate-100 px-3.5 py-2 text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500 ${
-                                  i === 3 ? "text-right" : "text-left"
-                                }`}
-                              >
-                                {h}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selInvoices.map((iv, i) => (
-                            <tr key={`${iv.invoice_ref ?? i}`}>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
-                                {iv.invoice_ref ?? "—"}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
-                                {fmtDate(iv.emission_date)}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
-                                {fmtDate(iv.due_date)}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
-                                <Money value={iv.amount_ttc} currency={iv.currency} />
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5">
-                                <span
-                                  className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
-                                    iv.status === "CANCELLED"
-                                      ? "bg-slate-100 text-slate-600"
-                                      : iv.is_sent
-                                        ? "bg-emerald-100 text-emerald-800"
-                                        : "bg-amber-100 text-amber-800"
+                      ) : (
+                        <table className="w-full border-collapse">
+                          <thead>
+                            <tr>
+                              {["Invoice", "Issued", "Due", "Amount", "Status"].map((h, i) => (
+                                <th
+                                  key={h}
+                                  className={`border-b border-slate-100 px-3.5 py-2 text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500 ${
+                                    i === 3 ? "text-right" : "text-left"
                                   }`}
                                 >
-                                  {iv.status === "CANCELLED"
-                                    ? "Cancelled"
-                                    : iv.is_sent
-                                      ? "Sent"
-                                      : "Not sent"}
-                                </span>
-                              </td>
+                                  {h}
+                                </th>
+                              ))}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {selInvoices.map((iv, i) => (
+                              <tr key={`${iv.invoice_ref ?? i}`}>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
+                                  {iv.invoice_ref ?? "—"}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(iv.emission_date)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(iv.due_date)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
+                                  <Money value={iv.amount_ttc} currency={iv.currency} />
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5">
+                                  <span className="flex flex-wrap items-center gap-1">
+                                    <span
+                                      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+                                        iv.status === "CANCELLED"
+                                          ? "bg-slate-100 text-slate-600"
+                                          : iv.is_sent
+                                            ? "bg-emerald-100 text-emerald-800"
+                                            : "bg-amber-100 text-amber-800"
+                                      }`}
+                                    >
+                                      {iv.status === "CANCELLED"
+                                        ? "Cancelled"
+                                        : iv.is_sent
+                                          ? "Sent"
+                                          : "Not sent"}
+                                    </span>
+                                    {/* Why a document is absent from the recovery email. */}
+                                    {iv.party === "PARTNER" ? (
+                                      <span
+                                        title="Our commission note to a provider — not billed to the client"
+                                        className="inline-flex items-center whitespace-nowrap rounded-full bg-slate-100 px-2 py-[2px] text-[10.5px] font-semibold text-slate-600"
+                                      >
+                                        Provider
+                                      </span>
+                                    ) : (
+                                      !selLiveDocIds.has(iv.invoice_id ?? iv.invoice_ref ?? "") && (
+                                        <span
+                                          title="Cancelled out by a credit note — excluded from the balance due"
+                                          className="inline-flex items-center whitespace-nowrap rounded-full bg-slate-100 px-2 py-[2px] text-[10.5px] font-semibold text-slate-600"
+                                        >
+                                          Nets out
+                                        </span>
+                                      )
+                                    )}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                            {manualDocs.map((entry) => (
+                              <tr key={`manual-${entry.id}`}>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
+                                  {entry.document_ref ?? "—"}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(entry.issued_on)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                  {fmtDate(entry.due_on)}
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
+                                  <Money value={entry.amount} currency={entry.currency} />
+                                </td>
+                                <td className="border-b border-slate-100 px-3.5 py-2.5">
+                                  <span className="flex flex-wrap items-center gap-1.5">
+                                    <ByHandChip entry={entry} />
+                                    <RowActions
+                                      entry={entry}
+                                      pending={removeEntry.isPending}
+                                      onEdit={() => setEntryDraft({ draft: draftOf(entry), entry })}
+                                      onDelete={() =>
+                                        removeEntry.mutate({ id: entry.id, event_ref: selRef })
+                                      }
+                                    />
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {entryDraft ? (
+                        <EntryForm
+                          eventRef={selRef}
+                          initial={entryDraft.draft}
+                          entry={entryDraft.entry}
+                          documents={knownDocuments}
+                          payments={knownPayments}
+                          onDone={() => setEntryDraft(null)}
+                          onCancel={() => setEntryDraft(null)}
+                        />
+                      ) : (
+                        <AddEntryBar
+                          onAddDocument={() =>
+                            setEntryDraft({ draft: emptyDraft("invoice", selCurrency) })
+                          }
+                          onAddPayment={() =>
+                            setEntryDraft({ draft: emptyDraft("payment", selCurrency) })
+                          }
+                        />
+                      )}
+                    </div>
+                    {(selRecovery?.receipts?.length || manualPayments.length > 0) && (
+                      <ClientReceiptsCard
+                        receipts={selRecovery?.receipts ?? []}
+                        manual={manualPayments}
+                        onEdit={(entry) => setEntryDraft({ draft: draftOf(entry), entry })}
+                        onDelete={(entry) =>
+                          removeEntry.mutate({ id: entry.id, event_ref: selRef })
+                        }
+                        removing={removeEntry.isPending}
+                      />
                     )}
                   </div>
                 )}
@@ -1472,7 +2053,12 @@ function NaPage() {
                               key={`${selRef}-sum-${i}`}
                               className="rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)]"
                             >
-                              <div className="text-sm font-semibold">{p.name ?? p.email}</div>
+                              <div className="text-sm font-semibold">{partnerDisplayName(p)}</div>
+                              {partnerLegalName(p) && (
+                                <div className="mt-[1px] text-[11px] text-slate-500">
+                                  invoiced by {partnerLegalName(p)}
+                                </div>
+                              )}
                               <NaFinancialSummaryBox
                                 existing={financialSummaries?.get(`${selRef}::${key}`)}
                                 loading={
@@ -1880,6 +2466,8 @@ function PartnerSectionCard({
   factsMap,
   cardApprovedCodes,
   onRequest,
+  sentFor,
+  download,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
@@ -1888,9 +2476,19 @@ function PartnerSectionCard({
   factsMap: ReturnType<typeof useActionIndex>["factsMap"];
   cardApprovedCodes: ReturnType<typeof useActionIndex>["cardApprovedCodes"];
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
+  /** The recovery email already sent to this provider on this booking, if any. */
+  sentFor: (partner: ReturnType<typeof parseNaPartners>[number]) => RecoverySend | undefined;
+  /** Shared with the page so only the card being downloaded shows a spinner. */
+  download: DocumentDownload;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
+  // A booking of this size runs to a dozen partner lines, and the one somebody opened the
+  // drawer for is rarely the first. The filter is display only: the subtotal below still
+  // sums every line, because a total that quietly followed the search would be a wrong
+  // total shown without warning.
+  const [query, setQuery] = useState("");
+  const shown = partners.filter((p) => partnerMatches(p, query));
 
   if (partners.length === 0) {
     return (
@@ -1906,7 +2504,45 @@ function PartnerSectionCard({
 
   return (
     <div className="flex flex-col gap-3">
-      {partners.map((p, i) => {
+      {/* Search, once there is enough here to be worth searching. */}
+      {partners.length > 3 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="relative flex items-center">
+            <Search
+              className="pointer-events-none absolute left-[9px] h-3.5 w-3.5 text-[#9CA3AF]"
+              aria-hidden="true"
+            />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search a partner, house, email or code…"
+              aria-label="Search the partners on this booking"
+              className="h-8 w-[300px] rounded-md border border-[#D1D5DB] bg-white pl-7 pr-2 text-[12px] text-navy shadow-[0_1px_2px_rgba(16,31,52,0.06)]"
+            />
+          </label>
+          {query.trim() !== "" && (
+            <>
+              <span className="text-[11.5px] text-[#6B7280]">
+                {shown.length === 1 ? "1 of" : `${shown.length} of`} {partners.length} lines
+              </span>
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="text-[11.5px] text-[#0F766E] hover:underline"
+              >
+                Clear
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {shown.length === 0 && (
+        <div className="rounded-[10px] border border-dashed border-[#D1D5DB] px-4 py-8 text-center text-[12.5px] text-[#6B7280]">
+          No partner on this booking matches “{query.trim()}”.
+        </div>
+      )}
+      {shown.map((p, i) => {
         const prov = !!p.is_provision;
         const key = partnerKey(p.name ?? p.email ?? "");
         const action = prov
@@ -1925,9 +2561,16 @@ function PartnerSectionCard({
               true,
               { taxTracked: false },
             );
-        const overpaid = (p.outstanding ?? 0) < -0.01;
         const claw = partnerClawback(p);
-        const hasCommissionToClaim = claw.commission > 0.01;
+        // Money to recover outranks every other verdict on this card — see
+        // partnerRecoveryAsk for why the action tree cannot be trusted alone here.
+        const ask = partnerRecoveryAsk(p);
+        const hasRefundToClaim = ask === "refund";
+        const hasCommissionToClaim = ask === "commission";
+        const hasRecoveryAsk = ask != null;
+        // Only a real ask can have been sent, so this is looked up for those lines
+        // alone: nothing else on the card ever opened an email.
+        const alreadyAsked = hasRecoveryAsk ? sentFor(p) : undefined;
         // A card approved in #finance-paiement-by-card means the money is
         // already available to the provider: the next move is theirs, not ours,
         // and it is certainly not a bank-details chase.
@@ -1937,7 +2580,7 @@ function PartnerSectionCard({
         // emphasis: amber when it is money to claw back, muted when nothing is due.
         const outTone = prov
           ? "text-[#9CA3AF]"
-          : overpaid || hasCommissionToClaim
+          : hasRecoveryAsk
             ? "text-[#B45309]"
             : (p.outstanding ?? 0) > 0.01
               ? "text-[#101F34]"
@@ -1946,13 +2589,13 @@ function PartnerSectionCard({
         return (
           <div
             key={`${id}-p-${i}`}
-            className={`flex items-start gap-4 rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)] transition-colors hover:border-navy ${
+            className={`flex flex-wrap items-start gap-4 rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)] transition-colors hover:border-navy ${
               prov ? "opacity-70" : ""
             }`}
           >
             <div className="min-w-[220px] flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm font-semibold">{p.name ?? "—"}</span>
+                <span className="text-sm font-semibold">{partnerDisplayName(p)}</span>
                 <PartnerLockBadge admin={!!p.locked_by_admin} client={!!p.locked_by_client} />
                 {prov && <ProvisionPill />}
                 {p.payment_method === "CREDIT_CARD" && (
@@ -1961,6 +2604,18 @@ function PartnerSectionCard({
                   </span>
                 )}
               </div>
+              {/* Who actually invoices us, when that is not the name above: an invoice from
+                  Piazza Hospitality Group has to be tieable to Hotel Healdsburg here. The
+                  house code stands on its own — it is what a commission statement is drawn
+                  on, so it is worth showing even when the two names agree. */}
+              {(partnerLegalName(p) || p.house_code) && (
+                <div className="mt-[2px] flex flex-wrap items-center gap-1.5 text-[11.5px] text-[#6B7280]">
+                  {partnerLegalName(p) && <span>invoiced by {partnerLegalName(p)}</span>}
+                  {p.house_code && (
+                    <span className="font-mono text-[10.5px] text-[#9CA3AF]">{p.house_code}</span>
+                  )}
+                </div>
+              )}
               {p.email && (
                 <a
                   href={`mailto:${p.email}`}
@@ -1972,9 +2627,15 @@ function PartnerSectionCard({
               {!prov && action && (
                 <>
                   <div className="mt-2 text-xs text-[#374151]">
-                    {cardIssued
-                      ? "Carte émise et approuvée — au prestataire de la débiter."
-                      : action.detail}
+                    {/* Same precedence as the button: never tell someone the line is
+                        paid up while a refund or a commission is still to be asked for. */}
+                    {hasRefundToClaim
+                      ? `Overpaid by ${fmtAmount(claw.refund)} ${ccyLabel(p.currency)} beyond our commission — refund to ask.`
+                      : hasCommissionToClaim
+                        ? `Commission of ${fmtAmount(claw.commission)} ${ccyLabel(p.currency)} paid out with the provider's invoice — to recover.`
+                        : cardIssued
+                          ? "Carte émise et approuvée — au prestataire de la débiter."
+                          : action.detail}
                   </div>
                   {cardIssued && (
                     <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[#E7F8F3] px-2 py-[2px] text-[10.5px] font-semibold text-[#00593C]">
@@ -2020,7 +2681,7 @@ function PartnerSectionCard({
               </span>
               <span>
                 <span className="block text-[9.5px] font-bold uppercase tracking-[0.07em] text-[#6B7280]">
-                  {overpaid
+                  {hasRefundToClaim
                     ? "Refund to recover"
                     : hasCommissionToClaim
                       ? "Commission to recover"
@@ -2034,7 +2695,7 @@ function PartnerSectionCard({
                   ) : (
                     <Money
                       value={
-                        overpaid
+                        hasRefundToClaim
                           ? claw.refund
                           : hasCommissionToClaim
                             ? claw.commission
@@ -2045,45 +2706,71 @@ function PartnerSectionCard({
                   )}
                 </span>
               </span>
-              {prov ? (
-                <span className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-semibold text-[#9CA3AF]">
-                  Excluded
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  disabled={
-                    action?.code === "settled" ||
-                    // Card issued: waiting on the provider, nothing to open.
-                    (!overpaid && !hasCommissionToClaim && cardIssued) ||
-                    (!overpaid &&
-                      !hasCommissionToClaim &&
-                      p.payment_method === "CREDIT_CARD" &&
-                      action?.code === "ours_pay")
-                  }
-                  onClick={() => onRequest(p)}
-                  className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-navy bg-white px-3 text-xs font-semibold text-navy transition-colors hover:bg-[#FAFAF8] disabled:border-border disabled:text-[#9CA3AF]"
-                >
-                  {/* Marketplace NA never asks for bank or tax details, so every
+              <span className="flex flex-col items-end gap-1.5">
+                {prov ? (
+                  <span className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-semibold text-[#9CA3AF]">
+                    Excluded
+                  </span>
+                ) : alreadyAsked ? (
+                  // Someone has written to this provider about this booking. Nobody
+                  // writes again — the ledger says who and when.
+                  <span
+                    title={`${alreadyAsked.sent_by}${alreadyAsked.subject ? ` — ${alreadyAsked.subject}` : ""}`}
+                    className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-[#F3F4F6] px-3 text-xs font-semibold text-[#6B7280]"
+                  >
+                    <Check className="h-3 w-3" aria-hidden="true" />
+                    {recoverySentLabel(alreadyAsked)}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={
+                      !hasRecoveryAsk &&
+                      // Nothing owed either way, or waiting on the provider: the card
+                      // is issued, or it is theirs to debit. Nothing to open here.
+                      (action?.code === "settled" ||
+                        cardIssued ||
+                        (p.payment_method === "CREDIT_CARD" && action?.code === "ours_pay"))
+                    }
+                    onClick={() => onRequest(p)}
+                    className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-navy bg-white px-3 text-xs font-semibold text-navy transition-colors hover:bg-[#FAFAF8] disabled:border-border disabled:text-[#9CA3AF]"
+                  >
+                    {/* Marketplace NA never asks for bank or tax details, so every
                       label here is either a payout state or a recovery ask. The
                       card is a state we act on elsewhere, not something we debit
                       from this screen. */}
-                  {action?.code === "settled"
-                    ? "Nothing to do"
-                    : overpaid
+                    {hasRefundToClaim
                       ? "Ask for the refund"
                       : hasCommissionToClaim
                         ? "Ask for the commission"
-                        : cardIssued
-                          ? "Card to debit"
-                          : action?.code === "ours_pay"
-                            ? p.payment_method === "CREDIT_CARD"
-                              ? "Card to debit"
-                              : "Pay by transfer"
-                            : "Open in back office"}
-                </button>
-              )}
+                        : action?.code === "settled"
+                          ? "Nothing to do"
+                          : cardIssued
+                            ? "Card to debit"
+                            : action?.code === "ours_pay"
+                              ? p.payment_method === "CREDIT_CARD"
+                                ? "Card to debit"
+                                : "Pay by transfer"
+                              : "Open in back office"}
+                  </button>
+                )}
+                {/* Only where there is something to consolidate: a provider with no
+                  commission document would produce an empty page. Keyed by provider, so
+                  one card's spinner never lights up another's. */}
+                {!prov && (p.commission_doc_count ?? 0) > 0 && p.house_code && (
+                  <CommissionStatementButton
+                    eventRef={id}
+                    houseCode={p.house_code}
+                    download={download}
+                  />
+                )}
+              </span>
             </div>
+            {p.house_code && download.stateFor(`${id}::${p.house_code}`) === "error" && (
+              <p role="alert" className="basis-full text-[11px] leading-relaxed text-rose-800">
+                Download failed: {download.error?.message}
+              </p>
+            )}
           </div>
         );
       })}
@@ -2126,6 +2813,307 @@ function PartnerSectionCard({
           <span className="w-[92px]" />
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Downloads the client statement of account for one booking.
+ *
+ * The server renders it in Chromium and answers with the file, so the whole wait
+ * belongs to this button: disabled and spinning while it runs, saying "Rendering the
+ * document…" once the wait is long enough to look like a hang, confirming when the file
+ * has landed, and showing the reason in full when it has not.
+ */
+function StatementButton({
+  eventRef,
+  download,
+  tone = "secondary",
+}: {
+  eventRef: string;
+  download: DocumentDownload;
+  tone?: "secondary" | "primary";
+}) {
+  if (!eventRef) return null;
+  const state = download.stateFor(eventRef);
+  const pending = state === "pending";
+  const className =
+    tone === "primary"
+      ? "inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border border-[#9ed4de] bg-white px-2.5 text-[11px] font-semibold normal-case tracking-normal text-teal-800 disabled:opacity-70"
+      : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 disabled:opacity-70";
+  return (
+    <span className="inline-flex flex-col gap-1">
+      <span className="inline-flex items-center gap-2">
+        <button
+          type="button"
+          // Disabled while it runs: a second click is a second Chromium page for a file
+          // that is already on its way.
+          disabled={pending}
+          onClick={() => download.start(eventRef, statementUrl(eventRef))}
+          className={className}
+        >
+          {pending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          ) : state === "done" ? (
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          {pending ? "Preparing…" : state === "done" ? "Downloaded" : "Download statement"}
+        </button>
+        {state === "error" && (
+          <span
+            role="alert"
+            title={download.error?.message}
+            className="max-w-[280px] truncate text-[11px] font-normal normal-case tracking-normal text-rose-800"
+          >
+            Download failed: {download.error?.message}
+          </span>
+        )}
+      </span>
+      {pending && download.slow && (
+        <span className="text-[11px] font-normal normal-case tracking-normal text-slate-500">
+          Rendering the document…
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Downloads one provider's commission statement.
+ *
+ * Same states as the client statement, keyed on the booking and the provider together:
+ * a partner card must spin only for its own download. The server refuses to render when
+ * the commissionable services do not add up to the commission claimed, and that
+ * sentence is what lands here — never a file containing an error page.
+ */
+function CommissionStatementButton({
+  eventRef,
+  houseCode,
+  download,
+}: {
+  eventRef: string;
+  houseCode: string;
+  download: DocumentDownload;
+}) {
+  const key = `${eventRef}::${houseCode}`;
+  const state = download.stateFor(key);
+  const pending = state === "pending";
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => download.start(key, commissionStatementUrl(eventRef, houseCode))}
+        className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium text-[#4B5563] underline-offset-2 hover:text-navy hover:underline disabled:text-[#9CA3AF] disabled:no-underline"
+      >
+        {pending ? (
+          <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+        ) : state === "done" ? (
+          <Check className="h-3 w-3" aria-hidden="true" />
+        ) : (
+          <Download className="h-3 w-3" aria-hidden="true" />
+        )}
+        {pending ? "Preparing…" : state === "done" ? "Downloaded" : "Commission statement"}
+      </button>
+      {pending && download.slow && (
+        <span className="text-[11px] text-slate-500">Rendering the document…</span>
+      )}
+    </span>
+  );
+}
+
+/** The most recent of a set of sends, ignoring the asks that never went out. */
+function latestSend(sends: Array<RecoverySend | undefined>): RecoverySend | undefined {
+  return sends
+    .filter((s): s is RecoverySend => !!s)
+    .sort((a, b) => a.sent_at.localeCompare(b.sent_at))
+    .pop();
+}
+
+/**
+ * Where a send button used to be, once the email has gone out.
+ *
+ * Deliberately a disabled button rather than a hidden one: the shape stays where
+ * the eye expects it, and it answers the question the absence of a button would
+ * raise — who already did this, and when.
+ */
+function SentButton({ send }: { send: RecoverySend | undefined }) {
+  if (!send) return null;
+  return (
+    <span
+      title={`${send.sent_by}${send.subject ? ` — ${send.subject}` : ""}`}
+      className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-[#F3F4F6] px-3 text-[12.5px] font-semibold text-[#6B7280]"
+    >
+      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+      {recoverySentLabel(send)}
+    </span>
+  );
+}
+
+/**
+ * The client recovery position, shown above the invoice table.
+ *
+ * It states the age of the balance on both clocks — the event and the last
+ * invoice — because that pair is the whole rule for whether the email goes out,
+ * and a figure without its age invites chasing a client who is not late yet.
+ */
+function ClientRecoveryCard({
+  recovery,
+  sent,
+}: {
+  recovery: NaClientRecovery;
+  sent: RecoverySend | undefined;
+}) {
+  const ccy = recovery.currency;
+  const owed = recovery.outstanding > 0.01;
+  const overpaid = !owed && recovery.paid - recovery.invoiced > 0.01;
+  const netted = recovery.docs.some((d) => d.doc_kind === "CREDIT_NOTE");
+
+  const wait = (days: number | null) => (days == null ? "no date on file" : `${days}d ago`);
+
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+      <header className="flex flex-wrap items-center gap-2 border-b border-border px-3.5 py-2.5">
+        <Banknote className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-slate-600">
+          Client recovery
+        </span>
+        <span
+          title={sent ? `${sent.sent_by}${sent.subject ? ` — ${sent.subject}` : ""}` : undefined}
+          className={`ml-auto inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+            sent
+              ? "bg-slate-100 text-slate-600"
+              : recovery.eligible
+                ? "bg-indigo-100 text-indigo-800"
+                : owed
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-slate-100 text-slate-600"
+          }`}
+        >
+          {/* Chased already outranks "to chase": the work is done, whoever did it. */}
+          {sent ? (
+            <>
+              <Check className="h-2.5 w-2.5" aria-hidden="true" />
+              {recoverySentLabel(sent)}
+            </>
+          ) : recovery.eligible ? (
+            "To chase"
+          ) : owed ? (
+            `Pending — ${RECOVERY_GRACE_DAYS}d grace`
+          ) : overpaid ? (
+            "Client in credit"
+          ) : (
+            "Settled"
+          )}
+        </span>
+      </header>
+      <div className="grid grid-cols-3 gap-px bg-border">
+        {[
+          { label: "Invoiced (live docs)", value: recovery.invoiced },
+          { label: "Received", value: recovery.paid },
+          { label: "Balance due", value: recovery.outstanding },
+        ].map((s, i) => (
+          <div key={s.label} className="bg-white px-3.5 py-2.5">
+            <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-[#0F766E]">
+              {s.label}
+            </div>
+            <div className="mt-0.5 text-[15px] font-semibold tabular-nums">
+              <Money
+                value={s.value}
+                currency={ccy}
+                align="left"
+                kind={i === 2 ? "danger" : "neutral"}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="border-t border-border px-3.5 py-2 text-[11.5px] leading-relaxed text-slate-600">
+        Event {wait(recovery.daysSinceEvent)} · last invoice {wait(recovery.daysSinceInvoice)}
+        {recovery.lastInvoiceDay ? ` (${recovery.lastInvoiceDay})` : ""} · {recovery.docs.length}{" "}
+        document{recovery.docs.length === 1 ? "" : "s"} counted
+        {netted ? ", credit notes netted off" : ""}.
+        {!recovery.eligible && owed
+          ? ` A balance is chased once it is ${RECOVERY_GRACE_DAYS} days past both the event and the most recent invoice.`
+          : ""}
+      </p>
+    </div>
+  );
+}
+
+/** Client cash received, itemised — the ledger the recovery email quotes. */
+function ClientReceiptsCard({
+  receipts,
+  manual = [],
+  onEdit,
+  onDelete,
+  removing = false,
+}: {
+  receipts: NaClientReceipt[];
+  /** Payments typed by hand while the warehouse catches up — same list, marked. */
+  manual?: ManualEntry[];
+  onEdit?: (entry: ManualEntry) => void;
+  onDelete?: (entry: ManualEntry) => void;
+  removing?: boolean;
+}) {
+  return (
+    <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+      <header className="flex items-center gap-2 border-b border-border px-3.5 py-2.5">
+        <Banknote className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-slate-600">
+          Payments received
+        </span>
+        <span className="text-[10.5px] text-slate-400">{receipts.length + manual.length}</span>
+      </header>
+      <table className="w-full border-collapse">
+        <tbody>
+          {receipts.map((r, i) => (
+            <tr key={`receipt-${i}`}>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-700">
+                {fmtDate(r.paid_on)}
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-500">
+                {r.method ?? "—"}
+              </td>
+              <td className="max-w-[280px] truncate border-b border-slate-100 px-3.5 py-2 text-[12px] text-slate-500">
+                {r.reference ?? "—"}
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-right text-[12.5px] tabular-nums">
+                <Money value={r.amount} currency={r.currency} />
+              </td>
+            </tr>
+          ))}
+          {manual.map((entry) => (
+            <tr key={`manual-pay-${entry.id}`}>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-700">
+                {fmtDate(entry.issued_on)}
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-[12.5px] text-slate-500">
+                {entry.method ?? "—"}
+              </td>
+              <td className="max-w-[280px] truncate border-b border-slate-100 px-3.5 py-2 text-[12px] text-slate-500">
+                <span className="inline-flex items-center gap-1.5">
+                  {entry.document_ref ?? "—"}
+                  <ByHandChip entry={entry} />
+                  {onEdit && onDelete && (
+                    <RowActions
+                      entry={entry}
+                      pending={removing}
+                      onEdit={() => onEdit(entry)}
+                      onDelete={() => onDelete(entry)}
+                    />
+                  )}
+                </span>
+              </td>
+              <td className="border-b border-slate-100 px-3.5 py-2 text-right text-[12.5px] tabular-nums">
+                <Money value={entry.amount} currency={entry.currency} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

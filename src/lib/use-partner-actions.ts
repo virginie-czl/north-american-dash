@@ -32,17 +32,23 @@ export function useActionIndex() {
 
   // Approved cards from #finance-paiement-by-card. Matched on the O- owner code, so
   // exact. A failure here must not break the page — the email signal still works.
-  const { data: cardApprovedCodes } = useQuery({
+  //
+  // This reads the Postgres mirror and never Slack, so a card approved minutes ago is
+  // not here until someone presses Refresh: the age comes back with it, and the pages
+  // show it rather than letting the reader assume the mirror is live.
+  const { data: cardApprovals } = useQuery({
     queryKey: ["slack-card-approvals"],
     queryFn: async () => {
-      const rows = await fetchCardApprovals();
+      const result = await fetchCardApprovals();
       const set = new Set<string>();
-      (Array.isArray(rows) ? rows : []).forEach((r) => set.add(r.owner_code.toUpperCase()));
-      return set;
+      for (const r of result?.approvals ?? []) set.add(r.owner_code.toUpperCase());
+      return { codes: set, syncedAgeSeconds: result?.syncedAgeSeconds ?? null };
     },
     staleTime: 5 * 60_000,
     retry: false,
   });
+  const cardApprovedCodes = cardApprovals?.codes;
+  const cardsSyncedAgeSeconds = cardApprovals?.syncedAgeSeconds ?? null;
 
   // A partner who accepted a card once will accept it again — that memory has to
   // span events, otherwise we keep asking for an IBAN we do not need.
@@ -96,7 +102,15 @@ export function useActionIndex() {
     [actionFor],
   );
 
-  return { factsMap, factsError, actionFor, eventNeedsScan, cardEverAccepted, cardApprovedCodes };
+  return {
+    factsMap,
+    factsError,
+    actionFor,
+    eventNeedsScan,
+    cardEverAccepted,
+    cardApprovedCodes,
+    cardsSyncedAgeSeconds,
+  };
 }
 
 // --- Tag derivation (for filtering) ------------------------------------------
