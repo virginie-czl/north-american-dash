@@ -7,7 +7,19 @@ export interface NaPartnerLine {
   house_code: string | null;
   /** How many NABCO commission documents exist for this provider on this booking. */
   commission_doc_count: number | null;
+  /**
+   * Who invoices us: the owner's company name. This is the partner's *identity* here —
+   * every stored key (email facts, statuses, the recovery log) is derived from it, so it
+   * must not change when the display does.
+   */
   name: string | null;
+  /**
+   * What was booked: the house's own title — "Hotel Healdsburg" where the owner is
+   * "Piazza Hospitality Group". This is what the screen shows, because it is what the
+   * person reading the booking recognises, and because two houses under one owner are
+   * otherwise two identical lines. Null on a provision leg, which has no house.
+   */
+  house_name: string | null;
   email: string | null;
   /** The contact's own first name (owners.firstname) — distinct from the venue/company name. */
   contact_first_name: string | null;
@@ -318,6 +330,16 @@ partners_rm_dedup AS (
       NULLIF(rm.partner_name, ''),
       'Prestataire inconnu'
     ) AS name,
+    -- What was booked, as opposed to who invoices for it: Hotel Healdsburg rather than
+    -- Piazza Hospitality Group, and "Nitro City Racing - Rohnert Park" rather than a
+    -- second line also called Nitro Racing. The owner name stays in the name field because
+    -- every stored partner key is derived from it — see partnerDisplayName for how the two
+    -- are used. h.title is the house's own title; venue_name is the view's copy of it and is
+    -- there for the rows where the house join misses.
+    COALESCE(
+      NULLIF(h.title, ''),
+      IF(q.provision_name IS NULL, NULLIF(rm.venue_name, ''), NULL)
+    ) AS house_name,
     NULLIF(COALESCE(rm.owner_email, rm.service_owner_email, rm.partner_email), '') AS email,
     NULLIF(o.firstname, '') AS contact_first_name,
     o.readable_id AS owner_code,
@@ -386,7 +408,7 @@ partners_rm AS (
     -- agree, and that every alias a CTE references is actually joined in it: adding
     -- commission_doc_count here without its join broke the page in production.
     ARRAY_AGG(STRUCT(
-      name, email, contact_first_name, owner_code, house_code, commission_doc_count,
+      name, house_name, email, contact_first_name, owner_code, house_code, commission_doc_count,
       currency, gmv_ttc, paid, outstanding, raw_outstanding,
       payable, payable_to_date, commission, locked, locked_by_admin, locked_by_client, locked_by_owner,
       is_provision, payment_method,
@@ -423,6 +445,7 @@ partners_fi_fallback AS (
         NULLIF(q.provision_name, ''),
         'Prestataire inconnu'
       ) AS name,
+      NULLIF(h.title, '') AS house_name,
       NULLIF(o.email, '') AS email,
       NULLIF(o.firstname, '') AS contact_first_name,
       o.readable_id AS owner_code,
@@ -503,7 +526,7 @@ base AS (
     -- between the three requires them identical. See the note above partners_rm.
     TO_JSON_STRING(
       IFNULL(p.items, IFNULL(pfb.items, CAST([] AS ARRAY<STRUCT<
-        name STRING, email STRING, contact_first_name STRING, owner_code STRING,
+        name STRING, house_name STRING, email STRING, contact_first_name STRING, owner_code STRING,
         house_code STRING, commission_doc_count INT64,
         currency STRING, gmv_ttc FLOAT64, paid FLOAT64,
         outstanding FLOAT64, raw_outstanding FLOAT64, payable FLOAT64, payable_to_date FLOAT64,

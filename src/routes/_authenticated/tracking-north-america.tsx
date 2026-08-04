@@ -18,6 +18,7 @@ import {
   composeNaCombinedRequest,
 } from "@/lib/na-commission-requests";
 import { fmtAge } from "@/lib/card-tracking";
+import { partnerDisplayName, partnerLegalName, partnerMatches } from "@/lib/na-partners";
 import {
   commissionStatementUrl,
   statementUrl,
@@ -354,6 +355,9 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     "Client invoiced",
     "Client paid",
     "Client outstanding",
+    // Both: the house is what was booked, the partner name is who invoices for it, and a
+    // reconciliation needs to tie one to the other.
+    "House",
     "Partner name",
     "Partner email",
     "Partner currency",
@@ -395,6 +399,7 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
         lines.push(
           [
             ...base,
+            partnerDisplayName(p),
             p.name ?? "",
             p.email ?? "",
             p.currency ?? "",
@@ -462,6 +467,7 @@ function exportRecoverCsv(
           row.event_name ?? "",
           row.sales_referent ?? "",
           row.em_referent ?? "",
+          partnerDisplayName(p),
           p.name ?? "",
           p.email ?? "",
           p.currency ?? "",
@@ -625,7 +631,10 @@ function NaPage() {
         row.sales_referent,
         row.em_referent,
         row.billing_entity,
+        // Both names: somebody searching "healdsburg" is looking for the hotel, not for
+        // Piazza Hospitality Group, and the reverse is just as true from an invoice.
         ...partners.map((p) => p.name ?? ""),
+        ...partners.map((p) => p.house_name ?? ""),
       ]
         .filter(Boolean)
         .join(" ")
@@ -822,7 +831,10 @@ function NaPage() {
       if (!composed) return null;
       return {
         eventRef: plan.eventRef,
-        partnerName: plan.partner.name,
+        // The name the dialog lists and the recovery log records — the same one the card
+        // shows, so nobody has to work out that "Piazza Hospitality Group" is the hotel
+        // they just clicked. The log is keyed on the address, so this is display only.
+        partnerName: partnerDisplayName(plan.partner),
         address: plan.contact.address,
         contactName: plan.contact.name,
         cc: ccFor(plan.row),
@@ -1923,7 +1935,12 @@ function NaPage() {
                               key={`${selRef}-sum-${i}`}
                               className="rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)]"
                             >
-                              <div className="text-sm font-semibold">{p.name ?? p.email}</div>
+                              <div className="text-sm font-semibold">{partnerDisplayName(p)}</div>
+                              {partnerLegalName(p) && (
+                                <div className="mt-[1px] text-[11px] text-slate-500">
+                                  invoiced by {partnerLegalName(p)}
+                                </div>
+                              )}
                               <NaFinancialSummaryBox
                                 existing={financialSummaries?.get(`${selRef}::${key}`)}
                                 loading={
@@ -2348,6 +2365,12 @@ function PartnerSectionCard({
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
+  // A booking of this size runs to a dozen partner lines, and the one somebody opened the
+  // drawer for is rarely the first. The filter is display only: the subtotal below still
+  // sums every line, because a total that quietly followed the search would be a wrong
+  // total shown without warning.
+  const [query, setQuery] = useState("");
+  const shown = partners.filter((p) => partnerMatches(p, query));
 
   if (partners.length === 0) {
     return (
@@ -2363,7 +2386,45 @@ function PartnerSectionCard({
 
   return (
     <div className="flex flex-col gap-3">
-      {partners.map((p, i) => {
+      {/* Search, once there is enough here to be worth searching. */}
+      {partners.length > 3 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="relative flex items-center">
+            <Search
+              className="pointer-events-none absolute left-[9px] h-3.5 w-3.5 text-[#9CA3AF]"
+              aria-hidden="true"
+            />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search a partner, house, email or code…"
+              aria-label="Search the partners on this booking"
+              className="h-8 w-[300px] rounded-md border border-[#D1D5DB] bg-white pl-7 pr-2 text-[12px] text-navy shadow-[0_1px_2px_rgba(16,31,52,0.06)]"
+            />
+          </label>
+          {query.trim() !== "" && (
+            <>
+              <span className="text-[11.5px] text-[#6B7280]">
+                {shown.length === 1 ? "1 of" : `${shown.length} of`} {partners.length} lines
+              </span>
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="text-[11.5px] text-[#0F766E] hover:underline"
+              >
+                Clear
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {shown.length === 0 && (
+        <div className="rounded-[10px] border border-dashed border-[#D1D5DB] px-4 py-8 text-center text-[12.5px] text-[#6B7280]">
+          No partner on this booking matches “{query.trim()}”.
+        </div>
+      )}
+      {shown.map((p, i) => {
         const prov = !!p.is_provision;
         const key = partnerKey(p.name ?? p.email ?? "");
         const action = prov
@@ -2416,7 +2477,7 @@ function PartnerSectionCard({
           >
             <div className="min-w-[220px] flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm font-semibold">{p.name ?? "—"}</span>
+                <span className="text-sm font-semibold">{partnerDisplayName(p)}</span>
                 <PartnerLockBadge admin={!!p.locked_by_admin} client={!!p.locked_by_client} />
                 {prov && <ProvisionPill />}
                 {p.payment_method === "CREDIT_CARD" && (
@@ -2425,6 +2486,18 @@ function PartnerSectionCard({
                   </span>
                 )}
               </div>
+              {/* Who actually invoices us, when that is not the name above: an invoice from
+                  Piazza Hospitality Group has to be tieable to Hotel Healdsburg here. The
+                  house code stands on its own — it is what a commission statement is drawn
+                  on, so it is worth showing even when the two names agree. */}
+              {(partnerLegalName(p) || p.house_code) && (
+                <div className="mt-[2px] flex flex-wrap items-center gap-1.5 text-[11.5px] text-[#6B7280]">
+                  {partnerLegalName(p) && <span>invoiced by {partnerLegalName(p)}</span>}
+                  {p.house_code && (
+                    <span className="font-mono text-[10.5px] text-[#9CA3AF]">{p.house_code}</span>
+                  )}
+                </div>
+              )}
               {p.email && (
                 <a
                   href={`mailto:${p.email}`}
