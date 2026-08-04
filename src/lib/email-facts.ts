@@ -77,9 +77,16 @@ function asksAboutCard(text: string): boolean {
 
 /** IBAN: 2 letters, 2 check digits, then 10–30 alphanumerics. */
 const IBAN = /\b[A-Z]{2}\d{2}[ ]?(?:[A-Z0-9]{4}[ ]?){2,7}[A-Z0-9]{1,4}\b/;
-/** Canadian bank coordinates: transit (5) + institution (3) + account. */
+/**
+ * Canadian bank coordinates: transit (5) + institution (3) + account.
+ *
+ * North America has no IBAN, so this is the shape the details actually arrive in — and a
+ * Québec partner writes it in French. "N° de compte" and "no de compte" are as common as
+ * "numéro de compte" and were not being recognised, which left the line reading as though
+ * nothing had come back.
+ */
 const CA_BANK =
-  /\b(transit|institution)\b[^\n]{0,40}\d{3,5}|\bnum[ée]ro\s+de\s+compte\b|\baccount\s+(number|no\.?)\b[^\n]{0,20}\d{5,}/i;
+  /\b(transit|institution)\b[^\n]{0,40}\d{3,5}|\b(?:num[ée]ro|n[o°]s?\.?)\s*(?:de\s+)?compte\b|\baccount\s+(number|no\.?)\b[^\n]{0,20}\d{5,}/i;
 /** GST/BN business number: 9 digits + RT + 4 digits. */
 const GST_BN = /\b\d{9}\s?RT\s?\d{4}\b/i;
 /** Quebec QST: 10 digits + TQ + 4 digits. */
@@ -87,7 +94,14 @@ const TVQ = /\b\d{10}\s?TQ\s?\d{4}\b/i;
 /** EU VAT. */
 const EU_VAT = /\b(FR|BE|DE|ES|IT|NL|LU|IE|PT|AT|PL)\s?\d{8,12}\b/;
 
-const ATTACH_BANK = /rib|iban|bank|banc|ch[èe]que|cheque|deposit|d[ée]p[ôo]t|void/i;
+/**
+ * An attachment whose *name* says it carries the details — a void cheque, a direct deposit
+ * form, an EFT or ACH form. The North American terms are word-bounded because "eft" and
+ * "ach" are common substrings ("left", "attachment") and a false positive here would stop
+ * a chase that should continue.
+ */
+const ATTACH_BANK =
+  /rib|iban|bank|banc|ch[èe]que|cheque|deposit|d[ée]p[ôo]t|void|virement|\beft\b|\bach\b|\bwire\b|\bswift\b/i;
 const ATTACH_TAX = /w-?9|w-?8|tax|tva|tps|tvq|gst|qst|attestation/i;
 
 // --- Card polarity ----------------------------------------------------------

@@ -157,6 +157,76 @@ const cases = [
     ],
     { bankDetails: "not_asked", taxInfo: "not_asked", cardPayment: "unknown" },
   ],
+  // North America has no IBAN. What a Québec partner actually sends is transit /
+  // institution / account, often in French, or a void cheque or EFT form attached — and
+  // the line stays "waiting bank details" for as long as the scan does not recognise it.
+  [
+    "Québec partner replies with account coordinates in French",
+    [
+      {
+        outbound: true,
+        at: "2026-07-02T09:00:00Z",
+        from: ME,
+        subject: "Naboo — F-B645 paiement",
+        body: "Bonjour, pourriez-vous nous transmettre vos coordonnées bancaires ?",
+      },
+      {
+        outbound: false,
+        at: "2026-07-12T09:14:00Z",
+        from: "wambeault@hotelbonaventure.com",
+        subject: "RE: Naboo — F-B645 paiement",
+        body: "Bonjour, voici nos informations : Institution 003, transit 04521, n° de compte 1002345.",
+      },
+    ],
+    // Nothing was asked about card in that thread, so the card verdict stays unknown —
+    // the "replied about something else" rule only applies once they have been asked.
+    { bankDetails: "received", cardPayment: "unknown" },
+  ],
+
+  [
+    "and an EFT form attached is the details arriving",
+    [
+      {
+        outbound: true,
+        at: "2026-07-02T09:00:00Z",
+        from: ME,
+        subject: "F-B645",
+        body: "Vos coordonnées bancaires SVP",
+      },
+      {
+        outbound: false,
+        at: "2026-07-12T10:00:00Z",
+        from: "wambeault@hotelbonaventure.com",
+        subject: "RE: F-B645",
+        body: "Please find our form attached.",
+        attachmentNames: ["Bonaventure EFT form.pdf"],
+      },
+    ],
+    { bankDetails: "received" },
+  ],
+
+  // The word-bounded terms must not fire on ordinary words, or a chase stops for nothing.
+  [
+    "an attachment that merely says 'left' is not bank details",
+    [
+      {
+        outbound: true,
+        at: "2026-07-02T09:00:00Z",
+        from: ME,
+        subject: "F-B645",
+        body: "Vos coordonnées bancaires SVP",
+      },
+      {
+        outbound: false,
+        at: "2026-07-12T10:00:00Z",
+        from: "wambeault@hotelbonaventure.com",
+        subject: "RE: F-B645",
+        body: "Nothing for now.",
+        attachmentNames: ["what is left to sign.pdf", "achat groupe.pdf"],
+      },
+    ],
+    { bankDetails: "asked" },
+  ],
 ];
 
 let pass = 0,

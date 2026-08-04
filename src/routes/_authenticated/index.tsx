@@ -61,6 +61,13 @@ import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-d
 import { buildTargets, describeNeeds, needsOf } from "@/lib/partner-requests";
 import { UserAvatar } from "@/components/user-avatar";
 import { useActionIndex, tagsForEvent, TAG_FILTER_GROUPS } from "@/lib/use-partner-actions";
+import {
+  isPayable,
+  isWaitingOnDetails,
+  partnerStanding,
+  standingNote,
+  type PartnerStanding,
+} from "@/lib/partner-standing";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
 import {
   BarChart,
@@ -286,7 +293,7 @@ function PaymentBadge({ status }: { status: ReturnType<typeof paymentStatus> }) 
   return <span className={`pill ${map[status.variant]}`}>{status.label}</span>;
 }
 
-const PARTNER_STATUS_OPTIONS: { value: PartnerStatusValue; label: string; cls: string }[] = [
+const PARTNER_STATUS_OPTIONS: { value: PartnerStanding; label: string; cls: string }[] = [
   {
     value: "not_contacted",
     label: "Not contacted",
@@ -296,6 +303,13 @@ const PARTNER_STATUS_OPTIONS: { value: PartnerStatusValue; label: string; cls: s
     value: "waiting_bank",
     label: "Waiting bank details",
     cls: "bg-amber-100 text-amber-800 border-amber-200",
+  },
+  // Derived only — the scan asserts a document arrived, which is not something a
+  // dropdown should be able to claim. See partner-standing.ts.
+  {
+    value: "bank_received",
+    label: "Bank details received",
+    cls: "bg-teal-100 text-teal-900 border-teal-200",
   },
   {
     value: "partially_paid",
@@ -668,14 +682,21 @@ function SlaPage() {
     // and outreach status (not contacted vs waiting bank details).
     const partnerBuckets = {
       toContact: new Map<string, number>(), // PO + named partner, not contacted yet
-      waitingBank: new Map<string, number>(), // PO + named partner, already contacted
+      waitingBank: new Map<string, number>(), // asked, and their details have not come back
+      readyToPay: new Map<string, number>(), // details in hand — ours to disburse
       withPoNoName: new Map<string, number>(), // PO + partner has no name
       noPo: new Map<string, number>(), // no PO
     };
-    const partnerCounts = { toContact: 0, waitingBank: 0, withPoNoName: 0, noPo: 0 };
+    const partnerCounts = { toContact: 0, waitingBank: 0, readyToPay: 0, withPoNoName: 0, noPo: 0 };
     decorated.forEach(({ row, partners }) => {
       const hasPo = !!(row.purchase_order_number && String(row.purchase_order_number).trim());
-      const flags = { toContact: false, waitingBank: false, withPoNoName: false, noPo: false };
+      const flags = {
+        toContact: false,
+        waitingBank: false,
+        readyToPay: false,
+        withPoNoName: false,
+        noPo: false,
+      };
       partners.forEach((p) => {
         if (p.is_cancelled) return;
         const due = Math.max(p.amount_due ?? 0, 0);
@@ -689,8 +710,19 @@ function SlaPage() {
         else if (!hasName) bucket = "withPoNoName";
         else {
           const k = `${row.readable_id ?? row.client_request_id ?? ""}::${partnerKey(p.name)}`;
-          const status = statusMap?.get(k)?.status ?? "not_contacted";
-          bucket = status === "not_contacted" ? "toContact" : "waitingBank";
+          // Same rule as the pill: a line whose details have come back is money we can
+          // send, not a chase still outstanding.
+          const standing = partnerStanding({
+            due,
+            paid,
+            facts: factsMap?.get(k),
+            stored: statusMap?.get(k)?.status ?? null,
+          });
+          bucket = isPayable(standing.status)
+            ? "readyToPay"
+            : isWaitingOnDetails(standing.status)
+              ? "waitingBank"
+              : "toContact";
         }
         partnerBuckets[bucket].set(ccy, (partnerBuckets[bucket].get(ccy) ?? 0) + remaining);
         flags[bucket] = true;
@@ -703,12 +735,14 @@ function SlaPage() {
     [
       partnerBuckets.toContact,
       partnerBuckets.waitingBank,
+      partnerBuckets.readyToPay,
       partnerBuckets.withPoNoName,
       partnerBuckets.noPo,
     ].forEach((m) => m.forEach((v, k) => partnerByCcy.set(k, (partnerByCcy.get(k) ?? 0) + v)));
     const partnerOutstandingCount =
       partnerCounts.toContact +
       partnerCounts.waitingBank +
+      partnerCounts.readyToPay +
       partnerCounts.withPoNoName +
       partnerCounts.noPo;
 
@@ -833,20 +867,24 @@ function SlaPage() {
     if (active.length === 0) return null;
     if (!hasPo)
       return { label: "Waiting for PO", cls: "bg-slate-100 text-slate-700 border-slate-200" };
-    // Any partner already partially paid → it's a payout issue, not an outreach one.
-    const anyPartial = active.some((p) => {
-      const paid = Math.abs(p.amount_paid ?? 0);
-      return paid > 0.01;
+    // The same three sources the pill uses, in the same order.
+    const standings = active.map((p) => {
+      const k = `${eventRef}::${partnerKey(p.name)}`;
+      return partnerStanding({
+        due: p.amount_due,
+        paid: p.amount_paid,
+        facts: factsMap?.get(k),
+        stored: statusMap?.get(k)?.status ?? null,
+      });
     });
-    if (anyPartial) return { label: "Payout TBD", cls: "bg-sky-100 text-sky-800" };
+    // Already part-paid, or their details are in: it is a payout question, not an
+    // outreach one. Before, only a payment counted here — so a row whose bank details
+    // had come back and been scanned still read as an outreach chase.
+    if (standings.some((st) => isPayable(st.status)))
+      return { label: "Payout TBD", cls: "bg-sky-100 text-sky-800" };
     // Contact is established either by the manual dropdown or by the email scan —
     // a row must not read "Contact TBD" when an email has demonstrably gone out.
-    const contactMade = active.map((p) => {
-      const k = `${eventRef}::${partnerKey(p.name)}`;
-      const manual = statusMap?.get(k)?.status ?? "not_contacted";
-      const emailed = factsMap?.get(k)?.contacted_at != null;
-      return manual !== "not_contacted" || emailed;
-    });
+    const contactMade = standings.map((st) => st.status !== "not_contacted");
     if (contactMade.every((c) => !c))
       return { label: "‼️ Contact TBD", cls: "bg-rose-100 text-rose-800" };
     if (contactMade.every((c) => c))
@@ -1557,13 +1595,17 @@ function EventDetails({
                   const key = `${eventRef}::${partnerKey(pname)}`;
                   const stored = statusMap?.get(key)?.status;
 
-                  // Derive status from amounts when any payment exists.
-                  let derived: PartnerStatusValue | null = null;
-                  if (due <= 0.01) derived = "fully_paid";
-                  else if (paid > 0.01 && paid + 0.01 >= due) derived = "fully_paid";
-                  else if (paid > 0.01) derived = "partially_paid";
-
-                  const current: PartnerStatusValue = derived ?? stored ?? "not_contacted";
+                  // The money, then the scan, then the dropdown — the dropdown is the only
+                  // one of the three that cannot notice the world moved on, so it comes
+                  // last. Reading `derived ?? stored` here is what left F-B645 showing
+                  // "Waiting bank details" after the details had arrived and been scanned.
+                  const standing = partnerStanding({
+                    due,
+                    paid,
+                    facts: factsMap?.get(key),
+                    stored: stored ?? null,
+                  });
+                  const current = standing.status;
                   const opt = PARTNER_STATUS_OPTIONS.find((o) => o.value === current)!;
                   const manualOptions = PARTNER_STATUS_OPTIONS.filter(
                     (o) => o.value === "not_contacted" || o.value === "waiting_bank",
@@ -1630,13 +1672,18 @@ function EventDetails({
                       </td>
 
                       <td className="px-2 py-1.5">
-                        {derived ? (
-                          <span className={`pill ${opt.cls}`} title="Derived from amounts">
+                        {/* Anything the money or the scan established is shown, not offered:
+                            a dropdown that could contradict a payment or a received IBAN is
+                            a way to record something nobody has seen. The note says which of
+                            the three answered. */}
+                        {standing.source === "money" || standing.source === "scan" ? (
+                          <span className={`pill ${opt.cls}`} title={standingNote(standing)}>
                             {opt.label}
                           </span>
                         ) : (
                           <select
                             value={current}
+                            title={standingNote(standing)}
                             disabled={!pname || !eventRef || setStatus.isPending}
                             onChange={(e) =>
                               setStatus.mutate({

@@ -1,9 +1,16 @@
+import { readFileSync } from "node:fs";
 import {
   parseTaxRegistration,
   taxComplete,
   missingQstForCanada,
   decidePartnerAction,
 } from "./partner-actions.ts";
+import {
+  isPayable,
+  isWaitingOnDetails,
+  partnerStanding,
+  standingNote,
+} from "./partner-standing.ts";
 
 let pass = 0;
 let fail = 0;
@@ -384,5 +391,82 @@ if (fail) process.exitCode = 1;
   );
 
   console.log(`\n[tax untracked] ${p} passed, ${f} failed`);
+  if (f) process.exitCode = 1;
+}
+
+// ── What a partner line's status is, and who said so ────────────────────────
+// Three sources know something: the ledger, the email scan and a dropdown somebody set.
+// The L'Oréal tracker read the money then the dropdown and never the scan, so a partner
+// whose bank details had arrived and been scanned still showed "Waiting bank details"
+// until a human went back and changed it — the F-B645 report.
+{
+  let p = 0;
+  let f = 0;
+  const t = (name, cond, got = "") => {
+    if (cond) {
+      p++;
+      console.log("  ✓", name);
+    } else {
+      f++;
+      console.log("  ✗", name, got);
+    }
+  };
+  console.log("\n[a partner's standing]");
+
+  const line = (o = {}) => ({ due: 5000, paid: 0, facts: null, stored: null, ...o });
+  const received = { bank_details: "received", bank_received_at: "2026-07-12T09:14:00Z" };
+  const asked = { bank_details: "asked", contacted_at: "2026-07-02T08:00:00Z" };
+
+  // The report: details in, dropdown never touched since.
+  const scanned = partnerStanding(line({ facts: received, stored: "waiting_bank" }));
+  t("a scanned receipt beats a stale dropdown", scanned.status === "bank_received", scanned.status);
+  t("and says where it came from", scanned.source === "scan");
+  t("with the date it was seen", scanned.at === "2026-07-12T09:14:00Z");
+  t("so the line is no longer waiting", !isWaitingOnDetails(scanned.status));
+  t("it is money to send", isPayable(scanned.status));
+  t("and the note explains itself", standingNote(scanned).includes("payable"));
+
+  // Money outranks everything: nobody chases details for a partner already paid.
+  const paid = partnerStanding(line({ paid: 5000, facts: asked, stored: "waiting_bank" }));
+  t("a paid line is paid", paid.status === "fully_paid" && paid.source === "money");
+  const part = partnerStanding(line({ paid: 1200, facts: received }));
+  t("a part-paid line says so", part.status === "partially_paid");
+  t("and is payable, not waiting", isPayable(part.status) && !isWaitingOnDetails(part.status));
+
+  // Still waiting: asked, nothing back.
+  const waiting = partnerStanding(line({ facts: asked, stored: "waiting_bank" }));
+  t("asked with nothing back is still waiting", waiting.status === "waiting_bank");
+  t("credited to the person who set it", waiting.source === "manual");
+
+  // The scan alone establishes contact — the dropdown does not have to be touched.
+  const emailedOnly = partnerStanding(line({ facts: asked }));
+  t("an email that went out counts as contact", emailedOnly.status === "waiting_bank");
+  t("credited to the scan", emailedOnly.source === "scan");
+
+  // Nothing known at all.
+  const nothing = partnerStanding(line());
+  t("otherwise nobody has been contacted", nothing.status === "not_contacted");
+  t("and the note says the scan found nothing", standingNote(nothing).includes("scan found"));
+
+  // A dropdown can never claim a receipt: only the scan produces bank_received.
+  t(
+    "the dropdown cannot assert a receipt",
+    partnerStanding(line({ stored: "waiting_bank" })).status === "waiting_bank",
+  );
+
+  const page = readFileSync(new URL("../routes/_authenticated/index.tsx", import.meta.url), "utf8");
+  t("the pill asks the shared rule", /const standing = partnerStanding\(\{/.test(page));
+  t("the row tag asks it too", /standings\.some\(\(st\) => isPayable\(st\.status\)\)/.test(page));
+  t("and so does the KPI bucket", /isPayable\(standing\.status\)\s*\?\s*"readyToPay"/.test(page));
+  t(
+    "nothing derives a status from the dropdown alone any more",
+    !/derived \?\? stored \?\? "not_contacted"/.test(page),
+  );
+  t(
+    "a scanned or ledger standing is shown, not offered",
+    /standing\.source === "money" \|\| standing\.source === "scan"/.test(page),
+  );
+
+  console.log(`\n[standing] ${p} passed, ${f} failed`);
   if (f) process.exitCode = 1;
 }
