@@ -7,7 +7,12 @@
 import { useMemo, useState } from "react";
 import { AlertCircle, Check, ChevronDown, ChevronUp, Lock, Send, FileText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { usePartnerRequests, useRecoveryLog, type OutgoingMessage } from "@/lib/use-gmail";
+import {
+  useMarkRecoverySent,
+  usePartnerRequests,
+  useRecoveryLog,
+  type OutgoingMessage,
+} from "@/lib/use-gmail";
 import { recoveryKey, recoverySentLabel } from "@/lib/recovery-log";
 
 export type NaCommissionTarget = {
@@ -54,6 +59,11 @@ export function NaCommissionRequestDialog({
   const [confirmSend, setConfirmSend] = useState(false);
   const requests = usePartnerRequests();
   const { data: recoveryLog } = useRecoveryLog();
+  // Plenty of these chases leave from somewhere this dialog cannot see — a reply in a
+  // thread already running, a call written up afterwards. Recording that here is what
+  // keeps the ledger's answer to "has anyone written to them?" true.
+  const { mark, unmark } = useMarkRecoverySent();
+  const [pending, setPending] = useState<string | null>(null);
 
   const key = (t: NaCommissionTarget) => `${t.address}::${t.eventRef}::${t.mode}`;
   // The list is one audience or the other, never mixed: the two buttons that open
@@ -134,7 +144,8 @@ export function NaCommissionRequestDialog({
               Deselect {audience} you don't want to contact. Each message will be sent from your
               Gmail. Your Gmail signature will be added automatically.
               {lockedCount > 0 &&
-                " Asks a colleague has already sent are locked — nobody chases the same counterparty twice on the same booking."}
+                " Asks a colleague has already sent are locked — nobody chases the same counterparty twice on the same booking."}{" "}
+              Already written to them from elsewhere? Mark it as sent and it locks the same way.
             </p>
           </span>
           <button
@@ -191,6 +202,24 @@ export function NaCommissionRequestDialog({
                           {recoverySentLabel(locked)}
                         </span>
                       )}
+                      {/* Only a hand-recorded mark can be taken back off, and by anyone:
+                          it is somebody's note, not evidence of a message we sent. */}
+                      {locked?.by_hand && (
+                        <button
+                          type="button"
+                          disabled={pending === k || unmark.isPending}
+                          onClick={() => {
+                            setPending(k);
+                            unmark.mutate(
+                              { event_ref: t.eventRef, recipient: t.address, mode: t.mode },
+                              { onSettled: () => setPending(null) },
+                            );
+                          }}
+                          className="text-[10.5px] text-slate-500 underline-offset-2 hover:underline disabled:opacity-50"
+                        >
+                          Undo
+                        </button>
+                      )}
                     </span>
                   </span>
                   <span className="flex items-center gap-2">
@@ -230,6 +259,29 @@ export function NaCommissionRequestDialog({
                           Failed
                         </span>
                       ))}
+                    {!locked && !result && !requests.running && !finished && (
+                      <button
+                        type="button"
+                        disabled={pending === k || mark.isPending}
+                        title="Record that this was already sent from somewhere else, so nobody sends it again"
+                        onClick={() => {
+                          setPending(k);
+                          mark.mutate(
+                            {
+                              event_ref: t.eventRef,
+                              recipient: t.address,
+                              mode: t.mode,
+                              recipient_name: t.partnerName,
+                            },
+                            { onSettled: () => setPending(null) },
+                          );
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] text-slate-600 underline-offset-2 hover:underline disabled:opacity-50"
+                      >
+                        <Check className="h-3 w-3" aria-hidden="true" />
+                        {pending === k ? "Marking…" : "Mark as sent"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setExpanded(isExpanded ? null : k)}

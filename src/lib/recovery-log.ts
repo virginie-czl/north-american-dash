@@ -34,6 +34,18 @@ export type RecoverySend = {
   sent_at: string;
   sent_by: string;
   sent_by_name: string | null;
+  /**
+   * Recorded by hand rather than sent from here.
+   *
+   * Plenty of chases leave from somewhere this app cannot see — a reply in an existing
+   * thread, a phone call followed by a note, an address written to from a personal
+   * mailbox. Without a way to say so, the ledger reads as "nobody has chased this" and
+   * the next colleague sends a second one, which is the exact failure the ledger exists
+   * to prevent. So the claim can be taken by hand, and it says which it was: the label
+   * reads "Marked sent", never "Sent", because this app did not see the message and
+   * cannot vouch for it.
+   */
+  by_hand: boolean;
 };
 
 /** Ledger key: one booking, one recipient, one side of the marketplace. */
@@ -130,7 +142,15 @@ export function recoverySentDay(send: RecoverySend): string {
   return sentDay(send.sent_at);
 }
 
-/** The label a disabled button carries once the email has gone out. */
+/**
+ * The label a disabled button carries once the email has gone out.
+ *
+ * "Marked sent" for a hand-recorded one. The distinction is the whole value of the
+ * word: a send this app made is evidenced by the message it sent, and a hand-recorded
+ * one is somebody's word. Reading the same sentence for both would quietly turn the
+ * second into the first.
+ */
 export function recoverySentLabel(send: RecoverySend): string {
-  return `Sent on ${recoverySentDay(send)} by ${recoverySender(send)}`;
+  const verb = send.by_hand ? "Marked sent" : "Sent";
+  return `${verb} on ${recoverySentDay(send)} by ${recoverySender(send)}`;
 }

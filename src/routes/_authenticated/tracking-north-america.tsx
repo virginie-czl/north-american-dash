@@ -1175,16 +1175,21 @@ function NaPage() {
         }
 
         if ((r.balance_ccy ?? 0) > 0.01) {
+          // Nothing to say about a client's balance until the event is a week behind us.
+          // An unpaid invoice on an event that has not happened is not a chase, it is a
+          // deposit doing its job. 39 of the 92 North American bookings carrying a client
+          // balance were on the list this way, and 37 of those had not happened yet —
+          // enough noise to bury the ones somebody actually has to write to. The grace
+          // after the last invoice stays a countdown below rather than a second gate,
+          // because that clock restarts every time a document is issued.
+          const sinceEvent = recovery.daysSinceEvent ?? daysSinceEvent(r);
+          if (sinceEvent == null || sinceEvent < RECOVERY_GRACE_DAYS) return null;
+
           // Named as pending while the dust settles, so the list never reads as a
           // chase that nobody is sending.
           const waitLeft =
-            recovery.outstanding > 0.01 && recovery.daysSinceEvent != null
-              ? Math.max(
-                  RECOVERY_GRACE_DAYS - recovery.daysSinceEvent,
-                  recovery.daysSinceInvoice != null
-                    ? RECOVERY_GRACE_DAYS - recovery.daysSinceInvoice
-                    : 0,
-                )
+            recovery.outstanding > 0.01 && recovery.daysSinceInvoice != null
+              ? Math.max(RECOVERY_GRACE_DAYS - recovery.daysSinceInvoice, 0)
               : 0;
           return {
             group: "client",

@@ -245,7 +245,11 @@ export function usePartnerRequests() {
 
 // --- Recovery ledger ---------------------------------------------------------
 
-import { fetchRecoveryEmails } from "@/lib/recovery-log.functions";
+import {
+  fetchRecoveryEmails,
+  markRecoverySent,
+  unmarkRecoverySent,
+} from "@/lib/recovery-log.functions";
 import { recoveryIndex, type RecoverySend } from "@/lib/recovery-log";
 
 export type { RecoverySend };
@@ -263,4 +267,31 @@ export function useRecoveryLog() {
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });
+}
+
+/**
+ * Recording a chase that left from somewhere else, and taking the record back off.
+ *
+ * Both invalidate the ledger rather than patching it locally: the index is what stops
+ * a second email going out, and a colleague's row landing in the same refetch is the
+ * point. Optimism here would be optimism about somebody else's work.
+ */
+export function useMarkRecoverySent() {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["recovery-emails"] });
+  const mark = useMutation({
+    mutationFn: (input: {
+      event_ref: string;
+      recipient: string;
+      mode: string;
+      recipient_name?: string | null;
+    }) => markRecoverySent({ data: input }),
+    onSettled: invalidate,
+  });
+  const unmark = useMutation({
+    mutationFn: (input: { event_ref: string; recipient: string; mode: string }) =>
+      unmarkRecoverySent({ data: input }),
+    onSettled: invalidate,
+  });
+  return { mark, unmark };
 }

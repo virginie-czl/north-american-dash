@@ -28,6 +28,8 @@ export async function claimRecoveryEmail(input: {
   subject?: string | null;
   sent_by: string;
   sent_by_name?: string | null;
+  /** True when somebody is recording a chase this app never saw. */
+  by_hand?: boolean;
 }): Promise<RecoveryClaim> {
   const { db } = await import("./db.server");
   const sql = await db();
@@ -36,11 +38,11 @@ export async function claimRecoveryEmail(input: {
 
   const inserted = await sql<{ event_ref: string }[]>`
     INSERT INTO recovery_emails
-      (event_ref, recipient, scope, mode, recipient_name, subject, sent_by, sent_by_name)
+      (event_ref, recipient, scope, mode, recipient_name, subject, sent_by, sent_by_name, by_hand)
     VALUES (
       ${input.event_ref}, ${recipient}, ${scope}, ${input.mode},
       ${input.recipient_name ?? null}, ${input.subject ?? null},
-      ${input.sent_by}, ${input.sent_by_name ?? null}
+      ${input.sent_by}, ${input.sent_by_name ?? null}, ${input.by_hand === true}
     )
     ON CONFLICT (event_ref, recipient, scope) DO NOTHING
     RETURNING event_ref
@@ -49,7 +51,7 @@ export async function claimRecoveryEmail(input: {
 
   const rows = await sql<Row[]>`
     SELECT event_ref, recipient, scope, mode, recipient_name, subject,
-           sent_at, sent_by, sent_by_name
+           sent_at, sent_by, sent_by_name, by_hand
     FROM recovery_emails
     WHERE event_ref = ${input.event_ref} AND recipient = ${recipient} AND scope = ${scope}
   `;
@@ -83,12 +85,39 @@ export async function releaseRecoveryEmail(input: {
   `;
 }
 
+/**
+ * Takes back a hand-recorded claim.
+ *
+ * Only ever a hand-recorded one: `by_hand` in the WHERE clause is what makes this safe
+ * to offer to everybody. A real send left a message in somebody's Sent folder, and no
+ * button here should be able to make the record of it disappear — but a mark somebody
+ * put on the wrong booking is just a mistake, and the person looking at it has to be
+ * able to take it off without hunting for whoever made it.
+ */
+export async function unmarkRecoveryByHand(input: {
+  event_ref: string;
+  recipient: string;
+  mode: string;
+}): Promise<{ removed: boolean }> {
+  const { db } = await import("./db.server");
+  const sql = await db();
+  const rows = await sql<{ event_ref: string }[]>`
+    DELETE FROM recovery_emails
+    WHERE event_ref = ${input.event_ref}
+      AND recipient = ${input.recipient.trim().toLowerCase()}
+      AND scope = ${recoveryScopeOf(input.mode)}
+      AND by_hand = true
+    RETURNING event_ref
+  `;
+  return { removed: rows.length > 0 };
+}
+
 export async function listRecoveryEmails(): Promise<RecoverySend[]> {
   const { db } = await import("./db.server");
   const sql = await db();
   const rows = await sql<Row[]>`
     SELECT event_ref, recipient, scope, mode, recipient_name, subject,
-           sent_at, sent_by, sent_by_name
+           sent_at, sent_by, sent_by_name, by_hand
     FROM recovery_emails
     ORDER BY sent_at DESC
   `;

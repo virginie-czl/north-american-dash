@@ -99,6 +99,47 @@ t(
   recoverySentDay(send({ sent_at: "not a date" })) === "not a date",
 );
 
+// ── A chase this app never saw ──────────────────────────────────────────────
+// Most of the value of the ledger is negative: it tells the next colleague not to
+// send. An email written from a personal mailbox, or a reply in a thread already
+// running, is invisible to it — and invisible reads as "nobody has chased this",
+// which is how the same provider gets written to twice. So a send can be recorded by
+// hand, and the record says which it is: this app saw one of them and not the other,
+// and one word is the whole difference between evidence and somebody's word.
+console.log("\n[a send recorded by hand]");
+t(
+  "it never claims we sent it",
+  recoverySentLabel(send({ by_hand: true })) === "Marked sent on 12/07/26 by Marie Dupont",
+  recoverySentLabel(send({ by_hand: true })),
+);
+t(
+  "and a real send still reads plainly",
+  recoverySentLabel(send()) === "Sent on 12/07/26 by Marie Dupont",
+);
+// It locks the ask exactly like a send: same key, same scope. A mark that did not lock
+// would be a note nobody acts on.
+t(
+  "it locks on the same key a send does",
+  recoveryKey("C-O621", "Kevin.Cabrera2@Hilton.com", "combined") ===
+    recoveryKey("C-O621", "kevin.cabrera2@hilton.com", "refund"),
+);
+{
+  const fns = readFileSync(new URL("./recovery-log.functions.ts", import.meta.url), "utf8");
+  t("the mark is stamped with the session", /sent_by: session\.email/.test(fns));
+  t("and the browser cannot name a sender", !/sent_by:\s*(data|input)\./.test(fns));
+  t("it is stored as recorded by hand", /by_hand: true/.test(fns));
+
+  const server = readFileSync(new URL("./recovery-log.server.ts", import.meta.url), "utf8");
+  const undo = (server.match(/DELETE FROM recovery_emails[\s\S]*?by_hand = true/) ?? [""])[0];
+  // The one that matters: a real send left a message in somebody's Sent folder, and no
+  // button may make that record disappear. Undo reaches hand-recorded rows only.
+  t("undo only ever reaches a hand-recorded row", undo.includes("by_hand = true"));
+  t(
+    "and the insert carries the flag",
+    /by_hand\)\s*\n?[\s\S]{0,200}input\.by_hand === true/.test(server),
+  );
+}
+
 // ── Whose move is it once the email has gone out ────────────────────────────
 // Marketplace NA files a booking with a commission or refund to recover under "Ours to
 // move" — somebody has to write the email. Once it is written the money is theirs to

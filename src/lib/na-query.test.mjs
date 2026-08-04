@@ -284,6 +284,26 @@ console.log("\n[the move list]");
   // The no-cash payment and a client balance both speak for the client; the labels
   // have to differ or the dedupe above would drop one of them.
   t("the two client labels are distinct", /label: "Client to pay first"/.test(page));
+
+  // An unpaid invoice on an event that has not happened is a deposit doing its job, not
+  // a chase. The line used to appear the moment a balance existed, so bookings months
+  // out sat in the list beside the ones somebody actually had to write to.
+  const clientBranch = page.slice(
+    page.indexOf("if ((r.balance_ccy ?? 0) > 0.01) {"),
+    page.indexOf("const clientCredit ="),
+  );
+  t("the client line waits for the event to be a week behind", clientBranch.length > 0);
+  t(
+    "and returns nothing before then",
+    /sinceEvent == null \|\| sinceEvent < RECOVERY_GRACE_DAYS\) return null;/.test(clientBranch),
+  );
+  // Grace on the last invoice stays a countdown rather than a second gate: it moves
+  // every time a document is issued, so hiding the line on it would make a booking
+  // disappear from the list because somebody invoiced it.
+  t(
+    "the invoice grace is still shown as a countdown",
+    /chase in \$\{waitLeft\}d/.test(clientBranch),
+  );
 }
 
 // ── The name a partner is shown by ──────────────────────────────────────────

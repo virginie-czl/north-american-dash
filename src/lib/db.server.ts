@@ -238,6 +238,12 @@ const SCHEMA_STATEMENTS = [
      PRIMARY KEY (event_ref, recipient, scope)
    )`,
   `CREATE INDEX IF NOT EXISTS recovery_emails_event_ref_idx ON recovery_emails (event_ref)`,
+  // A chase that left from somewhere this app cannot see — a reply in an existing
+  // thread, a call written up afterwards — recorded by hand so the next colleague
+  // does not send a second one. Deployments predate the column, and the default is
+  // the honest one: every row already there came from a send we made.
+  `ALTER TABLE recovery_emails
+     ADD COLUMN IF NOT EXISTS by_hand boolean NOT NULL DEFAULT false`,
   `CREATE TABLE IF NOT EXISTS na_financial_summary (
      event_ref text NOT NULL,
      partner_key text NOT NULL,
