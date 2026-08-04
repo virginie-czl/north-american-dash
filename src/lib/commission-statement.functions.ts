@@ -18,6 +18,8 @@
  * Every status is kept, cancelled included: each cancelled document has a credit
  * note reversing it, and dropping either half moves the total.
  */
+import { commissionNoteSql } from "./invoice-series";
+
 /** Same shape as the client statement: markup the endpoint renders to a PDF. */
 export type NaCommissionStatementDocument = {
   readable_id: string;
@@ -92,8 +94,9 @@ prov AS (
   )
   WHERE rn = 1
 ),
--- Commission documents for this provider on this booking. NABCO-% only, every
--- status, attached through the FEE_OWNER line items.
+-- Commission documents for this provider on this booking: the commission series, every
+-- status, attached through the FEE_OWNER line items. Every entity has its own series and
+-- they all end in CO — see invoice-series.ts.
 docs AS (
   SELECT ARRAY_AGG(d ORDER BY d.issued, d.ref) AS items
   FROM (
@@ -112,7 +115,7 @@ docs AS (
     JOIN \`naboo-app-365515.raw_naboo_data.quotes\` q ON q.quote_id = li.quote_id
     JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = q.house_id
     WHERE i.clientRequestReadableId = @ref
-      AND i.invoiceNumber LIKE 'NABCO-%'
+      AND ${commissionNoteSql("i")}
       AND li.line_type = 'FEE_OWNER'
       AND h.readable_id = @house
   ) d

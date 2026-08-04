@@ -12,6 +12,13 @@ import {
   DOCUMENT_CSS,
   printTitle,
 } from "./statement.ts";
+import { readFileSync } from "node:fs";
+import {
+  clientInvoiceSql,
+  commissionNoteSql,
+  isClientInvoice,
+  isCommissionNote,
+} from "./invoice-series.ts";
 
 let pass = 0,
   fail = 0;
@@ -393,6 +400,77 @@ console.log("\n[DOCUMENT_CSS]");
     html.includes("Acme &lt;b&gt;&quot;x&quot;&lt;/b&gt; &amp; Co"),
   );
   t("no manager named when the address is the fallback", !html.includes("event manager)"));
+}
+
+// ── Which series a document belongs to ──────────────────────────────────────
+// Every billing entity issues two numbered series and the pair always has the same shape:
+// the client's invoices end the prefix in I, the commission notes we raise against
+// providers end it in CO. Three queries used to test for the French entity's series by
+// name, so a booking billed from NABOO US Inc. produced a statement that read empty —
+// C-U332 / Bland AI, 148,056 USD invoiced, ten documents, zero shown.
+console.log("\n[client invoices and commission notes]");
+{
+  // The real series, one per entity, taken off the data.
+  const clientSeries = [
+    "NABI-FR26-00825",
+    "CAI-CA26-00159",
+    "USI-US26-00002",
+    "DEI-DE26-00011",
+    "ESI-ES26-00018",
+    "BIZI-FR26-00339",
+  ];
+  const commissionSeries = [
+    "NABCO-FR26-00814",
+    "CACO-CA26-00035",
+    "USCO-US26-00002",
+    "DECO-DE26-00052",
+    "ESCO-ES26-00019",
+    "BIZCO-FR26-00184",
+  ];
+  t(
+    "every entity's client series is a client document",
+    clientSeries.every(isClientInvoice),
+    clientSeries.filter((n) => !isClientInvoice(n)).join(", "),
+  );
+  t(
+    "and none of them is mistaken for a commission note",
+    clientSeries.every((n) => !isCommissionNote(n)),
+  );
+  t(
+    "every entity's commission series is a commission note",
+    commissionSeries.every(isCommissionNote),
+    commissionSeries.filter((n) => !isCommissionNote(n)).join(", "),
+  );
+  t(
+    "and none of them reaches a client statement",
+    commissionSeries.every((n) => !isClientInvoice(n)),
+  );
+  // The specific document that must not appear on C-U332's statement: a commission note
+  // to Alohilani, income-side, on the same booking as the client's own invoices.
+  t("the note to the provider is excluded", !isClientInvoice("USCO-US26-00002"));
+  t("while the client's invoice beside it is not", isClientInvoice("USI-US26-00002"));
+  t("nothing is not a document", !isClientInvoice("") && !isClientInvoice(null));
+
+  // The SQL says the same thing, and the three queries all ask through it rather than
+  // spelling a prefix out again.
+  const sql = commissionNoteSql("i");
+  t("the predicate names no entity", !/NAB|USCO|CACO/.test(sql), sql);
+  t("and it is anchored to the start of the number", sql.includes("^[A-Za-z]*CO-"));
+  t("the client predicate is its negation", clientInvoiceSql("i") === `NOT ${sql}`);
+  t("it takes the table's own alias", commissionNoteSql("inv").includes("inv.invoiceNumber"));
+
+  for (const [file, expected] of [
+    ["./statement.functions.ts", 'clientInvoiceSql("i")'],
+    ["./na.functions.ts", 'commissionNoteSql("i")'],
+    ["./commission-statement.functions.ts", 'commissionNoteSql("i")'],
+  ]) {
+    const src = readFileSync(new URL(file, import.meta.url), "utf8");
+    t(`${file.slice(2)} asks through the shared rule`, src.includes(expected));
+    t(
+      `${file.slice(2)} no longer hard-codes a prefix`,
+      !/invoiceNumber LIKE '(NABI|NABCO)-%'/.test(src),
+    );
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

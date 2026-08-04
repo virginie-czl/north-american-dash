@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { commissionNoteSql } from "./invoice-series";
 
 export interface NaPartnerLine {
   /** Owner code (O-XXXX) — matches credit-card approvals in #finance-paiement-by-card. */
@@ -114,16 +115,19 @@ const QUERY = `
 WITH
 -- How many commission documents exist per provider quote. Only used to decide
 -- whether a partner card offers a commission statement at all: a card with no
--- NABCO document must not offer a button that produces an empty page.
+-- commission document must not offer a button that produces an empty page.
 --
--- NABCO-% are the commission notes addressed to the providers, and the FEE_OWNER
--- line items are what attach one to a particular quote.
+-- The commission series is every prefix ending in CO — NABCO for the French entity, USCO,
+-- CACO, DECO, ESCO, BIZCO for the others (invoice-series.ts). Testing NABCO-% alone hid
+-- the commission documents on 35 North American bookings, which is precisely the case
+-- where the button was wanted. The FEE_OWNER line items are what attach one to a quote,
+-- and they corroborate the number: no other series carries them.
 commission_docs_by_quote AS (
   SELECT li.quote_id AS quote_id, COUNT(DISTINCT i.invoice_id) AS doc_count
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
   JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
     ON li.invoice_id = i.invoice_id AND li.deleted = false
-  WHERE i.invoiceNumber LIKE 'NABCO-%'
+  WHERE ${commissionNoteSql("i")}
     AND li.line_type = 'FEE_OWNER'
   GROUP BY quote_id
 ),

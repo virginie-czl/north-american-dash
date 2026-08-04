@@ -22,6 +22,8 @@
  *    back from providers — on C-P222, three lines worth 213,472 USD. Counting them
  *    as client money turns a 23,332.39 receivable into a six-figure credit.
  */
+import { clientInvoiceSql } from "./invoice-series";
+
 /**
  * Markup and stylesheet, which the endpoint hands to Chromium and returns as a PDF.
  *
@@ -66,7 +68,11 @@ WITH ev AS (
   WHERE e.client_request_readable_id = @ref
   GROUP BY rid
 ),
--- Client invoices and credit notes. NABI-% only, every status.
+-- Client invoices and credit notes: every income document except the commission notes,
+-- every status. The exclusion is by series rather than by prefix whitelist — see
+-- invoice-series.ts. Filtering on NABI-% was the French entity's series and nobody else's,
+-- so a booking billed from NABOO US Inc. (C-U332, 148,056 USD invoiced) found nothing at
+-- all and printed a statement saying zero invoices.
 docs AS (
   SELECT
     ARRAY_AGG(STRUCT(
@@ -87,7 +93,7 @@ docs AS (
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
   WHERE i.clientRequestReadableId = @ref
     AND i.invoiceDirection = 'INCOME'
-    AND i.invoiceNumber LIKE 'NABI-%'
+    AND ${clientInvoiceSql("i")}
 ),
 -- Client money in. COMPANY_PAYMENT inflows only.
 pays AS (
