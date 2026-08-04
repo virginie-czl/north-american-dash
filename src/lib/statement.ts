@@ -8,11 +8,11 @@
  *     invoices; `NABCO-*` are our commission notes to the providers and carry the
  *     FEE_OWNER lines. That filter lives in the query, and the statement never
  *     sees the difference — see statement.functions.ts.
- *  2. Every status, cancelled included. A cancelled invoice always comes with a
- *     credit note reversing it: keep the pair and it nets to zero, drop the
- *     cancelled half and you have subtracted a credit for an invoice that was
- *     never added. That mistake read −113,215.94 on C-V176 against a back office
- *     49,830.47.
+ *  2. A cancelled invoice and its credit note travel together — both kept, or both
+ *     dropped, never one. Dropping only the cancelled half subtracts a credit for
+ *     an invoice that was never added: that mistake read −113,215.94 on C-V176
+ *     against a back office 49,830.47. Dropping both is safe and is what the query
+ *     now does, because the note reverses the invoice exactly — see notCancelledSql.
  *  3. Only client money as received. `HOST_PAYMENT` inflows are refunds coming
  *     back from providers; on C-P222 they are three lines worth 213,472 USD, and
  *     counting them turns a 23,332.39 receivable into a six-figure credit.
@@ -169,7 +169,14 @@ export function settleInvoices(
   payments: StatementPayment[],
 ): { oldestOpenDue: string | null; openCount: number } {
   const invoices = documents
-    .filter((d) => d.amount > 0)
+    // A cancelled invoice is not owed. It stays in the totals — its credit note is in
+    // them too and the pair nets to zero — but it must not sit in the queue of things
+    // waiting to be paid, where it can swallow a payment meant for a live invoice and
+    // put its own due date behind "Overdue since". C-Q382 is paid to the cent —
+    // 38,629.83 invoiced, 38,629.83 received — and still reported a document open,
+    // because the cancelled 512.68 was standing in the queue. The query drops these
+    // pairs before they get here; this is the same rule where the arithmetic happens.
+    .filter((d) => d.amount > 0 && (d.status ?? "").toUpperCase() !== "CANCELLED")
     .map((d) => ({
       ref: normaliseDocRef(d.ref),
       due: d.due,
@@ -257,7 +264,14 @@ export function statementTotals(input: StatementInput): StatementTotals[] {
       input.documents.filter((d) => d.currency === t.currency),
       input.payments.filter((p) => p.currency === t.currency),
     );
-    t.dueOn = open.oldestOpenDue;
+    // Nothing owed, nothing due. Settlement walks the invoices and the payments; a
+    // credit note reduces the balance without being money against any one document,
+    // so a booking can settle to zero and still leave an invoice showing open for the
+    // amount of the credit. C-Q382 is exactly that: 38,629.83 invoiced against
+    // 38,629.83 received, and an 8.92 credit note that left the statement saying
+    // "Due 10 Aug 2026". The balance is the figure the client acts on, so the date
+    // beside it has to agree with it.
+    t.dueOn = round2(t.invoiced - t.received) > 0.005 ? open.oldestOpenDue : null;
   }
 
   return [...map.values()]

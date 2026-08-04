@@ -15,10 +15,11 @@
  *    items, which carry the quote, which carries the house. There is no direct
  *    provider column on the invoice.
  *
- * Every status is kept, cancelled included: each cancelled document has a credit
- * note reversing it, and dropping either half moves the total.
+ * A cancelled document and the note reversing it are dropped together, never one of
+ * them: dropping either half alone moves the total by a whole document. See
+ * notCancelledSql for why dropping both cannot.
  */
-import { commissionNoteSql } from "./invoice-series";
+import { commissionNoteSql, notCancelledSql } from "./invoice-series";
 
 /** Same shape as the client statement: markup the endpoint renders to a PDF. */
 export type NaCommissionStatementDocument = {
@@ -94,9 +95,14 @@ prov AS (
   )
   WHERE rn = 1
 ),
--- Commission documents for this provider on this booking: the commission series, every
--- status, attached through the FEE_OWNER line items. Every entity has its own series and
--- they all end in CO — see invoice-series.ts.
+-- Commission documents for this provider on this booking: the commission series, attached
+-- through the FEE_OWNER line items. Every entity has its own series and they all end in
+-- CO — see invoice-series.ts.
+--
+-- A cancelled note and the note cancelling it come out as a pair, exactly as on the client
+-- statement: 429 bookings carry one, and to the provider reading it they are two lines that
+-- only undo each other. The pairing is exact, so the reconciliation target below — the net
+-- of these documents — does not move. See notCancelledSql.
 docs AS (
   SELECT ARRAY_AGG(d ORDER BY d.issued, d.ref) AS items
   FROM (
@@ -116,6 +122,7 @@ docs AS (
     JOIN \`naboo-app-365515.raw_naboo_data.houses\` h ON h.house_id = q.house_id
     WHERE i.clientRequestReadableId = @ref
       AND ${commissionNoteSql("i")}
+      AND ${notCancelledSql("i")}
       AND li.line_type = 'FEE_OWNER'
       AND h.readable_id = @house
   ) d

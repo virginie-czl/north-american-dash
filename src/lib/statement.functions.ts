@@ -12,17 +12,17 @@
  *  - `NABI-%` only. `NABCO-*` are commission notes addressed to the providers,
  *    carrying the FEE_OWNER lines. They would add documents the client never
  *    received and inflate the total invoiced.
- *  - Every status, cancelled included. A cancelled invoice always comes with a
- *    credit note reversing it: keep both and the pair nets to zero. Filtering on
+ *  - A cancelled invoice and the note reversing it, both or neither. Filtering on
  *    `status = 'ISSUED'` keeps the credit note and drops the invoice it reversed,
  *    subtracting an amount that was never added — that read −113,215.94 on C-V176
  *    against a back office 49,830.47. On C-P222 it would read 8,131.71 instead of
- *    23,332.39.
+ *    23,332.39. Dropping the pair together has neither effect and spares the reader
+ *    two lines that only undo each other: see notCancelledSql.
  *  - `COMPANY_PAYMENT` inflows only. `HOST_PAYMENT` inflows are refunds coming
  *    back from providers — on C-P222, three lines worth 213,472 USD. Counting them
  *    as client money turns a 23,332.39 receivable into a six-figure credit.
  */
-import { clientInvoiceSql } from "./invoice-series";
+import { clientInvoiceSql, notCancelledSql } from "./invoice-series";
 
 /**
  * Markup and stylesheet, which the endpoint hands to Chromium and returns as a PDF.
@@ -68,11 +68,15 @@ WITH ev AS (
   WHERE e.client_request_readable_id = @ref
   GROUP BY rid
 ),
--- Client invoices and credit notes: every income document except the commission notes,
--- every status. The exclusion is by series rather than by prefix whitelist — see
--- invoice-series.ts. Filtering on NABI-% was the French entity's series and nobody else's,
--- so a booking billed from NABOO US Inc. (C-U332, 148,056 USD invoiced) found nothing at
--- all and printed a statement saying zero invoices.
+-- Client invoices and credit notes: every income document except the commission notes.
+-- The exclusion is by series rather than by prefix whitelist — see invoice-series.ts.
+-- Filtering on NABI-% was the French entity's series and nobody else's, so a booking
+-- billed from NABOO US Inc. (C-U332, 148,056 USD invoiced) found nothing at all and
+-- printed a statement saying zero invoices.
+--
+-- A cancelled invoice and the note cancelling it are dropped as a pair — notCancelledSql
+-- for why that cannot move the balance. 533 bookings carry one, and on the statement they
+-- were two lines whose only content was that they undid each other.
 docs AS (
   SELECT
     ARRAY_AGG(STRUCT(
@@ -94,6 +98,7 @@ docs AS (
   WHERE i.clientRequestReadableId = @ref
     AND i.invoiceDirection = 'INCOME'
     AND ${clientInvoiceSql("i")}
+    AND ${notCancelledSql("i")}
 ),
 -- How fresh the warehouse is for the series this booking is billed in.
 --

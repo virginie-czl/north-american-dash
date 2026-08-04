@@ -150,11 +150,15 @@ console.log("\n[statementTotals — C-P222 acceptance figures]");
   t("six documents counted", totals[0].documentCount === 6);
   // The oldest thing still unpaid, not the newest thing issued. C-P222's two payments cover
   // the first two invoices exactly (their references name them); what is left open is the
-  // 23,710.20 re-issue, due 30 July on the cancelled original — the earliest open date.
-  t("due on the oldest open invoice", totals[0].dueOn === "2026-07-30", totals[0].dueOn);
+  // 23,710.20 re-issue, NABI-FR26-02497, due 4 August.
+  //
+  // Not the 30 July of the invoice it replaced: that one was cancelled, and a client
+  // cannot be overdue on a document we withdrew. The document they hold says 4 August, so
+  // telling them they were late on 31 July is an argument we would lose.
+  t("due on the oldest open invoice", totals[0].dueOn === "2026-08-04", totals[0].dueOn);
   t(
     "and it is overdue on a later day",
-    statementTotals({ ...CP222, generatedOn: "2026-08-04" })[0].overdue === true,
+    statementTotals({ ...CP222, generatedOn: "2026-08-05" })[0].overdue === true,
   );
   t(
     "but not before that date arrives",
@@ -251,6 +255,69 @@ console.log("\n[settleInvoices]");
     settleInvoices(invoices, []).oldestOpenDue === "2026-06-17",
   );
   t("and no invoices at all is not an error", settleInvoices([], []).oldestOpenDue === null);
+
+  // C-Q382 / Hubspot: paid to the cent, and still reporting a document open because a
+  // cancelled invoice was standing in the queue waiting to be paid. It is not owed —
+  // its credit note is in the totals beside it and the two net to zero — so it must not
+  // absorb a payment or lend its due date to the balance line.
+  const q382 = [
+    doc("NABI-FR26-03062", 12483, { issued: "2026-08-03", due: "2026-08-10" }),
+    doc("NABI-FR26-03063", 17530.5, { issued: "2026-08-03", due: "2026-08-10" }),
+    doc("NABI-FR26-03064", 8103.65, { issued: "2026-08-03", due: "2026-08-10" }),
+    doc("NABI-FR26-03065", 512.68, {
+      issued: "2026-08-03",
+      due: "2026-08-10",
+      status: "CANCELLED",
+    }),
+    doc("NABI-FR26-03066", -8.92, { issued: "2026-08-03", due: "2026-08-10" }),
+    doc("NABI-FR26-03067", -512.68, { issued: "2026-08-03", due: "2026-08-03" }),
+    doc("NABI-FR26-03068", 521.6, { issued: "2026-08-03", due: "2026-08-10" }),
+  ];
+  const paid = [
+    { paid_on: "2026-04-23", amount: 12483, currency: "USD", method: "Card", reference: null },
+    { paid_on: "2026-06-22", amount: 26146.83, currency: "USD", method: "Card", reference: null },
+  ];
+  const totals = statementTotals({
+    ...CP222,
+    booking: { ...CP222.booking, readable_id: "C-Q382" },
+    documents: q382,
+    payments: paid,
+    generatedOn: "2026-08-04",
+  })[0];
+  t("C-Q382 invoiced 38,629.83", totals.invoiced === 38629.83, totals.invoiced);
+  t("received the same", totals.received === 38629.83, totals.received);
+  t("so the balance is nil", totals.balance === 0, totals.balance);
+  t("and nothing is due", totals.dueOn === null, totals.dueOn);
+  t("least of all overdue", totals.overdue === false);
+
+  // The cancelled document is out of the queue, not merely outvoted by the balance: give
+  // it an earlier due date than the live invoice and an unpaid booking, and the date the
+  // client is chased on is still the live one's.
+  const chased = statementTotals({
+    ...CP222,
+    documents: [
+      doc("NABI-FR26-03065", 512.68, { issued: "2026-08-03", due: "2026-07-01" }),
+      doc("NABI-FR26-03068", 521.6, { issued: "2026-08-03", due: "2026-08-10" }),
+    ],
+    payments: [],
+    generatedOn: "2026-08-04",
+  })[0];
+  t("a cancelled invoice cannot set the due date", chased.dueOn === "2026-07-01");
+  const withStatus = statementTotals({
+    ...CP222,
+    documents: [
+      doc("NABI-FR26-03065", 512.68, {
+        issued: "2026-08-03",
+        due: "2026-07-01",
+        status: "CANCELLED",
+      }),
+      doc("NABI-FR26-03068", 521.6, { issued: "2026-08-03", due: "2026-08-10" }),
+    ],
+    payments: [],
+    generatedOn: "2026-08-04",
+  })[0];
+  t("once it is marked cancelled", withStatus.dueOn === "2026-08-10", withStatus.dueOn);
+  t("and the statement is not overdue on its date", withStatus.overdue === false);
 }
 {
   const totals = statementTotals({

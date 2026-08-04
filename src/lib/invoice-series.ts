@@ -64,3 +64,32 @@ export function commissionNoteSql(alias: string): string {
 export function clientInvoiceSql(alias: string): string {
   return `NOT ${commissionNoteSql(alias)}`;
 }
+
+/**
+ * Documents that still stand, as SQL: a cancelled one and the credit note that cancels it
+ * are both left out.
+ *
+ * They belong in a total and not on a page. Every figure a statement adds up has to include
+ * them — the pair nets to zero and dropping only one half moves the balance by the whole
+ * invoice — but a reader seeing "Invoice 03065  512.68" beside "Credit note 03067  −512.68"
+ * has to work out for themselves that the two are the same non-event. On C-Q382 that is two
+ * of nine lines saying nothing.
+ *
+ * Safe because the pairing is exact, not approximate: of the 1,989 cancelled income
+ * documents in the warehouse, every one has at least one credit note pointing at it, and in
+ * every case — including the 48 cancelled by more than one note — those notes sum to exactly
+ * its negative. So removing both sides never moves a total by a cent. It also stops a
+ * cancelled invoice sitting in the open-invoice list, where it could absorb a payment or
+ * become the earliest unpaid due date behind an "overdue since" line.
+ *
+ * A credit note whose target is *not* cancelled stays: 114 of those exist, and each is a
+ * real credit against a live invoice that the client is owed sight of.
+ */
+export function notCancelledSql(alias: string): string {
+  return `${alias}.status != 'CANCELLED'
+    AND NOT EXISTS (
+      SELECT 1 FROM \`naboo-app-365515.raw_naboo_data.invoices\` cancelled_doc
+      WHERE cancelled_doc.invoice_id = ${alias}.cancelledInvoiceId
+        AND cancelled_doc.status = 'CANCELLED'
+    )`;
+}
