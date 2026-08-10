@@ -168,6 +168,32 @@ function earliestSent(invoices?: InvoiceLine[]): string | null {
   return sent[0] ?? null;
 }
 
+function isSent(invoice: InvoiceLine): boolean {
+  return invoice.is_sent === true || !!invoice.first_sent_at;
+}
+
+/** The three invoicing states of an event, read off its client invoices. */
+type InvoiceStatus = "issued_sent" | "issued_not_sent" | "not_issued";
+
+/**
+ * Invoicing state of an event. `invoices` only ever holds client (INCOME)
+ * invoices that were not cancelled, so "nothing here" means nothing issued.
+ * An event whose invoices are only partly sent counts as "issued, not sent":
+ * something is still waiting to go out.
+ */
+function invoiceStatusOf(invoices: InvoiceLine[]): InvoiceStatus {
+  if (invoices.length === 0) return "not_issued";
+  return invoices.every(isSent) ? "issued_sent" : "issued_not_sent";
+}
+
+const INVOICE_STATUS_META: Record<InvoiceStatus, { label: string; cls: string }> = {
+  issued_sent: { label: "Issued and sent", cls: "bg-emerald-100 text-emerald-800" },
+  issued_not_sent: { label: "Issued, not sent", cls: "bg-amber-100 text-amber-800" },
+  not_issued: { label: "No invoice issued", cls: "bg-slate-100 text-slate-600" },
+};
+
+const INVOICE_STATUS_ORDER: InvoiceStatus[] = ["issued_sent", "issued_not_sent", "not_issued"];
+
 function paymentStatus(
   row: SlaRow,
   invoices?: InvoiceLine[],
@@ -458,6 +484,7 @@ function SlaPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [invoiceFilter, setInvoiceFilter] = useState<InvoiceStatus | "all">("all");
   // Turnkey is out by default (Naboo runs those end to end) but can be brought back.
   const [kindFilter, setKindFilter] = useState<string>("no_turnkey");
   const [tagFilter, setTagFilter] = useState<string[]>([]);
@@ -547,7 +574,9 @@ function SlaPage() {
     return Array.from(s).sort();
   }, [decorated, statusMap]);
 
-  const filtered = useMemo(() => {
+  // Every filter except the invoicing status. Kept apart so the three
+  // invoicing-status options can show how many events each one would leave.
+  const preInvoiceStatus = useMemo(() => {
     let r = decorated;
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -567,7 +596,6 @@ function SlaPage() {
         if (statusFilter === "payout_breached") return payoutSla(x, ps).variant === "overdue";
         if (statusFilter === "receivable_overdue")
           return paymentStatus(x, iv).variant === "overdue";
-        if (statusFilter === "not_invoiced") return !x.first_income_invoice_emission_date;
         if (statusFilter === "partner_outstanding")
           return (x.partner_reste_a_decaisser_ttc ?? 0) > 0;
         return true;
@@ -623,6 +651,39 @@ function SlaPage() {
       });
     }
 
+    return r;
+  }, [
+    decorated,
+    search,
+    statusFilter,
+    kindFilter,
+    tagFilter,
+    colFilters,
+    actionFor,
+    factsMap,
+    cardApprovedCodes,
+  ]);
+
+  // How many events sit in each invoicing state, under the other filters.
+  const invoiceStatusCounts = useMemo(() => {
+    const counts: Record<InvoiceStatus, number> = {
+      issued_sent: 0,
+      issued_not_sent: 0,
+      not_issued: 0,
+    };
+    preInvoiceStatus.forEach(({ invoices: iv }) => {
+      counts[invoiceStatusOf(iv)]++;
+    });
+    return counts;
+  }, [preInvoiceStatus]);
+
+  const filtered = useMemo(() => {
+    // Invoicing status: was a client invoice issued, and did it go out?
+    const r =
+      invoiceFilter === "all"
+        ? preInvoiceStatus
+        : preInvoiceStatus.filter(({ invoices: iv }) => invoiceStatusOf(iv) === invoiceFilter);
+
     const sorted = [...r].sort((a, b) => {
       const av = (a.row as unknown as Record<string, unknown>)[sortKey];
       const bv = (b.row as unknown as Record<string, unknown>)[sortKey];
@@ -636,28 +697,16 @@ function SlaPage() {
         : String(bv).localeCompare(String(av));
     });
     return sorted;
-  }, [
-    decorated,
-    search,
-    statusFilter,
-    kindFilter,
-    tagFilter,
-    sortKey,
-    sortDir,
-    colFilters,
-    actionFor,
-    factsMap,
-    cardApprovedCodes,
-  ]);
+  }, [preInvoiceStatus, invoiceFilter, sortKey, sortDir]);
 
   // KPIs
   const kpis = useMemo(() => {
     const total = rows.length;
-    const invoiceSent = decorated.filter(({ invoices: iv }) =>
-      iv.some((i) => i.is_sent || !!i.first_sent_at),
+    const invoiceSent = decorated.filter(
+      ({ invoices: iv }) => invoiceStatusOf(iv) === "issued_sent",
     ).length;
     const invoiceIssuedNotSent = decorated.filter(
-      ({ invoices: iv }) => iv.length > 0 && !iv.some((i) => i.is_sent || !!i.first_sent_at),
+      ({ invoices: iv }) => invoiceStatusOf(iv) === "issued_not_sent",
     ).length;
     const notInvoiced = total - invoiceSent - invoiceIssuedNotSent;
     const overdueReceivables = decorated.filter(
@@ -737,9 +786,15 @@ function SlaPage() {
       let bucket: keyof typeof clientBuckets;
       if (!hasPo) bucket = "noPo";
       else if (!hasNamedPartner) bucket = "withPoNoPartner";
-      else if (invoices.length === 0) bucket = "notInvoiced";
-      else if (invoices.every((i) => i.is_sent || !!i.first_sent_at)) bucket = "invoiceSent";
-      else bucket = "invoiceIssuedNotSent";
+      else {
+        const status = invoiceStatusOf(invoices);
+        bucket =
+          status === "not_issued"
+            ? "notInvoiced"
+            : status === "issued_sent"
+              ? "invoiceSent"
+              : "invoiceIssuedNotSent";
+      }
       clientBuckets[bucket].set(ccy, (clientBuckets[bucket].get(ccy) ?? 0) + v);
       clientCounts[bucket]++;
     });
@@ -1143,13 +1198,28 @@ function SlaPage() {
                     selected={tagFilter}
                     onChange={setTagFilter}
                   />
+                  <Select
+                    value={invoiceFilter}
+                    onValueChange={(v) => setInvoiceFilter(v as InvoiceStatus | "all")}
+                  >
+                    <SelectTrigger className="h-8 w-full text-[12px]">
+                      <SelectValue placeholder="Invoicing status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All invoicing statuses</SelectItem>
+                      {INVOICE_STATUS_ORDER.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {INVOICE_STATUS_META[s].label} ({invoiceStatusCounts[s]})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Select value={statusFilter} onValueChange={setStatusFilter}>
                     <SelectTrigger className="h-8 w-full text-[12px]">
                       <SelectValue placeholder="Filter" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All events</SelectItem>
-                      <SelectItem value="not_invoiced">Not invoiced</SelectItem>
                       <SelectItem value="invoicing_breached">Invoicing SLA breached</SelectItem>
                       <SelectItem value="payout_breached">Payout SLA breached</SelectItem>
                       <SelectItem value="partner_outstanding">Partner outstanding</SelectItem>
@@ -1366,6 +1436,10 @@ function SlaPage() {
                       >
                         {sel.purchase_order_number ? `PO ${sel.purchase_order_number}` : "No PO"}
                       </span>
+                      {(() => {
+                        const s = INVOICE_STATUS_META[invoiceStatusOf(selInvoices)];
+                        return <span className={`pill ${s.cls}`}>{s.label}</span>;
+                      })()}
                     </div>
                     <div className="mt-1 text-[13px] text-slate-500">
                       {sel.company_name ?? "—"} · {sel.country_iso_code ?? "—"} ·{" "}
