@@ -335,6 +335,56 @@ const PARTNER_STATUS_OPTIONS: { value: PartnerStatusValue; label: string; cls: s
   },
 ];
 
+function hasPurchaseOrder(row: SlaRow): boolean {
+  return !!(row.purchase_order_number && String(row.purchase_order_number).trim());
+}
+
+/** A provider still owed money on an event, and how much is left. */
+type UnpaidPartner = { partner: PartnerLine; remaining: number };
+
+/**
+ * Providers that still have to be paid, biggest first. Cancelled quotes and
+ * anything already settled drop out; a provider with no name stays in — the
+ * money is owed whether or not the line carries a name.
+ */
+function unpaidPartners(partners: PartnerLine[]): UnpaidPartner[] {
+  return partners
+    .filter((p) => !p.is_cancelled)
+    .map((p) => {
+      const due = Math.max(p.amount_due ?? 0, 0);
+      const paid = Math.abs(p.amount_paid ?? 0);
+      return { partner: p, remaining: +(due - paid).toFixed(2) };
+    })
+    .filter(({ remaining }) => remaining > 0.01)
+    .sort((a, b) => b.remaining - a.remaining);
+}
+
+function totalByCurrency(
+  list: UnpaidPartner[],
+  fallback: string | null | undefined,
+): Map<string, number> {
+  const m = new Map<string, number>();
+  list.forEach(({ partner, remaining }) => {
+    const ccy = partner.currency || fallback || "EUR";
+    m.set(ccy, (m.get(ccy) ?? 0) + remaining);
+  });
+  return m;
+}
+
+/** Currencies are never added together — each is shown on its own. */
+function fmtMulti(m: Map<string, number>): string {
+  if (m.size === 0) return fmtCurrency(0, "EUR");
+  return Array.from(m.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([ccy, v]) => fmtCurrency(v, ccy))
+    .join(" · ");
+}
+
+function partnerLabel(p: PartnerLine): string {
+  const name = p.name?.trim();
+  return name || "Unnamed provider";
+}
+
 function csvEscape(v: string): string {
   if (/[",\n;]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
   return v;
@@ -354,16 +404,13 @@ function exportUnpaidPartners(decorated: { row: SlaRow; partners: PartnerLine[] 
       "Remaining",
     ],
   ];
+  // Same rule as the "Partners to pay" scope, so the file and the screen list
+  // the same providers — an unnamed one included, since the money is still owed.
   decorated.forEach(({ row, partners }) => {
-    if (!row.purchase_order_number || !String(row.purchase_order_number).trim()) return;
-    partners.forEach((p) => {
-      if (!p.name || !p.name.trim()) return;
-      if (p.is_cancelled) return;
+    if (!hasPurchaseOrder(row)) return;
+    unpaidPartners(partners).forEach(({ partner: p, remaining }) => {
       const due = Math.max(p.amount_due ?? 0, 0);
       const paid = Math.abs(p.amount_paid ?? 0);
-      if (due <= 0.01) return; // nothing owed
-      if (paid + 0.01 >= due) return; // fully paid
-      const remaining = +(due - paid).toFixed(2);
       rows.push([
         row.booking_date ?? row.end_date ?? "",
         row.readable_id ?? "",
@@ -489,7 +536,7 @@ function SlaPage() {
   const [kindFilter, setKindFilter] = useState<string>("no_turnkey");
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [scope, setScope] = useState<"move" | "breached" | "all">("move");
+  const [scope, setScope] = useState<"move" | "to_pay" | "breached" | "all">("move");
   const [sortKey, setSortKey] = useState<string>("booking_created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -1078,12 +1125,16 @@ function SlaPage() {
         ...item,
         move: moveFor(item.row, item.partners, item.invoices),
         breach: breachOf(item.row, item.partners, item.invoices),
+        // Only a PO makes a provider payable, so an event without one has
+        // nobody to pay yet however much it still owes.
+        toPay: hasPurchaseOrder(item.row) ? unpaidPartners(item.partners) : [],
       })),
     [filtered, moveFor, breachOf],
   );
 
   const scoped = useMemo(() => {
     if (scope === "breached") return withMove.filter((x) => x.breach != null);
+    if (scope === "to_pay") return withMove.filter((x) => x.toPay.length > 0);
     if (scope === "move") return withMove.filter((x) => needsAMove(x.move.group));
     return withMove;
   }, [withMove, scope]);
@@ -1091,6 +1142,7 @@ function SlaPage() {
   const scopeCounts = useMemo(
     () => ({
       move: withMove.filter((x) => needsAMove(x.move.group)).length,
+      toPay: withMove.filter((x) => x.toPay.length > 0).length,
       breached: withMove.filter((x) => x.breach != null).length,
       all: withMove.length,
     }),
@@ -1233,6 +1285,7 @@ function SlaPage() {
               {(
                 [
                   { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
+                  { key: "to_pay" as const, label: "Partners to pay", count: scopeCounts.toPay },
                   { key: "breached" as const, label: "Breached", count: scopeCounts.breached },
                   { key: "all" as const, label: "All", count: scopeCounts.all },
                 ] as const
@@ -1364,6 +1417,23 @@ function SlaPage() {
                             {item.partners.length} partner
                             {item.partners.length === 1 ? "" : "s"}
                           </span>
+                          {/* Who is actually owed money — the PO is in, these are not paid. */}
+                          {item.toPay.length > 0 && (
+                            <span className="mt-0.5 block truncate text-[11.5px] text-slate-700">
+                              To pay:{" "}
+                              {item.toPay
+                                .slice(0, 2)
+                                .map(
+                                  ({ partner, remaining }) =>
+                                    `${partnerLabel(partner)} ${fmtCurrency(
+                                      remaining,
+                                      partner.currency ?? r.currency,
+                                    )}`,
+                                )
+                                .join(" · ")}
+                              {item.toPay.length > 2 ? ` · +${item.toPay.length - 2}` : ""}
+                            </span>
+                          )}
                           <span className="mt-[5px] flex flex-wrap gap-1">
                             <span
                               className={`rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
@@ -1603,6 +1673,44 @@ function EventDetails({
           <Truck className="h-3.5 w-3.5" />
           Partners ({partners.length})
         </div>
+        {/* Answers "who do I have to pay on this event?" before the table does. */}
+        {(() => {
+          const unpaid = unpaidPartners(partners);
+          if (unpaid.length === 0) {
+            return partners.length === 0 ? null : (
+              <div className="mb-2 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                Every provider on this event is paid.
+              </div>
+            );
+          }
+          if (!hasPurchaseOrder(row)) {
+            return (
+              <div className="mb-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                {unpaid.length} provider{unpaid.length > 1 ? "s" : ""} still owed{" "}
+                {fmtMulti(totalByCurrency(unpaid, row.currency))}, but no PO has been received —
+                nothing can be paid yet.
+              </div>
+            );
+          }
+          return (
+            <div className="mb-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <span className="font-semibold">
+                {unpaid.length} provider{unpaid.length > 1 ? "s" : ""} to pay —{" "}
+                {fmtMulti(totalByCurrency(unpaid, row.currency))}
+              </span>
+              <ul className="mt-1 space-y-0.5">
+                {unpaid.map(({ partner, remaining }, i) => (
+                  <li key={i} className="flex justify-between gap-3">
+                    <span className="truncate">{partnerLabel(partner)}</span>
+                    <span className="flex-none tabular-nums">
+                      {fmtCurrency(remaining, partner.currency ?? row.currency)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })()}
         {partners.length === 0 ? (
           <div className="rounded border border-dashed bg-white px-3 py-4 text-xs text-muted-foreground">
             No partners on this event.
@@ -1616,6 +1724,7 @@ function EventDetails({
                   <th className="px-2 py-1.5">Contact</th>
                   <th className="px-2 py-1.5 text-right">Due</th>
                   <th className="px-2 py-1.5 text-right">Paid</th>
+                  <th className="px-2 py-1.5 text-right">Remaining</th>
                   <th className="px-2 py-1.5">Manual status</th>
                 </tr>
               </thead>
@@ -1701,6 +1810,15 @@ function EventDetails({
                       </td>
                       <td className="px-2 py-1.5 text-right tabular-nums">
                         {fmtCurrency(p.amount_paid, p.currency)}
+                      </td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">
+                        {p.is_cancelled || due - paid <= 0.01 ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <span className="font-semibold text-rose-700">
+                            {fmtCurrency(+(due - paid).toFixed(2), p.currency)}
+                          </span>
+                        )}
                       </td>
 
                       <td className="px-2 py-1.5">
