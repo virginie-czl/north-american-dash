@@ -289,6 +289,22 @@ Sending is sequential with a per-recipient result, so a partial failure is visib
 Duplicate addresses are collapsed server-side too, and a run is capped at 60.
 
 
+### Asking for a commission or a refund back (Marketplace NA)
+
+An overpaid provider splits in two: up to the commission is ours to recover, and
+anything past that is a refund to ask for. That gives three emails — commission,
+refund, or one covering both — composed in `src/lib/na-commission-requests.ts`
+(pure, `npx tsx src/lib/na-commission-requests.test.mjs`).
+
+Every one of them itemises: the commissionable lines, the base, the rate, and
+each payment we made with its date, method and bank reference. A bare total
+invites "where does that come from?" and a second round trip, so the breakdown
+is the point of the email rather than a nicety — and the combined template was
+sending the commission as a lone figure while the commission-only one spelled it
+out, which is what the test now pins down. When a provider has no priced lines
+to quote, the email names the invoice the commission is taken on instead of
+sending the figure alone.
+
 ### Partner invoice PDFs
 
 In each event drawer, the *Factures partenaires* panel fetches the PDFs that

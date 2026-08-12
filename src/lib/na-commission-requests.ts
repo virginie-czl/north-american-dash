@@ -104,7 +104,11 @@ export type NaComposed = { subject: string; body: string };
  * they are computed on, the rate, and the resulting amount. A bare total invites
  * a "where does that come from?" reply and a second round trip.
  */
-function commissionBlock(partner: NaPartnerLine, commission: number): string {
+function commissionBlock(
+  partner: NaPartnerLine,
+  commission: number,
+  opts: { invoiceTotalShownBelow?: boolean } = {},
+): string {
   const ccy = partner.currency;
   const items = partner.commissionable ?? [];
   const names = items
@@ -124,6 +128,11 @@ function commissionBlock(partner: NaPartnerLine, commission: number): string {
   if (names) lines.push(`• Commissionable items: ${names}`);
   if (base != null && base > 0.01) lines.push(`• Commissionable base: ${fmtMoney(base, ccy)}`);
   if (rate !== "—") lines.push(`• Commission rate: ${rate}`);
+  // No priced lines to quote — name the invoice the commission is taken on, so
+  // the amount never goes out as a bare figure with nothing behind it.
+  if (lines.length === 0 && !opts.invoiceTotalShownBelow) {
+    lines.push(`• Total invoice due: ${fmtMoney(invoiceDue(partner), ccy)}`);
+  }
   lines.push(`• Commission due incl. tax: ${fmtMoney(commission, ccy)}`);
   return lines.join("\n");
 }
@@ -255,7 +264,7 @@ Hope you're doing well!
 I've just finished reconciling the ${client} program and wanted to send you everything in one place rather than in pieces. There are two items open on our side — the commission we're owed, and an overpayment on the invoice.
 
 1) Commission
-• Commission due incl. tax: ${fmtMoney(commission, ccy)}
+${commissionBlock(partner, commission, { invoiceTotalShownBelow: true })}
 
 2) Overpayment
 • Total invoice due: ${fmtMoney(invoiceDue(partner), ccy)}
