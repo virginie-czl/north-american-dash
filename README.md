@@ -110,6 +110,25 @@ it needs to.
 never asked for an IBAN again — the tracker proposes the card instead. That memory
 is keyed on the partner, not the booking.
 
+### One row per provider, and what it is owed
+
+A booking carries one provider line per quote, plus trade-name shells from the
+quotes table, so the same provider arrives several times over. Both free-invoicing
+trackers collapse them in `src/lib/partner-merge.ts` (pure,
+`npx tsx src/lib/partner-merge.test.mjs`), and the two amounts on a line do not
+combine the same way:
+
+- **Net payable belongs to its own quote, so the lines add up.** F-B658 holds
+  three quotes for the same provider — 887,50 + 50 + 100 GBP — and owes 1 037,50.
+  Keeping the largest line instead reported 887,50 and hid the rest.
+- **Paid is a booking-level running total repeated on every line of an
+  outstanding provider** (verified: the disbursed total is identical across each
+  of a provider's lines). It is counted once and subtracted once — subtracting it
+  per quote would erase money still owed.
+
+A line that is no longer outstanding was settled upstream: it owes nothing, and
+its paid figure is its own quote's rather than a repeated total.
+
 ### Tax registration comes from BigQuery, not from email
 
 `owners.vat_number` (venues) and `service_owners.vat_number` / `tax_identifier`

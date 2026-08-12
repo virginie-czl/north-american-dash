@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { mergePartners } from "./partner-merge";
 
 export interface PartnerLine {
   name: string | null;
@@ -430,102 +431,6 @@ export function parsePartners(json: string | null): PartnerLine[] {
     return mergePartners(raw);
   } catch {
     return [];
-  }
-}
-
-function mergePartners(list: PartnerLine[]): PartnerLine[] {
-  // Pass 1: bucket entries by name key.
-  const byName = new Map<string, PartnerLine>();
-  const noName: PartnerLine[] = [];
-  for (const p of list) {
-    const nameKey = (p.name ?? "").trim().toLowerCase();
-    if (!nameKey) {
-      noName.push({ ...p });
-      continue;
-    }
-    const existing = byName.get(nameKey);
-    if (!existing) {
-      byName.set(nameKey, { ...p });
-    } else {
-      mergeInto(existing, p);
-    }
-  }
-
-  // Pass 2: collapse entries that share an email (different name variants
-  // — e.g. legal entity vs trade name — sourced from quotes + service_providers).
-  const byEmail = new Map<string, PartnerLine>();
-  const result: PartnerLine[] = [];
-  for (const p of byName.values()) {
-    const emailKey = (p.email ?? "").trim().toLowerCase();
-    if (!emailKey) {
-      result.push(p);
-      continue;
-    }
-    const existing = byEmail.get(emailKey);
-    if (!existing) {
-      byEmail.set(emailKey, p);
-      result.push(p);
-    } else {
-      mergeInto(existing, p);
-    }
-  }
-  for (const p of noName) {
-    const emailKey = (p.email ?? "").trim().toLowerCase();
-    const existing = emailKey ? byEmail.get(emailKey) : undefined;
-    if (existing) mergeInto(existing, p);
-    else result.push(p);
-  }
-  // Drop "ghost" rows that came from quotes but carry no contact and no
-  // amounts — they're duplicate trade-name shells of a service_providers row
-  // we already kept under the legal name.
-  return result.filter((p) => {
-    const noAmounts =
-      (p.amount_due ?? 0) === 0 && (p.amount_paid ?? 0) === 0 && (p.net_payable_ttc ?? 0) === 0;
-    const noContact = !p.email && !p.phone;
-    return !(noAmounts && noContact);
-  });
-}
-
-function mergeInto(existing: PartnerLine, p: PartnerLine) {
-  // Prefer the variant that actually carries amounts (service_providers row)
-  // for the display name.
-  const existingHasAmounts =
-    (existing.amount_due ?? 0) !== 0 ||
-    (existing.amount_paid ?? 0) !== 0 ||
-    (existing.net_payable_ttc ?? 0) !== 0;
-  const incomingHasAmounts =
-    (p.amount_due ?? 0) !== 0 || (p.amount_paid ?? 0) !== 0 || (p.net_payable_ttc ?? 0) !== 0;
-  if (!existingHasAmounts && incomingHasAmounts && p.name) existing.name = p.name;
-
-  // p_outstanding_payable_pcurrency only means money due when positive; negative
-  // values are credits/overpayments. Both due and paid in financials are
-  // partner-level totals that repeat on every quote row. When multiple quote
-  // rows collapse into one partner line, keep the single total with the
-  // largest magnitude instead of summing repeated totals.
-  const existingDue = existing.amount_due ?? 0;
-  const incomingDue = Math.max(p.amount_due ?? 0, 0);
-  existing.amount_due = Math.abs(incomingDue) > Math.abs(existingDue) ? incomingDue : existingDue;
-
-  const existingPaid = existing.amount_paid ?? 0;
-  const incomingPaid = p.amount_paid ?? 0;
-  existing.amount_paid =
-    Math.abs(incomingPaid) > Math.abs(existingPaid) ? incomingPaid : existingPaid;
-
-  existing.net_payable_ttc = (existing.net_payable_ttc ?? 0) + (p.net_payable_ttc ?? 0);
-  existing.is_outstanding = Boolean(existing.is_outstanding) || Boolean(p.is_outstanding);
-  existing.is_cancelled = Boolean(existing.is_cancelled) && Boolean(p.is_cancelled);
-  if (!existing.email && p.email) existing.email = p.email;
-  if (!existing.phone && p.phone) existing.phone = p.phone;
-  if (!existing.owner_code && p.owner_code) existing.owner_code = p.owner_code;
-  if (!existing.vat_raw && p.vat_raw) existing.vat_raw = p.vat_raw;
-  if (!existing.tax_identifier && p.tax_identifier) existing.tax_identifier = p.tax_identifier;
-  if (!existing.country && p.country) existing.country = p.country;
-  if (!existing.currency && p.currency) existing.currency = p.currency;
-  if (
-    !existing.payout_fx_date ||
-    (p.payout_fx_date && p.payout_fx_date > existing.payout_fx_date)
-  ) {
-    existing.payout_fx_date = p.payout_fx_date;
   }
 }
 
