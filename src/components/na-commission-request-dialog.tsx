@@ -16,6 +16,8 @@ export type NaCommissionTarget = {
   contactName: string | null;
   subject: string;
   body: string;
+  /** Copied in — the booking's event manager, when we can resolve them. */
+  cc?: string;
   mode: "commission" | "refund" | "combined";
 };
 
@@ -44,7 +46,7 @@ export function NaCommissionRequestDialog({
     const map = new Map<string, OutgoingMessage>();
     for (const t of targets) {
       const k = key(t);
-      map.set(k, edits[k] ?? { to: t.address, subject: t.subject, body: t.body });
+      map.set(k, edits[k] ?? { to: t.address, cc: t.cc, subject: t.subject, body: t.body });
     }
     return map;
   }, [targets, edits]);
@@ -116,6 +118,11 @@ export function NaCommissionRequestDialog({
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13px] font-semibold">{t.partnerName ?? "—"}</span>
                     <span className="block truncate text-[11.5px] text-slate-500">{t.address}</span>
+                    {message.cc && (
+                      <span className="block truncate text-[11.5px] text-slate-500">
+                        cc {message.cc}
+                      </span>
+                    )}
                     <span className="mt-0.5 flex flex-wrap items-center gap-2">
                       <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-[1px] text-[10px] font-medium text-slate-600">
                         {t.eventRef}
@@ -180,6 +187,12 @@ export function NaCommissionRequestDialog({
                     <div className="text-[11px] text-slate-500">
                       <span className="font-medium">To:</span> {t.address}
                     </div>
+                    {message.cc && (
+                      <div className="text-[11px] text-slate-500">
+                        <span className="font-medium">Cc:</span> {message.cc}{" "}
+                        <span className="text-slate-400">(event manager)</span>
+                      </div>
+                    )}
                     <input
                       value={message.subject}
                       disabled={requests.running || finished}

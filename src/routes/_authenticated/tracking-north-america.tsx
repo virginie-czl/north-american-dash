@@ -662,6 +662,11 @@ function NaPage() {
         const contact = naContactFor(p);
         if (!contact.address) continue;
 
+        // The booking's event manager knows the file — copy them, and never
+        // the provider's own address twice over.
+        const em = r.em_referent_email?.trim() ?? "";
+        const cc = em && em.toLowerCase() !== contact.address.toLowerCase() ? em : undefined;
+
         if (cb.commission > 0.01 && cb.refund > 0.01) {
           const combined = composeNaCombinedRequest(r, p, contact);
           if (combined) {
@@ -670,6 +675,7 @@ function NaPage() {
               partnerName: p.name,
               address: contact.address,
               contactName: contact.name,
+              cc,
               ...combined,
               mode: "combined",
             });
@@ -682,6 +688,7 @@ function NaPage() {
               partnerName: p.name,
               address: contact.address,
               contactName: contact.name,
+              cc,
               ...commission,
               mode: "commission",
             });
@@ -694,6 +701,7 @@ function NaPage() {
               partnerName: p.name,
               address: contact.address,
               contactName: contact.name,
+              cc,
               ...refund,
               mode: "refund",
             });

@@ -282,7 +282,13 @@ export const scanEventsForFacts = createServerFn({ method: "POST" })
 // difference between a usable tool and one you cannot trust with a chase round.
 // ---------------------------------------------------------------------------
 
-export type OutgoingMessage = { to: string; subject: string; body: string };
+export type OutgoingMessage = {
+  to: string;
+  subject: string;
+  body: string;
+  /** Colleagues copied in, e.g. the booking's event manager. Comma-separated. */
+  cc?: string;
+};
 
 export type BatchResult = {
   to: string;
@@ -291,6 +297,28 @@ export type BatchResult = {
   link?: string;
   error?: string;
 };
+
+/**
+ * Keeps only well-formed addresses, and nothing that could break the header.
+ *
+ * A copy line is assembled into a MIME header, so a value carrying a newline
+ * could add headers of its own. Addresses come from our own directory today,
+ * which is exactly the assumption worth not depending on.
+ */
+export function sanitizeAddressList(raw: string): string {
+  return raw
+    .split(",")
+    .map((a) => a.trim())
+    .filter(
+      (a) =>
+        a.length > 0 &&
+        a.length < 255 &&
+        !/[\r\n<>";]/.test(a) &&
+        /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a),
+    )
+    .slice(0, 5)
+    .join(", ");
+}
 
 function validateBatch(input: { messages: OutgoingMessage[]; mode: "draft" | "send" }) {
   if (!Array.isArray(input?.messages)) throw new Error("messages is required");
@@ -301,6 +329,9 @@ function validateBatch(input: { messages: OutgoingMessage[]; mode: "draft" | "se
       to: typeof m?.to === "string" ? m.to.trim() : "",
       subject: typeof m?.subject === "string" ? m.subject.trim() : "",
       body: typeof m?.body === "string" ? m.body.trim() : "",
+      // Only real addresses reach the header — a stray value must never be able
+      // to inject a line of its own into the MIME.
+      cc: typeof m?.cc === "string" ? sanitizeAddressList(m.cc) : "",
     }))
     .filter((m) => {
       if (!m.to.includes("@") || /[,;]/.test(m.to)) return false;
@@ -326,11 +357,18 @@ export const sendPartnerRequests = createServerFn({ method: "POST" })
     const results: BatchResult[] = [];
     for (const message of data.messages) {
       try {
+        const cc = message.cc || undefined;
         if (data.mode === "draft") {
-          const draft = await createDraft(session.email, message.to, message.subject, message.body);
+          const draft = await createDraft(
+            session.email,
+            message.to,
+            message.subject,
+            message.body,
+            cc,
+          );
           results.push({ to: message.to, ok: true, link: draft.link });
         } else {
-          await sendMessage(session.email, message.to, message.subject, message.body);
+          await sendMessage(session.email, message.to, message.subject, message.body, cc);
           results.push({ to: message.to, ok: true });
         }
       } catch (error) {

@@ -296,6 +296,18 @@ anything past that is a refund to ask for. That gives three emails — commissio
 refund, or one covering both — composed in `src/lib/na-commission-requests.ts`
 (pure, `npx tsx src/lib/na-commission-requests.test.mjs`).
 
+**The event manager is copied.** `fct_export_events_scd1` carries the EM's
+display name but no address, so the query resolves it against the admin
+directory: all 17 North American EMs match, on 178 of 287 accepted bookings (the
+rest have no EM recorded and simply go out with no copy line). The Cc shows in
+the preview before anything is sent, and a name that stops resolving drops out of
+the copy line rather than breaking the email. Note that `Support Naboo` is an EM
+of record on 55 bookings and resolves to the shared `support@naboo.app` inbox.
+
+Addresses are sanitised before they reach the MIME header
+(`npx tsx src/lib/gmail-addresses.test.mjs`) — a copy line is a header, and a
+value carrying a newline could otherwise add headers of its own.
+
 Every one of them itemises: the commissionable lines, the base, the rate, and
 each payment we made with its date, method and bank reference. A bare total
 invites "where does that come from?" and a second round trip, so the breakdown

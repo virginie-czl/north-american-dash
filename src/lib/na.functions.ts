@@ -63,6 +63,8 @@ export interface NaRow {
   company_name: string | null;
   sales_referent: string | null;
   em_referent: string | null;
+  /** The EM's address, resolved from their name — copied on recovery emails. */
+  em_referent_email: string | null;
   days_before_start: number | null;
   currency_client: string | null;
   event_name: string | null;
@@ -435,6 +437,18 @@ partners_fi_fallback AS (
     AND part.quoteCancelledAt IS NULL
   GROUP BY rid
 ),
+-- The event manager's address. fct_export_events_scd1 only carries their display
+-- name, so it is matched against the admin directory: every North American EM
+-- resolves this way today, and one that stops resolving simply drops out of the
+-- copy line rather than breaking the email.
+em_directory AS (
+  SELECT
+    LOWER(TRIM(CONCAT(IFNULL(first_name, ''), ' ', IFNULL(last_name, '')))) AS full_name,
+    ANY_VALUE(email) AS email
+  FROM \`naboo-app-365515.raw_naboo_data.admins\`
+  WHERE email IS NOT NULL AND email != ''
+  GROUP BY full_name
+),
 base AS (
   SELECT
     e.client_request_readable_id AS readable_id,
@@ -442,6 +456,7 @@ base AS (
     e.company_name,
     e.sales_referent,
     e.em_referent,
+    em.email AS em_referent_email,
     e.days_before_start,
     COALESCE(e.currency_client, fi.currency) AS currency_client,
     e.event_name,
@@ -486,11 +501,12 @@ base AS (
   LEFT JOIN client_invoices civ ON civ.crid = e.clientRequestId
   LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
   LEFT JOIN partners_fi_fallback pfb ON pfb.rid = e.client_request_readable_id
+  LEFT JOIN em_directory em ON em.full_name = LOWER(TRIM(e.em_referent))
   WHERE e.bk_market = 'North America'
     AND e.booking_status = 'ACCEPTED'
 )
 SELECT
-  readable_id, client_request_id, company_name, sales_referent, em_referent, days_before_start,
+  readable_id, client_request_id, company_name, sales_referent, em_referent, em_referent_email, days_before_start,
   currency_client, event_name, start_date, end_date, event_type, transaction_kind, participants, billing_entity, booking_url,
   client_service_fees_ttc,
   gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy, invoices_json,
