@@ -304,6 +304,13 @@ the preview before anything is sent, and a name that stops resolving drops out o
 the copy line rather than breaking the email. Note that `Support Naboo` is an EM
 of record on 55 bookings and resolves to the shared `support@naboo.app` inbox.
 
+**The rate is a fraction scaled by a million**, so a percentage is
+`price_option_fees_owner_fees_rate / 10000`: 120000 is the standard 12% and
+150000 the negotiated 15% ceiling. Dividing by 1 000 instead put every rate out
+by a factor of ten — providers were being told their commission rate was 100% on
+a 10% deal. Printing the base, the rate and the amount together is what makes an
+error like that visible: 80 000.00 at 10% has to come to the 8 000.00 charged.
+
 Addresses are sanitised before they reach the MIME header
 (`npx tsx src/lib/gmail-addresses.test.mjs`) — a copy line is a header, and a
 value carrying a newline could otherwise add headers of its own.
