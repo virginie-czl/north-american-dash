@@ -7,6 +7,8 @@
  * slowly, and the Refresh button bypasses the cache when freshness matters.
  */
 const DEFAULT_TTL_SECONDS = 300;
+/** Ten years: "whatever is in there", for falling back when a query fails. */
+export const ANY_AGE_SECONDS = 315_360_000;
 
 export async function readCache<T>(
   key: string,

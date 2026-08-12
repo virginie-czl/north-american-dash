@@ -6,6 +6,19 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
+// The tracker queries are slow enough that BigQuery hands back a still-running
+// job, and waiting one out needs more than Vercel's default function budget: cut
+// the function short and the page fails with "job did not complete in time".
+// Kept in step with TOTAL_BUDGET_MS in bigquery.server.ts.
+//
+// `vercel` is missing from the Lovable config's nitro types but nitro passes it
+// straight through — verified as maxDuration in
+// .vercel/output/functions/__server.func/.vc-config.json.
+const vercelNitro = {
+  preset: "vercel",
+  vercel: { functions: { maxDuration: 60 } },
+} as unknown as { preset: string };
+
 export default defineConfig({
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
@@ -15,5 +28,5 @@ export default defineConfig({
   // The Lovable config defaults the nitro build target to Cloudflare, which produces
   // output Vercel can't serve (404: NOT_FOUND). Force the Vercel preset when building
   // on Vercel (VERCEL=1 is set in their build environment); everywhere else keeps the default.
-  ...(process.env.VERCEL ? { nitro: { preset: "vercel" } } : {}),
+  ...(process.env.VERCEL ? { nitro: vercelNitro } : {}),
 });

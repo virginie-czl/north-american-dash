@@ -122,18 +122,72 @@ function convertValue(value: unknown, type: string): unknown {
   }
 }
 
+/** How long the first call waits before we start polling the job by id. */
+const FIRST_WAIT_MS = 20_000;
+/** How long each follow-up wait blocks for. */
+const POLL_WAIT_MS = 10_000;
+/** Total budget for one query, polling included. Keep under the function limit. */
+const TOTAL_BUDGET_MS = 50_000;
+
+type QueryPayload = {
+  jobComplete?: boolean;
+  jobReference?: { jobId?: string; location?: string };
+  schema?: { fields: Array<{ name: string; type: string }> };
+  rows?: Array<{ f: Array<{ v: unknown }> }>;
+  pageToken?: string;
+};
+
+async function readPayload(response: Response): Promise<QueryPayload> {
+  if (!response.ok) {
+    const raw = await response.text();
+    let message = raw;
+    try {
+      message = (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? raw;
+    } catch {
+      /* keep the raw body */
+    }
+    throw new Error(`BigQuery: ${message}`);
+  }
+  return (await response.json()) as QueryPayload;
+}
+
+/**
+ * Collect one page of an already-started job.
+ *
+ * `jobs.query` only ever waits a fixed time before answering; a slower query
+ * comes back with `jobComplete: false` while the job carries on running server
+ * side. Reading it back by id is how you wait for it — the alternative, which
+ * this used to do, is to call a still-running job a failure.
+ */
+async function fetchResults(
+  accessToken: string,
+  jobId: string,
+  location: string,
+  pageToken?: string,
+): Promise<QueryPayload> {
+  const url = new URL(
+    `https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT_ID}/queries/${jobId}`,
+  );
+  url.searchParams.set("location", location);
+  url.searchParams.set("timeoutMs", String(POLL_WAIT_MS));
+  if (pageToken) url.searchParams.set("pageToken", pageToken);
+  return readPayload(await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } }));
+}
+
 export async function runBigQuery(
   query: string,
   params?: Record<string, string | number>,
   location = "EU",
 ): Promise<BigQueryRow[]> {
   const accessToken = await getAccessToken();
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
 
   const body: Record<string, unknown> = {
     query,
     useLegacySql: false,
     location,
     maximumBytesBilled: "5368709120", // 5 GB safety cap
+    timeoutMs: FIRST_WAIT_MS,
   };
 
   if (params && Object.keys(params).length > 0) {
@@ -157,36 +211,43 @@ export async function runBigQuery(
     },
   );
 
-  if (!response.ok) {
-    const raw = await response.text();
-    let message = raw;
-    try {
-      message = (JSON.parse(raw) as { error?: { message?: string } }).error?.message ?? raw;
-    } catch {
-      /* keep the raw body */
+  let payload = await readPayload(response);
+  const jobId = payload.jobReference?.jobId;
+  const jobLocation = payload.jobReference?.location ?? location;
+
+  // Wait the job out rather than reporting a failure the moment it outlives one
+  // request. Only a job still unfinished at the budget is given up on.
+  while (payload.jobComplete === false) {
+    if (!jobId) throw new Error("BigQuery: no job id to wait on.");
+    if (Date.now() >= deadline) {
+      throw new Error("BigQuery job did not complete in time — please retry.");
     }
-    throw new Error(`BigQuery: ${message}`);
+    payload = await fetchResults(accessToken, jobId, jobLocation);
   }
 
-  const result = (await response.json()) as {
-    jobComplete?: boolean;
-    schema?: { fields: Array<{ name: string; type: string }> };
-    rows?: Array<{ f: Array<{ v: unknown }> }>;
-  };
-
-  // A timed-out job returns 200 with no rows; treat that as an error rather than
-  // reporting an empty result (or, for writes, a silent no-op).
-  if (result.jobComplete === false) {
-    throw new Error("BigQuery job did not complete in time — please retry.");
-  }
-  const schema = result.schema?.fields || [];
-
-  return (result.rows || []).map((row) => {
-    const obj: BigQueryRow = {};
-    row.f.forEach((cell, i) => {
-      const field = schema[i];
-      obj[field.name] = convertValue(cell.v, field.type) as BigQueryValue;
+  const schema = payload.schema?.fields || [];
+  const toRows = (page: QueryPayload): BigQueryRow[] =>
+    (page.rows || []).map((row) => {
+      const obj: BigQueryRow = {};
+      row.f.forEach((cell, i) => {
+        const field = schema[i];
+        obj[field.name] = convertValue(cell.v, field.type) as BigQueryValue;
+      });
+      return obj;
     });
-    return obj;
-  });
+
+  const rows = toRows(payload);
+  // Big result sets come back a page at a time. Reading only the first page
+  // returns a truncated table that looks perfectly healthy.
+  let pageToken = payload.pageToken;
+  while (pageToken) {
+    if (!jobId) break;
+    if (Date.now() >= deadline) {
+      throw new Error("BigQuery returned more rows than we could read in time — please retry.");
+    }
+    const page = await fetchResults(accessToken, jobId, jobLocation, pageToken);
+    rows.push(...toRows(page));
+    pageToken = page.pageToken;
+  }
+  return rows;
 }

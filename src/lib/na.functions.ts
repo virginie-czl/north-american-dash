@@ -519,7 +519,8 @@ export const getNaRows = createServerFn({ method: "GET" })
     // explicitly allowed to open this tracker.
     const { requireTracker } = await import("./session.server");
     await requireTracker("na");
-    const { readCache, writeCache, cacheAge } = await import("./query-cache.server");
+    const { readCache, writeCache, cacheAge, ANY_AGE_SECONDS } =
+      await import("./query-cache.server");
 
     if (!data.force) {
       const hit = await readCache<NaRow[]>(CACHE_KEY);
@@ -527,9 +528,22 @@ export const getNaRows = createServerFn({ method: "GET" })
     }
 
     const { runBigQuery } = await import("./bigquery.server");
-    const rows = (await runBigQuery(QUERY)) as unknown as NaRow[];
-    await writeCache(CACHE_KEY, rows);
-    return { rows, cachedAgeSeconds: 0 };
+    try {
+      const rows = (await runBigQuery(QUERY)) as unknown as NaRow[];
+      await writeCache(CACHE_KEY, rows);
+      return { rows, cachedAgeSeconds: 0 };
+    } catch (error) {
+      // This query is the heaviest of the three and BigQuery does occasionally
+      // make it wait. Costing the page its freshness beats costing it its
+      // contents: serve the last good answer, which the header already dates,
+      // and only surface the failure when there is nothing to fall back on.
+      const stale = await readCache<NaRow[]>(CACHE_KEY, ANY_AGE_SECONDS);
+      if (stale) {
+        console.error("NA query failed, serving cached rows:", error);
+        return { rows: stale, cachedAgeSeconds: await cacheAge(CACHE_KEY) };
+      }
+      throw error;
+    }
   });
 
 export function parseNaPartners(json: string | null): NaPartnerLine[] {

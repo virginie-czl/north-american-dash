@@ -47,6 +47,22 @@ npm run build      # must pass before committing
 
 Deploys on Vercel out of the box: `vite.config.ts` forces the nitro `vercel` preset when
 `VERCEL=1` (Vercel sets it automatically). Add the four env vars in the Vercel project.
+The same file sets `maxDuration: 60` on the function, because the trackers wait on
+BigQuery — see below.
+
+### Waiting on BigQuery
+
+`jobs.query` answers after a fixed wait whether or not the query has finished; a
+slow one comes back `jobComplete: false` while the job carries on running. That
+is not a failure, it is a job to pick up by id — `runBigQuery` polls
+`getQueryResults` until it completes or a 50-second budget runs out. It also
+follows `pageToken`: a large result arrives a page at a time, and reading only
+the first page returns a short table that looks perfectly healthy.
+
+Marketplace NA is the heaviest query and the only cached one. When it does fail,
+the server falls back to the last good answer rather than the error page — the
+header already dates the figures ("il y a 12 min"), and *Rafraîchir* forces a
+recompute.
 
 
 ### Partner fact scanning
