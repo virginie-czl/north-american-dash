@@ -304,6 +304,18 @@ the preview before anything is sent, and a name that stops resolving drops out o
 the copy line rather than breaking the email. Note that `Support Naboo` is an EM
 of record on 55 bookings and resolves to the shared `support@naboo.app` inbox.
 
+**An ask that went out is remembered.** The tracker decides who to chase from
+the amounts, and those do not move until the partner pays — so a commission
+asked for in July was still being offered as *Ask for the commission* in August,
+with nothing on screen to say it had ever been sent. `na_recovery_request` now
+records the fact of each ask (event, partner, which email, when, how many times,
+by whom — never a subject or body). The partner card shows *Asked 12 Aug*, the
+button becomes *Ask again*, and the batch buttons count only partners nobody has
+asked yet; a chase stays available per partner. Drafts are deliberately not
+recorded — a draft in Gmail is not an ask. For a send that predates the log, or
+one made straight from Gmail, *Already asked — note it* records it without
+sending anything.
+
 **The rate is a fraction scaled by a million**, so a percentage is
 `price_option_fees_owner_fees_rate / 10000`: 120000 is the standard 12% and
 150000 the negotiated 15% ceiling. Dividing by 1 000 instead put every rate out

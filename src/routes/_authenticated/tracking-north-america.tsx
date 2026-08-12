@@ -22,6 +22,11 @@ import {
   type NaFinancialSummary,
 } from "@/lib/na-financial-summary.functions";
 import { partnerKey } from "@/lib/annotations.functions";
+import {
+  fetchNaRecoveryRequests,
+  recordNaRecoveryRequests,
+  type NaRecoveryRequest,
+} from "@/lib/na-recovery-log.functions";
 import { useActionIndex } from "@/lib/use-partner-actions";
 import { useGmailConnection, useFactScan } from "@/lib/use-gmail";
 import {
@@ -613,6 +618,41 @@ function NaPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["slack-card-approvals"] }),
   });
 
+  // Recovery emails already sent, so the tracker stops offering an ask that has
+  // gone out. Keyed the same way as the summaries: event + partner.
+  const { data: recoveryLog } = useQuery({
+    queryKey: ["na-recovery-log"],
+    queryFn: async () => {
+      const rows = await fetchNaRecoveryRequests();
+      const map = new Map<string, NaRecoveryRequest>();
+      for (const r of rows) map.set(`${r.event_ref}::${r.partner_key}`, r);
+      return map;
+    },
+    staleTime: 60_000,
+  });
+
+  const askedFor = useCallback(
+    (eventRef: string, partnerName: string | null | undefined) =>
+      recoveryLog?.get(`${eventRef}::${partnerKey(partnerName ?? "")}`) ?? null,
+    [recoveryLog],
+  );
+
+  /**
+   * Recording an ask that went out before this tracker kept track — or one sent
+   * straight from Gmail. Without it the log only ever knows about the future,
+   * and every commission asked for last month still reads as untouched.
+   */
+  const markAsked = useMutation({
+    mutationFn: (row: {
+      event_ref: string;
+      partner_key: string;
+      partner_name: string | null;
+      mode: string;
+      sent_to: string | null;
+    }) => recordNaRecoveryRequests({ data: { rows: [row] } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["na-recovery-log"] }),
+  });
+
   const { data: financialSummaries } = useQuery({
     queryKey: ["na-financial-summaries"],
     queryFn: async () => {
@@ -667,6 +707,12 @@ function NaPage() {
         const em = r.em_referent_email?.trim() ?? "";
         const cc = em && em.toLowerCase() !== contact.address.toLowerCase() ? em : undefined;
 
+        // Already asked? The amounts will not move until they pay, so the ask
+        // has to be remembered or it gets offered again on every load.
+        const asked = askedFor(eventRef, p.name);
+        const askedAt = asked?.last_asked_at ?? undefined;
+        const timesAsked = asked?.times_asked ?? 0;
+
         if (cb.commission > 0.01 && cb.refund > 0.01) {
           const combined = composeNaCombinedRequest(r, p, contact);
           if (combined) {
@@ -676,6 +722,8 @@ function NaPage() {
               address: contact.address,
               contactName: contact.name,
               cc,
+              askedAt,
+              timesAsked,
               ...combined,
               mode: "combined",
             });
@@ -689,6 +737,8 @@ function NaPage() {
               address: contact.address,
               contactName: contact.name,
               cc,
+              askedAt,
+              timesAsked,
               ...commission,
               mode: "commission",
             });
@@ -702,6 +752,8 @@ function NaPage() {
               address: contact.address,
               contactName: contact.name,
               cc,
+              askedAt,
+              timesAsked,
               ...refund,
               mode: "refund",
             });
@@ -710,7 +762,13 @@ function NaPage() {
       }
     }
     return targets;
-  }, [sorted]);
+  }, [sorted, askedFor]);
+
+  /** Never asked. The batch buttons offer these; a chase stays a per-partner call. */
+  const unaskedRecoveryTargets = useMemo(
+    () => commissionRefundTargets.filter((t) => !t.askedAt),
+    [commissionRefundTargets],
+  );
 
   useRegisterTrackerActions(
     {
@@ -1071,14 +1129,14 @@ function NaPage() {
                   </button>
                 );
               })}
-              {gmailConnection?.connected && commissionRefundTargets.length > 0 && (
+              {gmailConnection?.connected && unaskedRecoveryTargets.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => commissionRefundDialog.open(commissionRefundTargets)}
+                  onClick={() => commissionRefundDialog.open(unaskedRecoveryTargets)}
                   className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
                 >
-                  Recover from {commissionRefundTargets.length} partner
-                  {commissionRefundTargets.length > 1 ? "s" : ""}
+                  Recover from {unaskedRecoveryTargets.length} partner
+                  {unaskedRecoveryTargets.length > 1 ? "s" : ""}
                 </button>
               )}
               {/* Say when the figures were computed, so a cached page never looks
@@ -1246,7 +1304,9 @@ function NaPage() {
                       if (!gmailConnection?.connected) return null;
                       // Marketplace NA only ever asks for commission or a refund —
                       // bank details and tax numbers are a L'Oreal concern.
-                      const mine = commissionRefundTargets.filter((t) => t.eventRef === selRef);
+                      // Header button: the ones nobody has asked yet. A partner
+                      // already chased is reachable from their own card.
+                      const mine = unaskedRecoveryTargets.filter((t) => t.eventRef === selRef);
                       if (mine.length === 0) return null;
                       const anyRefund = mine.some((t) => t.mode !== "commission");
                       return (
@@ -1383,6 +1443,22 @@ function NaPage() {
                     actionFor={actionFor}
                     factsMap={factsMap}
                     cardApprovedCodes={cardApprovedCodes}
+                    askedFor={(name) => askedFor(selRef, name)}
+                    onMarkAsked={(p) => {
+                      const cb = partnerClawback(p);
+                      markAsked.mutate({
+                        event_ref: selRef,
+                        partner_key: partnerKey(p.name ?? ""),
+                        partner_name: p.name,
+                        mode:
+                          cb.commission > 0.01 && cb.refund > 0.01
+                            ? "combined"
+                            : cb.commission > 0.01
+                              ? "commission"
+                              : "refund",
+                        sent_to: p.email,
+                      });
+                    }}
                     onRequest={(p) => {
                       // Same targets the list-level button builds, narrowed to
                       // this partner — no new email logic.
@@ -1880,6 +1956,16 @@ function StatusCell({
  * Only the presentation changed — stickers, financial summaries and every amount
  * come from the same helpers as the table did.
  */
+/** "12 Aug" — a date you can judge staleness by without doing arithmetic. */
+function fmtAskedOn(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString("en-CA", { day: "numeric", month: "short" });
+  } catch {
+    return iso.slice(0, 10);
+  }
+}
+
 function PartnerSectionCard({
   id,
   partners,
@@ -1887,6 +1973,8 @@ function PartnerSectionCard({
   actionFor,
   factsMap,
   cardApprovedCodes,
+  askedFor,
+  onMarkAsked,
   onRequest,
 }: {
   id: string;
@@ -1895,6 +1983,8 @@ function PartnerSectionCard({
   actionFor: ReturnType<typeof useActionIndex>["actionFor"];
   factsMap: ReturnType<typeof useActionIndex>["factsMap"];
   cardApprovedCodes: ReturnType<typeof useActionIndex>["cardApprovedCodes"];
+  askedFor: (partnerName: string | null | undefined) => NaRecoveryRequest | null;
+  onMarkAsked: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
@@ -1936,6 +2026,9 @@ function PartnerSectionCard({
         const overpaid = (p.outstanding ?? 0) < -0.01;
         const claw = partnerClawback(p);
         const hasCommissionToClaim = claw.commission > 0.01;
+        // What we already sent them. The amounts stay put until they pay, so
+        // without this the card asks for the same money indefinitely.
+        const asked = overpaid || hasCommissionToClaim ? askedFor(p.name) : null;
         // A card approved in #finance-paiement-by-card means the money is
         // already available to the provider: the next move is theirs, not ours,
         // and it is certainly not a bank-details chase.
@@ -1976,6 +2069,24 @@ function PartnerSectionCard({
                 >
                   {p.email}
                 </a>
+              )}
+              {asked && (
+                <span
+                  className="mt-[3px] block text-xs font-medium text-[#B45309]"
+                  title={`Last sent by ${asked.last_asked_by ?? "someone"}`}
+                >
+                  Asked {fmtAskedOn(asked.last_asked_at)}
+                  {asked.times_asked > 1 ? ` · ${asked.times_asked}×` : ""}
+                </span>
+              )}
+              {!asked && (overpaid || hasCommissionToClaim) && (
+                <button
+                  type="button"
+                  onClick={() => onMarkAsked(p)}
+                  className="mt-[3px] block text-xs text-[#6B7280] underline-offset-2 hover:text-navy hover:underline"
+                >
+                  Already asked — note it
+                </button>
               )}
               {!prov && action && (
                 <>
@@ -2078,17 +2189,19 @@ function PartnerSectionCard({
                       from this screen. */}
                   {action?.code === "settled"
                     ? "Nothing to do"
-                    : overpaid
-                      ? "Ask for the refund"
-                      : hasCommissionToClaim
-                        ? "Ask for the commission"
-                        : cardIssued
-                          ? "Card to debit"
-                          : action?.code === "ours_pay"
-                            ? p.payment_method === "CREDIT_CARD"
-                              ? "Card to debit"
-                              : "Pay by transfer"
-                            : "Open in back office"}
+                    : asked
+                      ? "Ask again"
+                      : overpaid
+                        ? "Ask for the refund"
+                        : hasCommissionToClaim
+                          ? "Ask for the commission"
+                          : cardIssued
+                            ? "Card to debit"
+                            : action?.code === "ours_pay"
+                              ? p.payment_method === "CREDIT_CARD"
+                                ? "Card to debit"
+                                : "Pay by transfer"
+                              : "Open in back office"}
                 </button>
               )}
             </div>

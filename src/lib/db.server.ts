@@ -170,6 +170,23 @@ const SCHEMA_STATEMENTS = [
      generated_by text,
      PRIMARY KEY (event_ref, partner_key)
    )`,
+
+  // Recovery emails already sent on Marketplace NA. Without this the tracker
+  // reads only the amounts, which do not move until the partner actually pays,
+  // so it kept offering to ask again for a commission that was asked for weeks
+  // ago. Written when a message is really sent — a draft is not an ask.
+  `CREATE TABLE IF NOT EXISTS na_recovery_request (
+     event_ref text NOT NULL,
+     partner_key text NOT NULL,
+     partner_name text,
+     mode text NOT NULL,
+     sent_to text,
+     first_asked_at timestamptz NOT NULL DEFAULT now(),
+     last_asked_at timestamptz NOT NULL DEFAULT now(),
+     times_asked integer NOT NULL DEFAULT 1,
+     last_asked_by text,
+     PRIMARY KEY (event_ref, partner_key)
+   )`,
 ];
 
 /** Applies the schema once per instance. Every statement is idempotent. */

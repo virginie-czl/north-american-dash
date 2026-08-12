@@ -8,6 +8,9 @@ import { useMemo, useState } from "react";
 import { AlertCircle, Check, ChevronDown, ChevronUp, Send, FileText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePartnerRequests, type OutgoingMessage } from "@/lib/use-gmail";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { partnerKey } from "@/lib/annotations.functions";
+import { recordNaRecoveryRequests } from "@/lib/na-recovery-log.functions";
 
 export type NaCommissionTarget = {
   eventRef: string;
@@ -18,6 +21,9 @@ export type NaCommissionTarget = {
   body: string;
   /** Copied in — the booking's event manager, when we can resolve them. */
   cc?: string;
+  /** When this exact ask last went out, if it ever did. */
+  askedAt?: string;
+  timesAsked?: number;
   mode: "commission" | "refund" | "combined";
 };
 
@@ -27,6 +33,18 @@ const MODE_LABEL: Record<NaCommissionTarget["mode"], string> = {
   combined: "commission + refund",
 };
 
+/** "12 Aug" — enough to see at a glance whether this is stale or yesterday. */
+function fmtAskedAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString("en-CA", { day: "numeric", month: "short" });
+  } catch {
+    return iso.slice(0, 10);
+  }
+}
+
+/** Identifies one ask: this partner's address, on this booking, for this claim. */
+const key = (t: NaCommissionTarget) => `${t.address}::${t.eventRef}::${t.mode}`;
+
 export function NaCommissionRequestDialog({
   targets,
   onClose,
@@ -34,13 +52,15 @@ export function NaCommissionRequestDialog({
   targets: NaCommissionTarget[];
   onClose: () => void;
 }) {
-  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  // Anything already asked starts unticked: a chase is a decision to make, not
+  // a default. Untick it back on to send again.
+  const [excluded, setExcluded] = useState<Set<string>>(
+    () => new Set(targets.filter((t) => t.askedAt).map((t) => key(t))),
+  );
   const [expanded, setExpanded] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, OutgoingMessage>>({});
   const [confirmSend, setConfirmSend] = useState(false);
   const requests = usePartnerRequests();
-
-  const key = (t: NaCommissionTarget) => `${t.address}::${t.eventRef}::${t.mode}`;
 
   const composedMap = useMemo(() => {
     const map = new Map<string, OutgoingMessage>();
@@ -50,6 +70,41 @@ export function NaCommissionRequestDialog({
     }
     return map;
   }, [targets, edits]);
+
+  const qc = useQueryClient();
+  const logAsk = useMutation({
+    mutationFn: (rows: Parameters<typeof recordNaRecoveryRequests>[0]["data"]["rows"]) =>
+      recordNaRecoveryRequests({ data: { rows } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["na-recovery-log"] }),
+  });
+
+  /**
+   * Send, then write down that we did. Drafts are deliberately not recorded —
+   * a draft sitting in Gmail is not an ask, and marking it as one would hide a
+   * partner who never actually heard from us.
+   */
+  async function sendSelected() {
+    const results = await requests.run(messages, "send");
+    const sent = new Set(results.filter((r) => r.ok).map((r) => r.to.toLowerCase()));
+    // One message per address per run, so the first target for an address is
+    // the one that actually went out.
+    const seen = new Set<string>();
+    const rows = selected
+      .filter((t) => {
+        const addr = t.address.toLowerCase();
+        if (!sent.has(addr) || seen.has(addr)) return false;
+        seen.add(addr);
+        return true;
+      })
+      .map((t) => ({
+        event_ref: t.eventRef,
+        partner_key: partnerKey(t.partnerName ?? ""),
+        partner_name: t.partnerName,
+        mode: t.mode,
+        sent_to: t.address,
+      }));
+    if (rows.length > 0) logAsk.mutate(rows);
+  }
 
   const selected = targets.filter((t) => !excluded.has(key(t)));
   const messages = selected.map((t) => composedMap.get(key(t))!).filter(Boolean);
@@ -121,6 +176,12 @@ export function NaCommissionRequestDialog({
                     {message.cc && (
                       <span className="block truncate text-[11.5px] text-slate-500">
                         cc {message.cc}
+                      </span>
+                    )}
+                    {t.askedAt && (
+                      <span className="block text-[11.5px] font-medium text-amber-800">
+                        Already asked {fmtAskedAt(t.askedAt)}
+                        {t.timesAsked && t.timesAsked > 1 ? ` · ${t.timesAsked}×` : ""}
                       </span>
                     )}
                     <span className="mt-0.5 flex flex-wrap items-center gap-2">
@@ -270,7 +331,7 @@ export function NaCommissionRequestDialog({
                       size="sm"
                       className="h-8 gap-1.5 border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
                       disabled={requests.running || messages.length === 0}
-                      onClick={() => requests.run(messages, "send")}
+                      onClick={() => void sendSelected()}
                     >
                       <Send className="h-3.5 w-3.5" aria-hidden="true" />
                       Confirm — send {messages.length}
