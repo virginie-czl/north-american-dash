@@ -66,7 +66,7 @@ export interface SlaRow {
   start_date: string | null;
   end_date: string | null;
   purchase_order_number: string | null;
-  purchase_order_updated_at: string | null;
+  purchase_order_date: string | null;
   partners_json: string | null;
   invoices_json: string | null;
 }
@@ -214,6 +214,18 @@ invoices AS (
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
   GROUP BY inv.clientRequestId
 ),
+invoice_po AS (
+  SELECT
+    inv.clientRequestId AS client_request_id,
+    ARRAY_AGG(TRIM(inv.purchaseOrderNumber) ORDER BY inv.issueDate LIMIT 1)[SAFE_OFFSET(0)] AS purchase_order_number,
+    -- We demonstrably held the PO by the time we billed against it.
+    DATE(MIN(inv.issueDate)) AS known_by
+  FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
+  WHERE inv.invoiceDirection = 'INCOME'
+    -- A free-text field: "pas de PO" and "" are not purchase orders.
+    AND REGEXP_CONTAINS(IFNULL(inv.purchaseOrderNumber, ''), r'[0-9]')
+  GROUP BY inv.clientRequestId
+),
 income_invoice_dates AS (
   SELECT
     clientRequestId AS client_request_id,
@@ -357,9 +369,18 @@ SELECT
   t.gmv.live_service_fees_ht AS live_service_fees_ht,
   CAST(ev.start_date AS STRING) AS start_date,
   CAST(ev.end_date AS STRING) AS end_date,
-  ev.purchase_order_number AS purchase_order_number,
+  -- The booking record is the first source, but the number often only ever
+  -- reaches the client invoice, where reading the booking alone showed "No PO"
+  -- on a booking we had been given one for (18 of 85 on L'Oreal CA).
+  COALESCE(ev.purchase_order_number, ipo.purchase_order_number) AS purchase_order_number,
   ev.booking_url AS booking_url,
-  CAST(ev.updated_at AS STRING) AS purchase_order_updated_at,
+  -- When the PO reached us. NOT ev.updated_at: that is the warehouse's own
+  -- ingestion stamp, identical on all 27k rows and moving to today on every
+  -- refresh, which left both SLAs anchored on "now" and unable to breach.
+  CAST(COALESCE(
+    CAST(ev.purchase_order_date AS TIMESTAMP),
+    CAST(ipo.known_by AS TIMESTAMP)
+  ) AS STRING) AS purchase_order_date,
   TO_JSON_STRING(ARRAY(
     SELECT AS STRUCT
       COALESCE(sp.service_provider_name, (SELECT e.house_name FROM UNNEST(ea.items) e WHERE e.quote_id = sp.quote_id LIMIT 1)) AS name,
@@ -431,6 +452,7 @@ LEFT JOIN \`naboo-app-365515.finance_gld_fct_prd.fct_export_events_scd1\` ev
 LEFT JOIN fin_agg fa ON fa.rid = t.readable_id
 LEFT JOIN email_agg ea ON ea.rid = t.readable_id
 LEFT JOIN pay_agg pa ON pa.crid = t.client_request_id
+LEFT JOIN invoice_po ipo ON ipo.client_request_id = t.client_request_id
 
 WHERE t.event.booking_status = 'ACCEPTED'
 ORDER BY t.event.booking_created_at DESC

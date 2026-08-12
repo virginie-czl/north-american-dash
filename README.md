@@ -110,6 +110,29 @@ it needs to.
 never asked for an IBAN again — the tracker proposes the card instead. That memory
 is keyed on the partner, not the booking.
 
+### Where the PO comes from, and when we got it
+
+Both SLAs hang off the purchase order, so both readings have to be right.
+
+**The number.** `fct_export_events_scd1.purchase_order_number` is the first
+source, but on 18 of 85 L'Oréal events the client's number only ever reached the
+client invoice (`invoices.purchaseOrderNumber`) — F-B755 is one, showing *No PO*
+while carrying 4200043224 since its invoice of 30 July. The query falls back to
+the invoice, requiring the value to hold a digit: the field is free text and
+holds `pas de PO` and `""` on two events, which are not purchase orders.
+
+**The date.** Not `fct_export_events_scd1.updated_at` — that is the warehouse's
+own ingestion stamp, *identical on all 27 118 rows* and moving to today on every
+refresh. Anchoring on it left every deadline in the future, so neither SLA could
+ever breach. `purchase_order_date` is the real thing and is populated on every
+booking that carries a PO; when the number came from an invoice instead, the
+invoice's issue date stands in — we demonstrably held the PO by the time we
+billed against it.
+
+The `sla_po_emission` annotation store records when this app first *saw* a PO,
+which is not when the PO arrived. It is now only consulted when the warehouse
+offers no date at all.
+
 ### One row per provider, and what it is owed
 
 A booking carries one provider line per quote, plus trade-name shells from the

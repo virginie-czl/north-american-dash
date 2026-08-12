@@ -225,9 +225,7 @@ function invoicingSla(
 ): { label: string; variant: "paid" | "partial" | "due" | "overdue" | "muted" } {
   const hasPo = !!(row.purchase_order_number && String(row.purchase_order_number).trim());
   if (!hasPo) return { label: "No PO", variant: "muted" };
-  const poTs = row.purchase_order_updated_at
-    ? new Date(row.purchase_order_updated_at).getTime()
-    : null;
+  const poTs = row.purchase_order_date ? new Date(row.purchase_order_date).getTime() : null;
   const endTs = row.end_date ? new Date(row.end_date).getTime() : null;
   const anchor = poTs != null && endTs != null ? Math.max(poTs, endTs) : (poTs ?? endTs);
   if (anchor == null) return { label: "No date", variant: "muted" };
@@ -287,9 +285,7 @@ function payoutSla(
   if (remaining <= 0.01) return { label: "Fully paid", variant: "paid" };
   const hasPo = !!(row.purchase_order_number && String(row.purchase_order_number).trim());
   if (!hasPo) return { label: "No PO", variant: "muted" };
-  const poTs = row.purchase_order_updated_at
-    ? new Date(row.purchase_order_updated_at).getTime()
-    : null;
+  const poTs = row.purchase_order_date ? new Date(row.purchase_order_date).getTime() : null;
   if (poTs == null) return { label: "No PO date", variant: "muted" };
   const deadline = poTs + 86_400_000;
   const now = Date.now();
@@ -564,9 +560,13 @@ function SlaPage() {
       const ref = r.readable_id;
       const po = r.purchase_order_number ? String(r.purchase_order_number).trim() : "";
       if (!ref || !po) return r;
+      // The warehouse now carries the real PO date; the annotation store only
+      // knows when this app first laid eyes on the number, so it is a last
+      // resort rather than an override.
+      if (r.purchase_order_date) return r;
       const entry = poDates.get(ref);
       if (!entry || entry.po !== po) return r;
-      return { ...r, purchase_order_updated_at: entry.emitted_at };
+      return { ...r, purchase_order_date: entry.emitted_at };
     });
   }, [rawRows, poDates]);
 
@@ -1504,7 +1504,13 @@ function SlaPage() {
                             : "bg-rose-100 text-rose-800"
                         }`}
                       >
-                        {sel.purchase_order_number ? `PO ${sel.purchase_order_number}` : "No PO"}
+                        {sel.purchase_order_number
+                          ? `PO ${sel.purchase_order_number}${
+                              sel.purchase_order_date
+                                ? ` · since ${fmtDate(sel.purchase_order_date)}`
+                                : ""
+                            }`
+                          : "No PO"}
                       </span>
                       {(() => {
                         const s = INVOICE_STATUS_META[invoiceStatusOf(selInvoices)];
