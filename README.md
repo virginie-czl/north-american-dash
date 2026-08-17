@@ -126,6 +126,41 @@ it needs to.
 never asked for an IBAN again — the tracker proposes the card instead. That memory
 is keyed on the partner, not the booking.
 
+### The headline figures on L'Oréal CA
+
+Six clickable figures above the list: client outstanding on events with a PO,
+what the client has paid, what is still owed to partners on events with a PO,
+then the invoicing state — invoices issued and emailed, events with a PO and
+nothing emailed yet, and events still waiting for a PO.
+
+Two rules keep them honest:
+
+- **One predicate per figure decides both the total and the list it opens**, so a
+  number can never describe a different set of events than the one you get when
+  you click it. Each figure's `test` in `STATS` is the single definition.
+- **They are computed over whatever the filters have left**, not over the whole
+  table — so they always describe the population on screen, and they change as
+  you filter. Turnkey is out by default, so the figures are too. Clicking one
+  sets the scope to *All*, since the move groups would otherwise hide most of
+  what the figure just counted.
+
+*Issued and sent* means `status = ISSUED` with an `EMAIL` send event — `MANUAL`
+sends and cancelled invoices are not the client having received an invoice.
+It counts invoices, not events; the other five count events.
+
+**Where the "to invoice" amounts come from.** An event with no invoice has no
+invoice amount to add up, so the figure is what the client agreed to pay, from
+the confirmed proposal, less whatever has already been issued. That total is TTC
+and has matched the issued invoice to the cent on every event checked (F-B796:
+5 802,79). 96 of 98 events carry one; the two without contribute nothing.
+
+**A caveat on "paid by the client".** It reads `collectedTotal`, the same field
+the rest of the page uses for client outstanding — and that field knows about
+4 events totalling 61 690,86 $ while the payments ledger has client inflows on
+11 events totalling 86 218,98 $. Client outstanding is overstated by the same
+gap. Switching the source would move figures across the whole page, so it is
+flagged here rather than changed.
+
 ### Where the PO comes from, and when we got it
 
 Both SLAs hang off the purchase order, so both readings have to be right.

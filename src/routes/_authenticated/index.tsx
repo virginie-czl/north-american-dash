@@ -335,6 +335,104 @@ function hasPurchaseOrder(row: SlaRow): boolean {
   return !!(row.purchase_order_number && String(row.purchase_order_number).trim());
 }
 
+/** An invoice the client has actually received: issued, and sent by email. */
+function isIssuedAndEmailed(invoice: InvoiceLine): boolean {
+  return (
+    (invoice.status ?? "").toUpperCase() === "ISSUED" &&
+    (invoice.send_method ?? "").toUpperCase().includes("EMAIL")
+  );
+}
+
+/**
+ * What is left to invoice on an event: what the client agreed to pay, less what
+ * has already been issued. The agreed figure comes from the confirmed proposal
+ * because an event with no invoice yet has no invoice amount to read.
+ */
+function stillToInvoice(row: SlaRow): number {
+  const agreed = row.client_proposal_total_ttc ?? 0;
+  const issued = row.client_invoiced_ttc ?? 0;
+  return Math.max(Math.round((agreed - issued) * 100) / 100, 0);
+}
+
+type Decorated = { row: SlaRow; partners: PartnerLine[]; invoices: InvoiceLine[] };
+
+export type StatKey =
+  | "client_outstanding_po"
+  | "client_paid"
+  | "partner_remaining_po"
+  | "invoices_sent"
+  | "invoices_to_do"
+  | "invoices_no_po";
+
+/**
+ * The headline figures, each one clickable.
+ *
+ * `test` decides both what the figure counts and which events the list shows
+ * when it is clicked — one predicate, so a total can never describe a different
+ * set of events than the one it opens.
+ */
+const STATS: Array<{
+  key: StatKey;
+  band: "money" | "invoicing";
+  label: string;
+  hint: string;
+  test: (d: Decorated) => boolean;
+  amount: (d: Decorated) => number;
+  /** Invoices rather than events, where that is what was asked for. */
+  countsInvoices?: (d: Decorated) => number;
+}> = [
+  {
+    key: "client_outstanding_po",
+    band: "money",
+    label: "Client outstanding",
+    hint: "PO received, still owed by L'Oréal",
+    test: (d) => hasPurchaseOrder(d.row) && (d.row.client_reste_a_encaisser_ttc ?? 0) > 0.01,
+    amount: (d) => d.row.client_reste_a_encaisser_ttc ?? 0,
+  },
+  {
+    key: "client_paid",
+    band: "money",
+    label: "Paid by the client",
+    hint: "Received to date, every event",
+    test: (d) => (d.row.client_collected_total ?? 0) > 0.01,
+    amount: (d) => d.row.client_collected_total ?? 0,
+  },
+  {
+    key: "partner_remaining_po",
+    band: "money",
+    label: "Owed to partners",
+    hint: "PO received, still to disburse",
+    test: (d) => hasPurchaseOrder(d.row) && (d.row.partner_reste_a_decaisser_ttc ?? 0) > 0.01,
+    amount: (d) => d.row.partner_reste_a_decaisser_ttc ?? 0,
+  },
+  {
+    key: "invoices_sent",
+    band: "invoicing",
+    label: "Issued and sent",
+    hint: "Invoices issued and emailed",
+    test: (d) => d.invoices.some(isIssuedAndEmailed),
+    amount: (d) =>
+      d.invoices.filter(isIssuedAndEmailed).reduce((total, i) => total + (i.amount_ttc ?? 0), 0),
+    countsInvoices: (d) => d.invoices.filter(isIssuedAndEmailed).length,
+  },
+  {
+    key: "invoices_to_do",
+    band: "invoicing",
+    label: "To invoice",
+    hint: "PO received, nothing emailed yet",
+    test: (d) => hasPurchaseOrder(d.row) && !d.invoices.some(isIssuedAndEmailed),
+    amount: (d) => stillToInvoice(d.row),
+  },
+  {
+    key: "invoices_no_po",
+    band: "invoicing",
+    label: "Waiting for a PO",
+    hint: "Cannot be invoiced yet",
+    test: (d) => !hasPurchaseOrder(d.row),
+    amount: (d) => stillToInvoice(d.row),
+  },
+];
+
 /** A provider still owed money on an event, and how much is left. */
 type UnpaidPartner = { partner: PartnerLine; remaining: number };
 
@@ -533,6 +631,8 @@ function SlaPage() {
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [scope, setScope] = useState<"move" | "to_pay" | "breached" | "all">("move");
+  // A headline figure the user clicked, narrowing the list to its own events.
+  const [statFilter, setStatFilter] = useState<StatKey | null>(null);
   const [sortKey, setSortKey] = useState<string>("booking_created_at");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -745,6 +845,34 @@ function SlaPage() {
     });
     return sorted;
   }, [preInvoiceStatus, invoiceFilter, sortKey, sortDir]);
+
+  /**
+   * The headline figures, over whatever the filters have left — so the numbers
+   * and the list always describe the same population. Deliberately computed
+   * before the scope chips and before the clicked figure itself, which would
+   * otherwise fold back into its own total.
+   */
+  const statTotals = useMemo(() => {
+    const out = new Map<StatKey, { events: number; count: number; byCcy: Map<string, number> }>();
+    for (const stat of STATS) out.set(stat.key, { events: 0, count: 0, byCcy: new Map() });
+    for (const item of filtered) {
+      for (const stat of STATS) {
+        if (!stat.test(item)) continue;
+        const bucket = out.get(stat.key)!;
+        bucket.events += 1;
+        bucket.count += stat.countsInvoices ? stat.countsInvoices(item) : 1;
+        const ccy = item.row.currency || "CAD";
+        bucket.byCcy.set(ccy, (bucket.byCcy.get(ccy) ?? 0) + stat.amount(item));
+      }
+    }
+    return out;
+  }, [filtered]);
+
+  const pickStat = (key: StatKey) => {
+    setStatFilter((prev) => (prev === key ? null : key));
+    // The move groups would hide most of what the figure just counted.
+    setScope("all");
+  };
 
   // KPIs
   const kpis = useMemo(() => {
@@ -1133,11 +1261,13 @@ function SlaPage() {
   );
 
   const scoped = useMemo(() => {
-    if (scope === "breached") return withMove.filter((x) => x.breach != null);
-    if (scope === "to_pay") return withMove.filter((x) => x.toPay.length > 0);
-    if (scope === "move") return withMove.filter((x) => needsAMove(x.move.group));
-    return withMove;
-  }, [withMove, scope]);
+    const stat = statFilter ? STATS.find((s) => s.key === statFilter) : null;
+    const base = stat ? withMove.filter((x) => stat.test(x)) : withMove;
+    if (scope === "breached") return base.filter((x) => x.breach != null);
+    if (scope === "to_pay") return base.filter((x) => x.toPay.length > 0);
+    if (scope === "move") return base.filter((x) => needsAMove(x.move.group));
+    return base;
+  }, [withMove, scope, statFilter]);
 
   const scopeCounts = useMemo(
     () => ({
@@ -1209,6 +1339,59 @@ function SlaPage() {
             : `Analyse de vos emails — ${scanProgress.done}/${scanProgress.total} événements, ${scanProgress.matched} partenaires rapprochés.`}
         </div>
       )}
+
+      {/* ── Headline figures ──────────────────────────────────────────────
+          Each one opens its own events in the list, so a number can always be
+          taken apart into the events behind it. */}
+      <div className="flex-none border-b border-border bg-[#fafaf8] px-4 py-2.5">
+        <div className="flex flex-wrap items-stretch gap-1.5">
+          {STATS.map((stat, i) => {
+            const totals = statTotals.get(stat.key);
+            const active = statFilter === stat.key;
+            const previous = STATS[i - 1];
+            return (
+              <Fragment key={stat.key}>
+                {previous && previous.band !== stat.band && (
+                  <span className="mx-1 w-px flex-none self-stretch bg-border" aria-hidden="true" />
+                )}
+                <button
+                  type="button"
+                  onClick={() => pickStat(stat.key)}
+                  aria-pressed={active}
+                  title={`${stat.hint} — click to list them`}
+                  className={`min-w-[132px] flex-1 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+                    active
+                      ? "border-navy bg-white shadow-[0_0_0_1px_#101f34]"
+                      : "border-border bg-white hover:border-navy"
+                  }`}
+                >
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500">
+                      {stat.label}
+                    </span>
+                    <span className="text-[10.5px] font-semibold text-slate-400">
+                      {isLoading ? "" : totals ? totals.count : 0}
+                    </span>
+                  </span>
+                  <span className="mt-0.5 block cell-mono truncate text-[13px] font-semibold">
+                    {isLoading ? "…" : fmtMulti(totals?.byCcy ?? new Map())}
+                  </span>
+                </button>
+              </Fragment>
+            );
+          })}
+        </div>
+        {statFilter && (
+          <button
+            type="button"
+            onClick={() => setStatFilter(null)}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-navy px-2.5 py-[3px] text-[11.5px] font-semibold text-white"
+          >
+            {STATS.find((s) => s.key === statFilter)?.label} only — clear
+            <span aria-hidden="true">×</span>
+          </button>
+        )}
+      </div>
 
       <div className="flex min-h-0 flex-1 overflow-x-auto">
         {/* ── List column ───────────────────────────────────────────────── */}

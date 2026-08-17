@@ -58,6 +58,8 @@ export interface SlaRow {
   days_booking_to_first_emission: number | null;
   currency: string | null;
   client_invoiced_ttc: number | null;
+  /** What the client agreed to pay, from the confirmed proposal (TTC). */
+  client_proposal_total_ttc: number | null;
   client_collected_total: number | null;
   client_reste_a_encaisser_ttc: number | null;
   partner_net_a_payer_ttc: number | null;
@@ -196,6 +198,24 @@ invoices AS (
     ) ORDER BY inv.issueDate) AS invoices
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
   GROUP BY inv.clientRequestId
+),
+-- What the client agreed to pay, from the confirmed proposal.
+--
+-- Stands in for the amount still to be invoiced on a booking whose invoice has
+-- not gone out yet, where there is no invoice to read an amount from. It is TTC
+-- and has matched the issued invoice to the cent on every booking checked
+-- (F-B796: 5 802,79). MAX + GROUP BY rather than DISTINCT so a booking can
+-- never multiply rows in the driving table.
+client_proposal_total AS (
+  SELECT
+    rm.client_request_readable_id AS rid,
+    MAX(CAST(cp.price_totals_total_client_with_fees_at_date AS FLOAT64)) / 10000 AS total_ttc
+  FROM \`naboo-app-365515.finance_gld_vw_prd.vw_reconciliation_master\` rm
+  JOIN \`naboo-app-365515.raw_naboo_data.client_proposals\` cp
+    ON cp.client_proposal_id = rm.source_client_proposal_id
+  WHERE rm.booking_status = 'ACCEPTED'
+    AND rm.source_client_proposal_id IS NOT NULL
+  GROUP BY rid
 ),
 invoice_po AS (
   SELECT
@@ -345,6 +365,7 @@ SELECT
   t.sla.days_booking_to_first_emission AS days_booking_to_first_emission,
   t.gmv.currency AS currency,
   t.gmv.client_invoiced_ttc AS client_invoiced_ttc,
+  ROUND(cpt.total_ttc, 2) AS client_proposal_total_ttc,
   t.gmv.client_collected_total AS client_collected_total,
   t.gmv.client_reste_a_encaisser_ttc AS client_reste_a_encaisser_ttc,
   t.gmv.partner_net_a_payer_ttc AS partner_net_a_payer_ttc,
@@ -433,6 +454,7 @@ LEFT JOIN fin_agg fa ON fa.rid = t.readable_id
 LEFT JOIN email_agg ea ON ea.rid = t.readable_id
 LEFT JOIN pay_agg pa ON pa.crid = t.client_request_id
 LEFT JOIN invoice_po ipo ON ipo.client_request_id = t.client_request_id
+LEFT JOIN client_proposal_total cpt ON cpt.rid = t.readable_id
 
 
 WHERE t.event.booking_status = 'ACCEPTED'
