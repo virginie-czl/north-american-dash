@@ -120,9 +120,9 @@ partner_detail AS (
     ROUND(prt.outstandingpayable / 10000, 2) AS amount_due_provider,
     ROUND(prt.netdisbursed       / 10000, 2) AS amount_paid_provider,
     ROUND(prt.disbursedtotal     / 10000, 2) AS amount_disbursed_total,
-    -- price/discountPrice level added upstream; see sla.functions.ts for why
-    -- discountPrice is not read.
-    ROUND(prt.liveconfirmed.netpayable.price.withtaxes / 10000, 2) AS net_payable_ttc,
+    -- Price less any discount granted on it; see sla.functions.ts.
+    ROUND((prt.liveconfirmed.netpayable.price.withtaxes
+           - IFNULL(prt.liveconfirmed.netpayable.discountprice.withtaxes, 0)) / 10000, 2) AS net_payable_ttc,
     prt.disbursementfxdate AS payout_fx_date,
     prt.quotecancelledat   AS quote_cancelled_at,
     (prt.quotecancelledat IS NOT NULL) AS is_cancelled_quote,

@@ -157,12 +157,19 @@ level inside a money struct — first on `grossGmv` and `netGmv`, then on
 does not exist*. Every read is `…price.withTaxes` (or `withoutTaxes`), which
 reproduces the old flat figures exactly.
 
-`discountPrice` is deliberately not read. It is populated on 7 of 159 L'Oréal
-partner lines and a scattering of Veolia's, always far smaller than `price`
-(Hotel X Toronto: 6 603,89 against 14 204,10 CAD), and nothing establishes which
-of the two is the amount owed — on 3 of the 7, `price − discountPrice` happens to
-equal the outstanding payable, on the other 4 it does not. Reading it would
-restate provider balances silently, so it stays a deliberate decision.
+`discountPrice` is a **discount on** `price`, not an alternative to it, so what a
+provider is owed is `price − discountPrice`. The warehouse confirms it exactly:
+on every discounted L'Oréal line, `price − discountPrice − disbursed` equals
+`outstandingPayable` to the cent (Hotel X Toronto on C-W875: 14 204,10 − 6 603,89
+= 7 600,21 owed, nothing yet paid). Reading `price` alone overstated seven
+providers' balances. The same holds for `commission`, which carries its own
+discount and reconciles against the reconciliation view once it is subtracted.
+
+Still outstanding: the row-level `grossGmv` and `netGmv` carry discounts too —
+410 and 401 bookings respectively — and are still read at `price`. L'Oréal never
+surfaces them, but Veolia's service-fee line is `gross − net`, and the two
+discounts differ on 262 of those 410 bookings (largest gap 9 648,51), so that
+figure is affected.
 
 When a query breaks this way, `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` for the
 table lists every nested path — worth checking all of them at once, since

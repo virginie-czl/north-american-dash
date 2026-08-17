@@ -401,25 +401,31 @@ partners_fi_fallback AS (
       >>) AS commissionable,
       CAST(0 AS FLOAT64) AS commissionable_base_ht,
       part.currency AS currency,
-      CAST(ROUND((part.liveConfirmed.netPayable.price.withTaxes
-                  + part.liveConfirmed.commission.price.withTaxes) / 10000, 2) AS FLOAT64) AS gmv_ttc,
+      CAST(ROUND(((part.liveConfirmed.netPayable.price.withTaxes
+                   - IFNULL(part.liveConfirmed.netPayable.discountPrice.withTaxes, 0))
+                  + (part.liveConfirmed.commission.price.withTaxes
+                   - IFNULL(part.liveConfirmed.commission.discountPrice.withTaxes, 0))) / 10000, 2) AS FLOAT64) AS gmv_ttc,
       CAST(ROUND(ABS(part.disbursedTotal) / 10000, 2) AS FLOAT64) AS paid,
       ROUND(
         COALESCE(
           IF(ibq.line_ccy = part.currency,
              ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc, NULL),
-          CAST(ROUND(part.liveConfirmed.netPayable.price.withTaxes / 10000, 2) AS FLOAT64)
+          CAST(ROUND((part.liveConfirmed.netPayable.price.withTaxes
+                   - IFNULL(part.liveConfirmed.netPayable.discountPrice.withTaxes, 0)) / 10000, 2) AS FLOAT64)
         )
         - CAST(ROUND(ABS(part.disbursedTotal) / 10000, 2) AS FLOAT64)
       , 2) AS outstanding,
       CAST(ROUND(part.outstandingPayable / 10000, 2) AS FLOAT64) AS raw_outstanding,
-      CAST(ROUND(part.liveConfirmed.netPayable.price.withTaxes / 10000, 2) AS FLOAT64) AS payable,
+      CAST(ROUND((part.liveConfirmed.netPayable.price.withTaxes
+                   - IFNULL(part.liveConfirmed.netPayable.discountPrice.withTaxes, 0)) / 10000, 2) AS FLOAT64) AS payable,
       COALESCE(
         IF(ibq.line_ccy = part.currency,
            ibq.invoiced_service_ttc - ibq.invoiced_commission_ttc, NULL),
-        CAST(ROUND(part.liveConfirmed.netPayable.price.withTaxes / 10000, 2) AS FLOAT64)
+        CAST(ROUND((part.liveConfirmed.netPayable.price.withTaxes
+                   - IFNULL(part.liveConfirmed.netPayable.discountPrice.withTaxes, 0)) / 10000, 2) AS FLOAT64)
       ) AS payable_to_date,
-      CAST(ROUND(part.liveConfirmed.commission.price.withTaxes / 10000, 2) AS FLOAT64) AS commission,
+      CAST(ROUND((part.liveConfirmed.commission.price.withTaxes
+                   - IFNULL(part.liveConfirmed.commission.discountPrice.withTaxes, 0)) / 10000, 2) AS FLOAT64) AS commission,
       q.quote_lock_locked_at IS NOT NULL AS locked,
       q.quote_lock_locked_by_admin_id IS NOT NULL AS locked_by_admin,
       q.quote_lock_locked_by_client_id IS NOT NULL AS locked_by_client,
