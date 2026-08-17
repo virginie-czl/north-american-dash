@@ -314,6 +314,19 @@ Sending is sequential with a per-recipient result, so a partial failure is visib
 "11 sent, 3 failed" plus the reason for each, rather than an all-or-nothing outcome.
 Duplicate addresses are collapsed server-side too, and a run is capped at 60.
 
+**Sending records the ask.** The stickers read `partner_email_facts`, and for a
+long time only the mailbox scan ever wrote to it — so asking a provider for their
+bank details from this app left the row reading *not asked*, and the drawer still
+said *Demander le bancaire*, until somebody remembered to run a scan. A send now
+writes `bank_details` / `tax_info` = `asked` with the date and the sender, using
+the same merge rules as the scan: earliest contact and earliest ask are kept,
+*received* is never downgraded to *asked*, and a field this send didn't ask about
+is left untouched. Drafts are not recorded — a draft is not a request.
+
+Bank details and tax numbers belong to the provider, not to one booking, so every
+selected booking for an address that went out is marked asked, even though the
+send collapses to one email per address.
+
 
 ### Asking for a commission or a refund back (Marketplace NA)
 

@@ -145,6 +145,110 @@ export const fetchPartnerFacts = createServerFn({ method: "GET" }).handler(
   },
 );
 
+/** One provider we have just asked, and what we asked them for. */
+export type SentRequest = {
+  event_ref: string;
+  partner_key: string;
+  partner_name: string | null;
+  asked_bank: boolean;
+  asked_tax: boolean;
+};
+
+/**
+ * Records a request we just sent, into the same facts the scan writes.
+ *
+ * The stickers read partner_email_facts, and only the mailbox scan ever wrote
+ * to it — so asking a provider for their bank details from this app left the row
+ * reading "not asked" until somebody remembered to run a scan. We know we sent
+ * it; there is no reason to go looking for the evidence afterwards.
+ *
+ * Merge rules match the scan's: the earliest contact and the earliest ask are
+ * kept, "received" is never downgraded to "asked", and a field nobody asked
+ * about on this send is left exactly as it was.
+ */
+export const recordSentRequests = createServerFn({ method: "POST" })
+  .validator((input: { rows: SentRequest[] }) => {
+    if (!Array.isArray(input?.rows)) throw new Error("rows is required");
+    const rows = input.rows
+      .filter(
+        (r) =>
+          typeof r?.event_ref === "string" &&
+          r.event_ref.length > 0 &&
+          typeof r?.partner_key === "string" &&
+          r.partner_key.length > 0 &&
+          (r.asked_bank === true || r.asked_tax === true),
+      )
+      .slice(0, 60)
+      .map((r) => ({
+        event_ref: r.event_ref,
+        partner_key: r.partner_key,
+        partner_name: typeof r.partner_name === "string" ? r.partner_name : null,
+        asked_bank: r.asked_bank === true,
+        asked_tax: r.asked_tax === true,
+      }));
+    return { rows };
+  })
+  .handler(async ({ data }): Promise<{ recorded: number }> => {
+    const { requireSession } = await import("./session.server");
+    const session = await requireSession();
+    if (data.rows.length === 0) return { recorded: 0 };
+    const { db } = await import("./db.server");
+    const sql = await db();
+    for (const r of data.rows) {
+      await sql`
+        INSERT INTO partner_email_facts (
+          event_ref, partner_key, partner_name, matched_by,
+          contacted_at, contacted_by,
+          bank_details, bank_asked_at, bank_asked_by,
+          tax_info, tax_asked_at, tax_asked_by,
+          message_count, scanned_at, scanned_by
+        ) VALUES (
+          ${r.event_ref}, ${r.partner_key}, ${r.partner_name}, 'email',
+          now(), ${session.email},
+          ${r.asked_bank ? "asked" : "not_asked"},
+          CASE WHEN ${r.asked_bank} THEN now() ELSE NULL END,
+          ${r.asked_bank ? session.email : null},
+          ${r.asked_tax ? "asked" : "not_asked"},
+          CASE WHEN ${r.asked_tax} THEN now() ELSE NULL END,
+          ${r.asked_tax ? session.email : null},
+          0, now(), NULL
+        )
+        ON CONFLICT (event_ref, partner_key) DO UPDATE SET
+          partner_name = COALESCE(EXCLUDED.partner_name, partner_email_facts.partner_name),
+          contacted_at = LEAST(
+            COALESCE(partner_email_facts.contacted_at, EXCLUDED.contacted_at),
+            COALESCE(EXCLUDED.contacted_at, partner_email_facts.contacted_at)
+          ),
+          contacted_by = COALESCE(partner_email_facts.contacted_by, EXCLUDED.contacted_by),
+          bank_details = CASE
+            WHEN partner_email_facts.bank_details = 'received' THEN 'received'
+            WHEN ${r.asked_bank} THEN 'asked'
+            ELSE partner_email_facts.bank_details END,
+          bank_asked_at = CASE
+            WHEN ${r.asked_bank}
+              THEN COALESCE(partner_email_facts.bank_asked_at, EXCLUDED.bank_asked_at)
+            ELSE partner_email_facts.bank_asked_at END,
+          bank_asked_by = CASE
+            WHEN ${r.asked_bank}
+              THEN COALESCE(partner_email_facts.bank_asked_by, EXCLUDED.bank_asked_by)
+            ELSE partner_email_facts.bank_asked_by END,
+          tax_info = CASE
+            WHEN partner_email_facts.tax_info = 'received' THEN 'received'
+            WHEN ${r.asked_tax} THEN 'asked'
+            ELSE partner_email_facts.tax_info END,
+          tax_asked_at = CASE
+            WHEN ${r.asked_tax}
+              THEN COALESCE(partner_email_facts.tax_asked_at, EXCLUDED.tax_asked_at)
+            ELSE partner_email_facts.tax_asked_at END,
+          tax_asked_by = CASE
+            WHEN ${r.asked_tax}
+              THEN COALESCE(partner_email_facts.tax_asked_by, EXCLUDED.tax_asked_by)
+            ELSE partner_email_facts.tax_asked_by END
+      `;
+    }
+    return { recorded: data.rows.length };
+  });
+
 export type ScanEventInput = {
   event_ref: string;
   partners: Array<{ name: string; email: string | null }>;

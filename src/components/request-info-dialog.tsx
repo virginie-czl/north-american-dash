@@ -11,6 +11,9 @@ import { AlertCircle, Check, ChevronDown, ChevronUp, Send, FileText, X } from "l
 import { Button } from "@/components/ui/button";
 import { usePartnerRequests, type OutgoingMessage } from "@/lib/use-gmail";
 import { composeRequest, describeNeeds, type RequestTarget } from "@/lib/partner-requests";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { partnerKey } from "@/lib/annotations.functions";
+import { recordSentRequests } from "@/lib/gmail.functions";
 
 // ─── Dialog (full list) ────────────────────────────────────────────────────
 
@@ -59,6 +62,36 @@ export function RequestInfoDialog({
 
   const sentKey = (r: RequestTarget) =>
     requests.results.find((res) => res.to.toLowerCase() === r.address.toLowerCase());
+
+  const qc = useQueryClient();
+  const logRequest = useMutation({
+    mutationFn: (rows: Parameters<typeof recordSentRequests>[0]["data"]["rows"]) =>
+      recordSentRequests({ data: { rows } }),
+    // The stickers read these facts, so they change the moment this lands.
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["partner-facts"] }),
+  });
+
+  /**
+   * Send, then write down what we asked for. Drafts are not recorded — a draft
+   * is not a request, and marking it as one would show a provider as chased
+   * when they have heard nothing.
+   */
+  async function sendSelected() {
+    const results = await requests.run(messages, "send");
+    const sent = new Set(results.filter((r) => r.ok).map((r) => r.to.toLowerCase()));
+    // Bank details and tax numbers belong to the provider, not to one booking,
+    // so every selected booking for an address that went out counts as asked.
+    const rows = selected
+      .filter((t) => sent.has(t.address.toLowerCase()))
+      .map((t) => ({
+        event_ref: t.eventRef,
+        partner_key: partnerKey(t.partnerName),
+        partner_name: t.partnerName,
+        asked_bank: t.needs.bank === true,
+        asked_tax: t.needs.tax === true,
+      }));
+    if (rows.length > 0) logRequest.mutate(rows);
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy/40 p-4">
@@ -253,7 +286,7 @@ export function RequestInfoDialog({
                       size="sm"
                       className="h-8 gap-1.5 border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
                       disabled={requests.running || messages.length === 0}
-                      onClick={() => requests.run(messages, "send")}
+                      onClick={() => void sendSelected()}
                     >
                       <Send className="h-3.5 w-3.5" aria-hidden="true" />
                       Confirm — send {messages.length}
