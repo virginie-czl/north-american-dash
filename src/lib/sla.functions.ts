@@ -105,7 +105,16 @@ partner_detail AS (
     ROUND(prt.outstandingpayable / 10000, 2) AS amount_due_provider,
     ROUND(prt.netdisbursed       / 10000, 2) AS amount_paid_provider,
     ROUND(prt.disbursedtotal     / 10000, 2) AS amount_disbursed_total,
-    ROUND(prt.liveconfirmed.netpayable.withtaxes / 10000, 2) AS net_payable_ttc,
+    -- netPayable gained a price/discountPrice level upstream, the same change
+    -- grossGmv and netGmv went through earlier — reading it flat took the page
+    -- down with "field withtaxes does not exist". price.withTaxes reproduces the
+    -- old flat figure exactly (F-B658 still gives 887,50 + 50 + 100 GBP).
+    --
+    -- discountPrice is deliberately ignored: it is populated on 7 of 159 L'Oreal
+    -- partner lines and always far smaller than price, and nothing so far says
+    -- which of the two is the amount we owe. Using it would quietly restate
+    -- provider balances, so that stays a decision to take on purpose.
+    ROUND(prt.liveconfirmed.netpayable.price.withtaxes / 10000, 2) AS net_payable_ttc,
     prt.disbursementfxdate AS payout_fx_date,
     prt.quotecancelledat   AS quote_cancelled_at,
     (prt.quotecancelledat IS NOT NULL) AS is_cancelled_quote,

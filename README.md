@@ -149,6 +149,25 @@ The `sla_po_emission` annotation store records when this app first *saw* a PO,
 which is not when the PO arrived. It is now only consulted when the warehouse
 offers no date at all.
 
+### The money fields move under you
+
+`client_request_free_invoicing` has now twice grown a `price` / `discountPrice`
+level inside a money struct — first on `grossGmv` and `netGmv`, then on
+`netPayable` and `commission`, which took L'Oréal CA down with *field withtaxes
+does not exist*. Every read is `…price.withTaxes` (or `withoutTaxes`), which
+reproduces the old flat figures exactly.
+
+`discountPrice` is deliberately not read. It is populated on 7 of 159 L'Oréal
+partner lines and a scattering of Veolia's, always far smaller than `price`
+(Hotel X Toronto: 6 603,89 against 14 204,10 CAD), and nothing establishes which
+of the two is the amount owed — on 3 of the 7, `price − discountPrice` happens to
+equal the outstanding payable, on the other 4 it does not. Reading it would
+restate provider balances silently, so it stays a deliberate decision.
+
+When a query breaks this way, `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` for the
+table lists every nested path — worth checking all of them at once, since
+BigQuery only ever reports the first bad one.
+
 ### One row per provider, and what it is owed
 
 A booking carries one provider line per quote, plus trade-name shells from the
