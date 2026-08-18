@@ -1,4 +1,9 @@
 @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Roboto:wght@400;500;600;700&display=swap");
+/* Redesign faces: Geist for UI and figures, Geist Mono for refs and codes. */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500&family=Geist+Mono:wght@400&display=swap");
+/* cesso, the display face. An Adobe kit is domain-authorised, so this may 403
+   in production — the stack in --font-paper-display falls back on its own. */
+@import url("https://use.typekit.net/pxx3gpc.css");
 @import "tailwindcss" source(none);
 @source "../src";
 @import "tw-animate-css";
@@ -28,6 +33,36 @@
 @theme {
   --font-sans: "Roboto", "Aeonik", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Bricolage Grotesque", "Aeonik", ui-sans-serif, system-ui, sans-serif;
+
+  /*
+   * "Paper" — the tracker redesign.
+   *
+   * Ink on off-white, hierarchy from size and rule weight rather than colour,
+   * and a single alert tone kept for a real breach: a breached SLA, an overdue
+   * amount, a refund owed. Nothing else may be red, which is what makes red
+   * mean something. Radius 0 and no shadows; the lime is the one primary-action
+   * fill per screen.
+   *
+   * Own token names, so the pages still on the old system are untouched until
+   * they move over.
+   */
+  --font-paper: "Geist", "Roboto", ui-sans-serif, system-ui, sans-serif;
+  --font-paper-mono: "Geist Mono", ui-monospace, "SFMono-Regular", monospace;
+  /* cesso comes from the Adobe kit above; the rest of the stack takes over on
+     its own if the kit is not authorised for the domain. */
+  --font-paper-display: cesso, "Bricolage Grotesque", "Aeonik", ui-sans-serif, sans-serif;
+
+  --color-paper-canvas: #faf9f6;
+  --color-paper-ink: #14100e;
+  --color-paper-body: #4a443c;
+  --color-paper-muted: #6e665c;
+  --color-paper-label: #8a8175;
+  --color-paper-faint: #a9a199;
+  --color-paper-rule-strong: #dcd6cc;
+  --color-paper-rule: #e4dfd6;
+  --color-paper-hairline: #efebe4;
+  --color-paper-row: #f6f1ee;
+  --color-paper-alert: #a32a1c;
 
   /* Naboo brand */
   --color-naboo: #eff779;

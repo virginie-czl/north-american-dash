@@ -356,6 +356,75 @@ function stillToInvoice(row: SlaRow): number {
 
 type Decorated = { row: SlaRow; partners: PartnerLine[]; invoices: InvoiceLine[] };
 
+/** One list per action type — the spine of the redesigned overview. */
+export type ListKey = "ask" | "pay" | "invoice" | "chase" | "waiting";
+
+const LIST_ORDER: ListKey[] = ["ask", "pay", "invoice", "chase", "waiting"];
+
+type ListMember = { item: Decorated; lists: { units: Record<ListKey, number> } };
+
+/**
+ * How each list introduces itself. The sentence carries the count so the row
+ * reads as an instruction rather than a label with a number bolted on, and the
+ * second line says why the work exists — the rule, or what is already known.
+ */
+const LIST_META: Record<
+  ListKey,
+  {
+    /** Short name for breadcrumbs and sibling links. */
+    name: string;
+    title: (units: number) => string;
+    detail: (members: ListMember[]) => string;
+    /** The caption under the figure. */
+    unit: string;
+    /** The one list whose button sends rather than navigates. */
+    primary?: boolean;
+    /** A list nobody has to act on — its button stays quiet. */
+    quiet?: boolean;
+  }
+> = {
+  ask: {
+    name: "Ask partners for details",
+    title: (n) => `Ask ${n} partner${n === 1 ? "" : "s"} for bank details and tax numbers`,
+    detail: () => "One email per partner, covering all their bookings",
+    unit: "to pay out",
+    primary: true,
+  },
+  pay: {
+    name: "Pay partners",
+    title: (n) => `Pay ${n} partner${n === 1 ? "" : "s"} whose PO has landed`,
+    detail: () => "Everything needed is on file · payout is due 24h after the PO",
+    unit: "to pay out",
+  },
+  invoice: {
+    name: "Send invoices",
+    title: (n) => `Send ${n} client invoice${n === 1 ? "" : "s"} before the SLA runs out`,
+    detail: (members) => {
+      const late = members.filter(({ item }) => {
+        const sla = invoicingSla(item.row, item.invoices);
+        return sla.variant === "overdue" || sla.variant === "partial";
+      }).length;
+      return late > 0
+        ? `${late} past the deadline · invoices must be sent 3 days after the event ends`
+        : "Invoices must be sent 3 days after the event ends";
+    },
+    unit: "to invoice",
+  },
+  chase: {
+    name: "Chase clients",
+    title: (n) => `Chase ${n} overdue client invoice${n === 1 ? "" : "s"}`,
+    detail: () => "Payment terms are 60 days from the day the invoice was sent",
+    unit: "overdue",
+  },
+  waiting: {
+    name: "Waiting",
+    title: (n) => `Wait on ${n} partner repl${n === 1 ? "y" : "ies"}`,
+    detail: () => "Nothing to do until they answer",
+    unit: "on hold",
+    quiet: true,
+  },
+};
+
 export type StatKey =
   | "client_outstanding_po"
   | "client_paid"
@@ -631,6 +700,9 @@ function SlaPage() {
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [scope, setScope] = useState<"move" | "to_pay" | "breached" | "all">("move");
+  // Which action list is open, or the overview. The redesign lands on the
+  // overview and every list is one click from it.
+  const [activeList, setActiveList] = useState<ListKey | null>(null);
   // A headline figure the user clicked, narrowing the list to its own events.
   const [statFilter, setStatFilter] = useState<StatKey | null>(null);
   const [sortKey, setSortKey] = useState<string>("booking_created_at");
@@ -1148,6 +1220,126 @@ function SlaPage() {
     [filtered, actionFor],
   );
 
+  /**
+   * The work, split into one list per action type.
+   *
+   * The redesign's central move: an event with three outstanding actions belongs
+   * to three lists, once per task, instead of collapsing into a single pill that
+   * has to stand for all of them. Every predicate here is one of the page's
+   * existing verdicts — nothing new is computed about an event, it is only
+   * routed differently.
+   */
+  const listsOf = useCallback(
+    (item: Decorated) => {
+      const { row: r, partners: ps, invoices: iv } = item;
+      const ref = r.readable_id ?? r.client_request_id ?? "";
+      const hasPo = hasPurchaseOrder(r);
+      const owed = unpaidPartners(ps);
+
+      /** Providers we cannot pay yet because something is missing. */
+      const toAsk = owed.filter(({ partner }) => {
+        if (!partner.email) return false;
+        return needsOf(actionFor(ref, partner, hasPo), partner.country) != null;
+      });
+      /** Providers we hold everything for — the payout is ours to make. */
+      const payable = owed.filter(
+        ({ partner }) => actionFor(ref, partner, hasPo).code === "ours_pay",
+      );
+
+      const outreach = partnerOutreach(ps, ref, hasPo);
+      const awaitingReply = outreach?.label.includes("⏳") === true;
+      const invoiceSent = earliestSent(iv) != null;
+      const overdue = paymentStatus(r, iv).variant === "overdue";
+
+      const keys = new Set<ListKey>();
+      if (hasPo && toAsk.length > 0) keys.add("ask");
+      if (hasPo && payable.length > 0) keys.add("pay");
+      if (hasPo && !invoiceSent) keys.add("invoice");
+      if (overdue) keys.add("chase");
+      if (hasPo && awaitingReply) keys.add("waiting");
+
+      return {
+        keys,
+        toAsk,
+        payable,
+        owed,
+        invoiceSent,
+        // Units the headline counts: partners for the partner lists, events for
+        // the client ones.
+        units: {
+          ask: toAsk.length,
+          pay: payable.length,
+          invoice: 1,
+          chase: 1,
+          waiting: owed.length,
+        } as Record<ListKey, number>,
+        amounts: {
+          ask: toAsk.reduce((t, u) => t + u.remaining, 0),
+          pay: payable.reduce((t, u) => t + u.remaining, 0),
+          invoice: stillToInvoice(r),
+          chase: Math.max(r.client_reste_a_encaisser_ttc ?? 0, 0),
+          waiting: owed.reduce((t, u) => t + u.remaining, 0),
+        } as Record<ListKey, number>,
+      };
+    },
+    [actionFor, partnerOutreach],
+  );
+
+  const listed = useMemo(
+    () => filtered.map((item) => ({ item, lists: listsOf(item) })),
+    [filtered, listsOf],
+  );
+
+  /** One row per action list, in the order the overview shows them. */
+  const actionLists = useMemo(() => {
+    return LIST_ORDER.map((key) => {
+      const meta = LIST_META[key];
+      const members = listed.filter(({ lists }) => lists.keys.has(key));
+      const units = members.reduce((total, { lists }) => total + lists.units[key], 0);
+      const byCcy = new Map<string, number>();
+      members.forEach(({ item, lists }) => {
+        const ccy = item.row.currency || "CAD";
+        byCcy.set(ccy, (byCcy.get(ccy) ?? 0) + lists.amounts[key]);
+      });
+      return {
+        key,
+        meta,
+        events: members.length,
+        units,
+        byCcy,
+        title: meta.title(units),
+        detail: meta.detail(members),
+      };
+    });
+  }, [listed]);
+
+  /** The four disjoint slices of the portfolio, and their total. */
+  const portfolio = useMemo(() => {
+    let toCollect = 0;
+    let toPartners = 0;
+    let notInvoiced = 0;
+    let overdue = 0;
+    let needsMove = 0;
+    let breached = 0;
+    for (const { item, lists } of listed) {
+      const out = Math.max(item.row.client_reste_a_encaisser_ttc ?? 0, 0);
+      // Overdue is carved out of what the client owes rather than counted twice,
+      // so the four segments add up to the headline figure.
+      if (paymentStatus(item.row, item.invoices).variant === "overdue") overdue += out;
+      else toCollect += out;
+      toPartners += Math.max(item.row.partner_reste_a_decaisser_ttc ?? 0, 0);
+      notInvoiced += lists.invoiceSent ? 0 : stillToInvoice(item.row);
+      if (lists.keys.size > 0) needsMove += 1;
+      const breach =
+        invoicingSla(item.row, item.invoices).variant === "overdue" ||
+        payoutSla(item.row, item.partners).variant === "overdue" ||
+        paymentStatus(item.row, item.invoices).variant === "overdue";
+      if (breach) breached += 1;
+    }
+    const total = toCollect + toPartners + notInvoiced + overdue;
+    return { toCollect, toPartners, notInvoiced, overdue, total, needsMove, breached };
+  }, [listed]);
+
   useRegisterTrackerActions(
     {
       onRefresh: () => refetch(),
@@ -1262,12 +1454,18 @@ function SlaPage() {
 
   const scoped = useMemo(() => {
     const stat = statFilter ? STATS.find((s) => s.key === statFilter) : null;
-    const base = stat ? withMove.filter((x) => stat.test(x)) : withMove;
+    let base = stat ? withMove.filter((x) => stat.test(x)) : withMove;
+    if (activeList) {
+      const inList = new Set(
+        listed.filter(({ lists }) => lists.keys.has(activeList)).map(({ item }) => item.row),
+      );
+      base = base.filter((x) => inList.has(x.row));
+    }
     if (scope === "breached") return base.filter((x) => x.breach != null);
     if (scope === "to_pay") return base.filter((x) => x.toPay.length > 0);
     if (scope === "move") return base.filter((x) => needsAMove(x.move.group));
     return base;
-  }, [withMove, scope, statFilter]);
+  }, [withMove, scope, statFilter, activeList, listed]);
 
   const scopeCounts = useMemo(
     () => ({
@@ -1340,460 +1538,776 @@ function SlaPage() {
         </div>
       )}
 
-      {/* ── Headline figures ──────────────────────────────────────────────
-          Each one opens its own events in the list, so a number can always be
-          taken apart into the events behind it. */}
-      <div className="flex-none border-b border-border bg-[#fafaf8] px-4 py-2.5">
-        <div className="flex flex-wrap items-stretch gap-1.5">
-          {STATS.map((stat, i) => {
-            const totals = statTotals.get(stat.key);
-            const active = statFilter === stat.key;
-            const previous = STATS[i - 1];
-            return (
-              <Fragment key={stat.key}>
-                {previous && previous.band !== stat.band && (
-                  <span className="mx-1 w-px flex-none self-stretch bg-border" aria-hidden="true" />
-                )}
-                <button
-                  type="button"
-                  onClick={() => pickStat(stat.key)}
-                  aria-pressed={active}
-                  title={`${stat.hint} — click to list them`}
-                  className={`min-w-[132px] flex-1 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
-                    active
-                      ? "border-navy bg-white shadow-[0_0_0_1px_#101f34]"
-                      : "border-border bg-white hover:border-navy"
-                  }`}
-                >
-                  <span className="flex items-baseline gap-1.5">
-                    <span className="text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500">
-                      {stat.label}
-                    </span>
-                    <span className="text-[10.5px] font-semibold text-slate-400">
-                      {isLoading ? "" : totals ? totals.count : 0}
-                    </span>
-                  </span>
-                  <span className="mt-0.5 block cell-mono truncate text-[13px] font-semibold">
-                    {isLoading ? "…" : fmtMulti(totals?.byCcy ?? new Map())}
-                  </span>
-                </button>
-              </Fragment>
-            );
-          })}
-        </div>
-        {statFilter && (
-          <button
-            type="button"
-            onClick={() => setStatFilter(null)}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-navy px-2.5 py-[3px] text-[11.5px] font-semibold text-white"
-          >
-            {STATS.find((s) => s.key === statFilter)?.label} only — clear
-            <span aria-hidden="true">×</span>
-          </button>
-        )}
-      </div>
-
-      <div className="flex min-h-0 flex-1 overflow-x-auto">
-        {/* ── List column ───────────────────────────────────────────────── */}
-        <div className="flex w-[470px] flex-none flex-col border-r border-border bg-white">
-          <div className="flex-none border-b border-border px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span className="flex h-8 flex-1 items-center gap-2 rounded-md border border-input bg-white px-2.5">
-                <Search className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search ref, event, partner, invoice…"
-                  aria-label="Search"
-                  className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] outline-none"
-                />
-              </span>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]">
-                    <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
-                    Filters
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="end" className="w-[320px] space-y-2.5">
-                  <Select value={kindFilter} onValueChange={setKindFilter}>
-                    <SelectTrigger className="h-8 w-full text-[12px]">
-                      <SelectValue placeholder="Transaction kind" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="no_turnkey">Hors turnkey</SelectItem>
-                      <SelectItem value="all">Tous les types</SelectItem>
-                      <SelectItem value="PORTAGE">Portage</SelectItem>
-                      <SelectItem value="VENUE_FINDING">Venue finding</SelectItem>
-                      <SelectItem value="TURNKEY">Turnkey seulement</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <TagFilterSelect
-                    groups={TAG_FILTER_GROUPS}
-                    selected={tagFilter}
-                    onChange={setTagFilter}
-                  />
-                  <Select
-                    value={invoiceFilter}
-                    onValueChange={(v) => setInvoiceFilter(v as InvoiceStatus | "all")}
-                  >
-                    <SelectTrigger className="h-8 w-full text-[12px]">
-                      <SelectValue placeholder="Invoicing status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All invoicing statuses</SelectItem>
-                      {INVOICE_STATUS_ORDER.map((s) => (
-                        <SelectItem key={s} value={s}>
-                          {INVOICE_STATUS_META[s].label} ({invoiceStatusCounts[s]})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="h-8 w-full text-[12px]">
-                      <SelectValue placeholder="Filter" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All events</SelectItem>
-                      <SelectItem value="invoicing_breached">Invoicing SLA breached</SelectItem>
-                      <SelectItem value="payout_breached">Payout SLA breached</SelectItem>
-                      <SelectItem value="partner_outstanding">Partner outstanding</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              {(
-                [
-                  { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
-                  { key: "to_pay" as const, label: "Partners to pay", count: scopeCounts.toPay },
-                  { key: "breached" as const, label: "Breached", count: scopeCounts.breached },
-                  { key: "all" as const, label: "All", count: scopeCounts.all },
-                ] as const
-              ).map((s) => {
-                const active = scope === s.key;
-                return (
-                  <button
-                    key={s.key}
-                    type="button"
-                    onClick={() => setScope(s.key)}
-                    className={`inline-flex h-[26px] items-center rounded-full px-2.5 text-[11.5px] ${
-                      active
-                        ? "bg-navy font-semibold text-white"
-                        : "bg-[#F3F4F6] font-medium text-[#4B5563]"
-                    }`}
-                  >
-                    {s.label} {s.count}
-                  </button>
-                );
-              })}
-              {gmailConnection?.connected && incompleteTargets.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => requestDialog.open(incompleteTargets)}
-                  className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
-                >
-                  Demander les infos ({incompleteTargets.length})
-                </button>
-              )}
-              {gmailConnection?.connected && (
-                <button
-                  type="button"
-                  disabled={scanProgress.running}
-                  onClick={() =>
-                    startScan(
-                      filtered
-                        .filter(({ row: r, partners: ps }) =>
-                          eventNeedsScan(
-                            r.readable_id ?? r.client_request_id ?? "",
-                            ps,
-                            Boolean(r.purchase_order_number),
-                          ),
-                        )
-                        .map(({ row: r, partners: ps }) => ({
-                          event_ref: r.readable_id ?? r.client_request_id ?? "",
-                          partners: ps
-                            .filter(
-                              (p) =>
-                                !p.is_cancelled &&
-                                actionFor(
-                                  r.readable_id ?? r.client_request_id ?? "",
-                                  p,
-                                  Boolean(r.purchase_order_number),
-                                ).scanUseful,
-                            )
-                            .map((p) => ({ name: p.name ?? "", email: p.email })),
-                        })),
+      {/* ── Overview ──────────────────────────────────────────────────────
+          Land, see the size of the portfolio, pick a list to clear. */}
+      {activeList === null ? (
+        <OverviewScreen
+          portfolio={portfolio}
+          lists={actionLists}
+          isLoading={isLoading}
+          totalEvents={listed.length}
+          noPoCount={listed.filter(({ item }) => !hasPurchaseOrder(item.row)).length}
+          onOpen={(key) => {
+            setActiveList(key);
+            setScope("all");
+            setStatFilter(null);
+          }}
+          onOpenNoPo={() => {
+            setActiveList(null);
+            setScope("all");
+            setStatFilter("invoices_no_po");
+          }}
+          gmail={gmailConnection}
+          scanning={scanProgress.running}
+          onScan={() =>
+            startScan(
+              filtered
+                .filter(({ row: r, partners: ps }) =>
+                  eventNeedsScan(
+                    r.readable_id ?? r.client_request_id ?? "",
+                    ps,
+                    Boolean(r.purchase_order_number),
+                  ),
+                )
+                .map(({ row: r, partners: ps }) => ({
+                  event_ref: r.readable_id ?? r.client_request_id ?? "",
+                  partners: ps
+                    .filter(
+                      (p) =>
+                        !p.is_cancelled &&
+                        actionFor(
+                          r.readable_id ?? r.client_request_id ?? "",
+                          p,
+                          Boolean(r.purchase_order_number),
+                        ).scanUseful,
                     )
-                  }
-                  className="rounded-full border border-border px-2.5 py-[3px] text-[11.5px] text-slate-600 disabled:opacity-50"
-                >
-                  {scanProgress.running ? "Recherche…" : "Scanner mes emails"}
-                </button>
-              )}
-            </div>
+                    .map((p) => ({ name: p.name ?? "", email: p.email })),
+                })),
+            )
+          }
+        />
+      ) : (
+        <>
+          <div className="flex flex-none items-center gap-3 border-b border-paper-rule bg-paper-canvas px-8 py-3.5 font-paper text-[13px]">
+            <button
+              type="button"
+              onClick={() => setActiveList(null)}
+              className="text-paper-label underline-offset-[3px] hover:underline"
+            >
+              Overview
+            </button>
+            <span className="text-paper-faint">/</span>
+            <span className="text-paper-ink">{LIST_META[activeList].name}</span>
+            <span className="ml-auto flex flex-wrap items-center gap-5 text-[12.5px]">
+              {actionLists
+                .filter((l) => l.key !== activeList && l.events > 0)
+                .map((l) => (
+                  <button
+                    key={l.key}
+                    type="button"
+                    onClick={() => setActiveList(l.key)}
+                    className="text-paper-body underline-offset-[3px] hover:underline"
+                  >
+                    {l.meta.name}{" "}
+                    <span className="font-paper-mono text-[11.5px] text-paper-label">
+                      {l.units}
+                    </span>
+                  </button>
+                ))}
+            </span>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto">
-            {isLoading && (
-              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                Loading data from BigQuery…
-              </p>
+          {/* ── Headline figures ──────────────────────────────────────────────
+          Each one opens its own events in the list, so a number can always be
+          taken apart into the events behind it. */}
+          <div className="flex-none border-b border-border bg-[#fafaf8] px-4 py-2.5">
+            <div className="flex flex-wrap items-stretch gap-1.5">
+              {STATS.map((stat, i) => {
+                const totals = statTotals.get(stat.key);
+                const active = statFilter === stat.key;
+                const previous = STATS[i - 1];
+                return (
+                  <Fragment key={stat.key}>
+                    {previous && previous.band !== stat.band && (
+                      <span
+                        className="mx-1 w-px flex-none self-stretch bg-border"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => pickStat(stat.key)}
+                      aria-pressed={active}
+                      title={`${stat.hint} — click to list them`}
+                      className={`min-w-[132px] flex-1 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+                        active
+                          ? "border-navy bg-white shadow-[0_0_0_1px_#101f34]"
+                          : "border-border bg-white hover:border-navy"
+                      }`}
+                    >
+                      <span className="flex items-baseline gap-1.5">
+                        <span className="text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500">
+                          {stat.label}
+                        </span>
+                        <span className="text-[10.5px] font-semibold text-slate-400">
+                          {isLoading ? "" : totals ? totals.count : 0}
+                        </span>
+                      </span>
+                      <span className="mt-0.5 block cell-mono truncate text-[13px] font-semibold">
+                        {isLoading ? "…" : fmtMulti(totals?.byCcy ?? new Map())}
+                      </span>
+                    </button>
+                  </Fragment>
+                );
+              })}
+            </div>
+            {statFilter && (
+              <button
+                type="button"
+                onClick={() => setStatFilter(null)}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-navy px-2.5 py-[3px] text-[11.5px] font-semibold text-white"
+              >
+                {STATS.find((s) => s.key === statFilter)?.label} only — clear
+                <span aria-hidden="true">×</span>
+              </button>
             )}
-            {!isLoading && scoped.length === 0 && (
-              <div className="flex flex-col items-center gap-2.5 px-12 py-16 text-center">
-                <SearchX className="h-6 w-6 text-slate-400" aria-hidden="true" />
-                <span className="font-display text-base font-bold">
-                  {search ? `Nothing matches “${search}”` : "Nothing to show"}
-                </span>
-                <span className="text-[12.5px] leading-relaxed text-slate-600">
-                  Search covers event refs, event types, partner names and invoice refs.
-                </span>
-                {search && (
-                  <Button variant="outline" size="sm" className="h-7" onClick={() => setSearch("")}>
-                    Clear the search
-                  </Button>
-                )}
-              </div>
-            )}
-            {!isLoading &&
-              groups.map((g) => (
-                <Fragment key={g.key}>
-                  <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-100 bg-[#fafaf8] px-4 py-2">
-                    <span
-                      className="h-[7px] w-[7px] flex-none rounded-full"
-                      style={{ background: g.dot }}
+          </div>
+
+          <div className="flex min-h-0 flex-1 overflow-x-auto">
+            {/* ── List column ───────────────────────────────────────────────── */}
+            <div className="flex w-[470px] flex-none flex-col border-r border-border bg-white">
+              <div className="flex-none border-b border-border px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 flex-1 items-center gap-2 rounded-md border border-input bg-white px-2.5">
+                    <Search className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+                    <input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search ref, event, partner, invoice…"
+                      aria-label="Search"
+                      className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] outline-none"
                     />
-                    <span className="text-[11px] font-bold uppercase tracking-[0.07em] text-slate-600">
-                      {g.title}
-                    </span>
-                    <span className="text-[11px] text-slate-400">{g.rows.length}</span>
-                  </div>
-                  {g.rows.map((item) => {
-                    const r = item.row;
-                    const id = r.client_request_id ?? r.readable_id ?? "";
-                    const ref = r.readable_id ?? id;
-                    const isSel = selRef === ref;
+                  </span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[12px]">
+                        <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                        Filters
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-[320px] space-y-2.5">
+                      <Select value={kindFilter} onValueChange={setKindFilter}>
+                        <SelectTrigger className="h-8 w-full text-[12px]">
+                          <SelectValue placeholder="Transaction kind" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="no_turnkey">Hors turnkey</SelectItem>
+                          <SelectItem value="all">Tous les types</SelectItem>
+                          <SelectItem value="PORTAGE">Portage</SelectItem>
+                          <SelectItem value="VENUE_FINDING">Venue finding</SelectItem>
+                          <SelectItem value="TURNKEY">Turnkey seulement</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <TagFilterSelect
+                        groups={TAG_FILTER_GROUPS}
+                        selected={tagFilter}
+                        onChange={setTagFilter}
+                      />
+                      <Select
+                        value={invoiceFilter}
+                        onValueChange={(v) => setInvoiceFilter(v as InvoiceStatus | "all")}
+                      >
+                        <SelectTrigger className="h-8 w-full text-[12px]">
+                          <SelectValue placeholder="Invoicing status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All invoicing statuses</SelectItem>
+                          {INVOICE_STATUS_ORDER.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              {INVOICE_STATUS_META[s].label} ({invoiceStatusCounts[s]})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={statusFilter} onValueChange={setStatusFilter}>
+                        <SelectTrigger className="h-8 w-full text-[12px]">
+                          <SelectValue placeholder="Filter" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All events</SelectItem>
+                          <SelectItem value="invoicing_breached">Invoicing SLA breached</SelectItem>
+                          <SelectItem value="payout_breached">Payout SLA breached</SelectItem>
+                          <SelectItem value="partner_outstanding">Partner outstanding</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
+                      {
+                        key: "to_pay" as const,
+                        label: "Partners to pay",
+                        count: scopeCounts.toPay,
+                      },
+                      { key: "breached" as const, label: "Breached", count: scopeCounts.breached },
+                      { key: "all" as const, label: "All", count: scopeCounts.all },
+                    ] as const
+                  ).map((s) => {
+                    const active = scope === s.key;
                     return (
                       <button
-                        key={id}
+                        key={s.key}
                         type="button"
-                        onClick={() => setSelectedId(id)}
-                        className={`flex w-full gap-2.5 border-b border-slate-100 px-4 py-2.5 text-left ${
-                          isSel ? "bg-[#fafaf8]" : "hover:bg-[#fafaf8]"
+                        onClick={() => setScope(s.key)}
+                        className={`inline-flex h-[26px] items-center rounded-full px-2.5 text-[11.5px] ${
+                          active
+                            ? "bg-navy font-semibold text-white"
+                            : "bg-[#F3F4F6] font-medium text-[#4B5563]"
                         }`}
-                        style={{ borderLeft: `3px solid ${isSel ? "#101f34" : "transparent"}` }}
                       >
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-1.5">
-                            <span className="truncate text-[13px] font-medium">
-                              {(r.event_type || "—").replaceAll("_", " ").toLowerCase()}
-                            </span>
-                            <span className="cell-mono flex-none text-[10.5px] text-slate-400">
-                              {ref}
-                            </span>
-                          </span>
-                          <span className="mt-0.5 block text-[11.5px] text-slate-500">
-                            {r.country_iso_code ?? "—"} · {r.billing_entity ?? "—"} ·{" "}
-                            {item.partners.length} partner
-                            {item.partners.length === 1 ? "" : "s"}
-                          </span>
-                          {/* Who is actually owed money — the PO is in, these are not paid. */}
-                          {item.toPay.length > 0 && (
-                            <span className="mt-0.5 block truncate text-[11.5px] text-slate-700">
-                              To pay:{" "}
-                              {item.toPay
-                                .slice(0, 2)
-                                .map(
-                                  ({ partner, remaining }) =>
-                                    `${partnerLabel(partner)} ${fmtCurrency(
-                                      remaining,
-                                      partner.currency ?? r.currency,
-                                    )}`,
-                                )
-                                .join(" · ")}
-                              {item.toPay.length > 2 ? ` · +${item.toPay.length - 2}` : ""}
-                            </span>
-                          )}
-                          <span className="mt-[5px] flex flex-wrap gap-1">
-                            <span
-                              className={`rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
-                                MOVE_PILL[item.move.group]
-                              }`}
-                            >
-                              {item.move.label}
-                            </span>
-                            {item.breach && (
-                              <span className="rounded-full bg-[#FEE2E2] px-2 py-[2px] text-[10.5px] font-semibold text-[#991B1B]">
-                                {item.breach}
-                              </span>
-                            )}
-                          </span>
-                        </span>
-                        <span className="flex-none whitespace-nowrap text-right">
-                          <span className="block cell-mono text-[13px] font-semibold">
-                            {item.move.headline}
-                          </span>
-                          <span className="block text-[10.5px] text-slate-400">
-                            {item.move.headlineLabel}
-                          </span>
-                          <span className="mt-1.5 block text-[10.5px] text-slate-400">
-                            {fmtDate(r.booking_date)}
-                          </span>
-                        </span>
+                        {s.label} {s.count}
                       </button>
                     );
                   })}
-                </Fragment>
-              ))}
-          </div>
-        </div>
+                  {gmailConnection?.connected && incompleteTargets.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => requestDialog.open(incompleteTargets)}
+                      className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
+                    >
+                      Demander les infos ({incompleteTargets.length})
+                    </button>
+                  )}
+                  {gmailConnection?.connected && (
+                    <button
+                      type="button"
+                      disabled={scanProgress.running}
+                      onClick={() =>
+                        startScan(
+                          filtered
+                            .filter(({ row: r, partners: ps }) =>
+                              eventNeedsScan(
+                                r.readable_id ?? r.client_request_id ?? "",
+                                ps,
+                                Boolean(r.purchase_order_number),
+                              ),
+                            )
+                            .map(({ row: r, partners: ps }) => ({
+                              event_ref: r.readable_id ?? r.client_request_id ?? "",
+                              partners: ps
+                                .filter(
+                                  (p) =>
+                                    !p.is_cancelled &&
+                                    actionFor(
+                                      r.readable_id ?? r.client_request_id ?? "",
+                                      p,
+                                      Boolean(r.purchase_order_number),
+                                    ).scanUseful,
+                                )
+                                .map((p) => ({ name: p.name ?? "", email: p.email })),
+                            })),
+                        )
+                      }
+                      className="rounded-full border border-border px-2.5 py-[3px] text-[11.5px] text-slate-600 disabled:opacity-50"
+                    >
+                      {scanProgress.running ? "Recherche…" : "Scanner mes emails"}
+                    </button>
+                  )}
+                </div>
+              </div>
 
-        {/* ── Detail pane ───────────────────────────────────────────────── */}
-        <div className="flex min-w-[780px] flex-1 flex-col bg-[#fafaf8]">
-          {sel == null ? (
-            <div className="flex flex-1 items-center justify-center px-10 text-center">
-              <span className="text-sm text-slate-500">
-                Select an event on the left to see its detail.
-              </span>
-            </div>
-          ) : (
-            <>
-              <div className="flex-none border-b border-border bg-white px-6 pb-3.5 pt-4">
-                <div className="flex items-start gap-3.5">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <h1 className="font-display text-2xl font-bold tracking-tight">
-                        {(sel.event_type || "—").replaceAll("_", " ").toLowerCase()}
-                      </h1>
-                      {sel.booking_url ? (
-                        <a
-                          href={sel.booking_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="cell-mono border-b border-dotted border-slate-400 text-[12.5px] no-underline"
-                        >
-                          {selRef}
-                        </a>
-                      ) : (
-                        <span className="cell-mono text-[12.5px]">{selRef}</span>
-                      )}
-                      <span
-                        className={`pill ${
-                          sel.purchase_order_number
-                            ? "bg-emerald-100 text-emerald-800"
-                            : "bg-rose-100 text-rose-800"
-                        }`}
-                      >
-                        {sel.purchase_order_number
-                          ? `PO ${sel.purchase_order_number}${
-                              sel.purchase_order_date
-                                ? ` · since ${fmtDate(sel.purchase_order_date)}`
-                                : ""
-                            }`
-                          : "No PO"}
-                      </span>
-                      {(() => {
-                        const s = INVOICE_STATUS_META[invoiceStatusOf(selInvoices)];
-                        return <span className={`pill ${s.cls}`}>{s.label}</span>;
-                      })()}
-                    </div>
-                    <div className="mt-1 text-[13px] text-slate-500">
-                      {sel.company_name ?? "—"} · {sel.country_iso_code ?? "—"} ·{" "}
-                      {sel.billing_entity ?? "—"} · booked {fmtDate(sel.booking_date)}
-                      {sel.end_date ? ` · ends ${fmtDate(sel.end_date)}` : ""}
-                    </div>
-                  </div>
-                  <div className="ml-auto flex flex-none items-center gap-2">
-                    {sel.booking_url && (
+              <div className="min-h-0 flex-1 overflow-auto">
+                {isLoading && (
+                  <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    Loading data from BigQuery…
+                  </p>
+                )}
+                {!isLoading && scoped.length === 0 && (
+                  <div className="flex flex-col items-center gap-2.5 px-12 py-16 text-center">
+                    <SearchX className="h-6 w-6 text-slate-400" aria-hidden="true" />
+                    <span className="font-display text-base font-bold">
+                      {search ? `Nothing matches “${search}”` : "Nothing to show"}
+                    </span>
+                    <span className="text-[12.5px] leading-relaxed text-slate-600">
+                      Search covers event refs, event types, partner names and invoice refs.
+                    </span>
+                    {search && (
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 gap-1.5 text-[12.5px]"
-                        asChild
+                        className="h-7"
+                        onClick={() => setSearch("")}
                       >
-                        <a href={sel.booking_url} target="_blank" rel="noreferrer">
-                          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                          Back office
-                        </a>
+                        Clear the search
                       </Button>
                     )}
-                    {/* Same targets as the list-level button, narrowed to this event. */}
-                    {(() => {
-                      if (!gmailConnection?.connected) return null;
-                      const mine = incompleteTargets.filter((t) => t.eventRef === selRef);
-                      if (mine.length === 0) return null;
-                      return (
-                        <Button
-                          size="sm"
-                          className="h-8 gap-1.5 border-0 bg-naboo text-[12.5px] font-bold text-navy shadow-none hover:bg-naboo-hover"
-                          onClick={() => requestDialog.open(mine)}
-                        >
-                          <Send className="h-3.5 w-3.5" aria-hidden="true" />
-                          Ask {mine.length} partner{mine.length > 1 ? "s" : ""} for details
-                        </Button>
-                      );
-                    })()}
                   </div>
-                </div>
+                )}
+                {!isLoading &&
+                  groups.map((g) => (
+                    <Fragment key={g.key}>
+                      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-100 bg-[#fafaf8] px-4 py-2">
+                        <span
+                          className="h-[7px] w-[7px] flex-none rounded-full"
+                          style={{ background: g.dot }}
+                        />
+                        <span className="text-[11px] font-bold uppercase tracking-[0.07em] text-slate-600">
+                          {g.title}
+                        </span>
+                        <span className="text-[11px] text-slate-400">{g.rows.length}</span>
+                      </div>
+                      {g.rows.map((item) => {
+                        const r = item.row;
+                        const id = r.client_request_id ?? r.readable_id ?? "";
+                        const ref = r.readable_id ?? id;
+                        const isSel = selRef === ref;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setSelectedId(id)}
+                            className={`flex w-full gap-2.5 border-b border-slate-100 px-4 py-2.5 text-left ${
+                              isSel ? "bg-[#fafaf8]" : "hover:bg-[#fafaf8]"
+                            }`}
+                            style={{ borderLeft: `3px solid ${isSel ? "#101f34" : "transparent"}` }}
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-1.5">
+                                <span className="truncate text-[13px] font-medium">
+                                  {(r.event_type || "—").replaceAll("_", " ").toLowerCase()}
+                                </span>
+                                <span className="cell-mono flex-none text-[10.5px] text-slate-400">
+                                  {ref}
+                                </span>
+                              </span>
+                              <span className="mt-0.5 block text-[11.5px] text-slate-500">
+                                {r.country_iso_code ?? "—"} · {r.billing_entity ?? "—"} ·{" "}
+                                {item.partners.length} partner
+                                {item.partners.length === 1 ? "" : "s"}
+                              </span>
+                              {/* Who is actually owed money — the PO is in, these are not paid. */}
+                              {item.toPay.length > 0 && (
+                                <span className="mt-0.5 block truncate text-[11.5px] text-slate-700">
+                                  To pay:{" "}
+                                  {item.toPay
+                                    .slice(0, 2)
+                                    .map(
+                                      ({ partner, remaining }) =>
+                                        `${partnerLabel(partner)} ${fmtCurrency(
+                                          remaining,
+                                          partner.currency ?? r.currency,
+                                        )}`,
+                                    )
+                                    .join(" · ")}
+                                  {item.toPay.length > 2 ? ` · +${item.toPay.length - 2}` : ""}
+                                </span>
+                              )}
+                              <span className="mt-[5px] flex flex-wrap gap-1">
+                                <span
+                                  className={`rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+                                    MOVE_PILL[item.move.group]
+                                  }`}
+                                >
+                                  {item.move.label}
+                                </span>
+                                {item.breach && (
+                                  <span className="rounded-full bg-[#FEE2E2] px-2 py-[2px] text-[10.5px] font-semibold text-[#991B1B]">
+                                    {item.breach}
+                                  </span>
+                                )}
+                              </span>
+                            </span>
+                            <span className="flex-none whitespace-nowrap text-right">
+                              <span className="block cell-mono text-[13px] font-semibold">
+                                {item.move.headline}
+                              </span>
+                              <span className="block text-[10.5px] text-slate-400">
+                                {item.move.headlineLabel}
+                              </span>
+                              <span className="mt-1.5 block text-[10.5px] text-slate-400">
+                                {fmtDate(r.booking_date)}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
+              </div>
+            </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-5">
-                  {(() => {
-                    const pay = paymentStatus(sel, selInvoices);
-                    const inv = invoicingSla(sel, selInvoices);
-                    const po = payoutSla(sel, selPartners);
-                    const stats: Array<{ label: string; value: string; tone?: string }> = [
-                      {
-                        label: "Client outstanding",
-                        value: fmtCurrency(sel.client_reste_a_encaisser_ttc, sel.currency),
-                        tone:
-                          (sel.client_reste_a_encaisser_ttc ?? 0) > 0.01
-                            ? "text-rose-700"
-                            : undefined,
-                      },
-                      {
-                        label: "Owed to partners",
-                        value: fmtCurrency(sel.partner_reste_a_decaisser_ttc, sel.currency),
-                        tone:
-                          (sel.partner_reste_a_decaisser_ttc ?? 0) > 0.01
-                            ? "text-rose-700"
-                            : undefined,
-                      },
-                      { label: "Invoicing SLA", value: inv.label },
-                      { label: "Payment", value: pay.label },
-                      { label: "Payout SLA", value: po.label },
-                    ];
-                    return stats.map((s) => (
-                      <div key={s.label} className="bg-white px-3 py-2.5">
-                        <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-slate-500">
-                          {s.label}
+            {/* ── Detail pane ───────────────────────────────────────────────── */}
+            <div className="flex min-w-[780px] flex-1 flex-col bg-[#fafaf8]">
+              {sel == null ? (
+                <div className="flex flex-1 items-center justify-center px-10 text-center">
+                  <span className="text-sm text-slate-500">
+                    Select an event on the left to see its detail.
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex-none border-b border-border bg-white px-6 pb-3.5 pt-4">
+                    <div className="flex items-start gap-3.5">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <h1 className="font-display text-2xl font-bold tracking-tight">
+                            {(sel.event_type || "—").replaceAll("_", " ").toLowerCase()}
+                          </h1>
+                          {sel.booking_url ? (
+                            <a
+                              href={sel.booking_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="cell-mono border-b border-dotted border-slate-400 text-[12.5px] no-underline"
+                            >
+                              {selRef}
+                            </a>
+                          ) : (
+                            <span className="cell-mono text-[12.5px]">{selRef}</span>
+                          )}
+                          <span
+                            className={`pill ${
+                              sel.purchase_order_number
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-rose-100 text-rose-800"
+                            }`}
+                          >
+                            {sel.purchase_order_number
+                              ? `PO ${sel.purchase_order_number}${
+                                  sel.purchase_order_date
+                                    ? ` · since ${fmtDate(sel.purchase_order_date)}`
+                                    : ""
+                                }`
+                              : "No PO"}
+                          </span>
+                          {(() => {
+                            const s = INVOICE_STATUS_META[invoiceStatusOf(selInvoices)];
+                            return <span className={`pill ${s.cls}`}>{s.label}</span>;
+                          })()}
                         </div>
-                        <div
-                          className={`mt-0.5 cell-mono whitespace-nowrap text-base font-semibold ${s.tone ?? ""}`}
-                        >
-                          {s.value}
+                        <div className="mt-1 text-[13px] text-slate-500">
+                          {sel.company_name ?? "—"} · {sel.country_iso_code ?? "—"} ·{" "}
+                          {sel.billing_entity ?? "—"} · booked {fmtDate(sel.booking_date)}
+                          {sel.end_date ? ` · ends ${fmtDate(sel.end_date)}` : ""}
                         </div>
                       </div>
-                    ));
-                  })()}
-                </div>
-              </div>
+                      <div className="ml-auto flex flex-none items-center gap-2">
+                        {sel.booking_url && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-1.5 text-[12.5px]"
+                            asChild
+                          >
+                            <a href={sel.booking_url} target="_blank" rel="noreferrer">
+                              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                              Back office
+                            </a>
+                          </Button>
+                        )}
+                        {/* Same targets as the list-level button, narrowed to this event. */}
+                        {(() => {
+                          if (!gmailConnection?.connected) return null;
+                          const mine = incompleteTargets.filter((t) => t.eventRef === selRef);
+                          if (mine.length === 0) return null;
+                          return (
+                            <Button
+                              size="sm"
+                              className="h-8 gap-1.5 border-0 bg-naboo text-[12.5px] font-bold text-navy shadow-none hover:bg-naboo-hover"
+                              onClick={() => requestDialog.open(mine)}
+                            >
+                              <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                              Ask {mine.length} partner{mine.length > 1 ? "s" : ""} for details
+                            </Button>
+                          );
+                        })()}
+                      </div>
+                    </div>
 
-              <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
-                <EventDetails partners={selPartners} invoices={selInvoices} row={sel} />
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+                    <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-5">
+                      {(() => {
+                        const pay = paymentStatus(sel, selInvoices);
+                        const inv = invoicingSla(sel, selInvoices);
+                        const po = payoutSla(sel, selPartners);
+                        const stats: Array<{ label: string; value: string; tone?: string }> = [
+                          {
+                            label: "Client outstanding",
+                            value: fmtCurrency(sel.client_reste_a_encaisser_ttc, sel.currency),
+                            tone:
+                              (sel.client_reste_a_encaisser_ttc ?? 0) > 0.01
+                                ? "text-rose-700"
+                                : undefined,
+                          },
+                          {
+                            label: "Owed to partners",
+                            value: fmtCurrency(sel.partner_reste_a_decaisser_ttc, sel.currency),
+                            tone:
+                              (sel.partner_reste_a_decaisser_ttc ?? 0) > 0.01
+                                ? "text-rose-700"
+                                : undefined,
+                          },
+                          { label: "Invoicing SLA", value: inv.label },
+                          { label: "Payment", value: pay.label },
+                          { label: "Payout SLA", value: po.label },
+                        ];
+                        return stats.map((s) => (
+                          <div key={s.label} className="bg-white px-3 py-2.5">
+                            <div className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                              {s.label}
+                            </div>
+                            <div
+                              className={`mt-0.5 cell-mono whitespace-nowrap text-base font-semibold ${s.tone ?? ""}`}
+                            >
+                              {s.value}
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
+                    <EventDetails partners={selPartners} invoices={selInvoices} row={sel} />
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       {requestDialog.targets && (
         <RequestInfoDialog targets={requestDialog.targets} onClose={requestDialog.close} />
       )}
     </div>
   );
+}
+
+/** Figures on the overview are plain: no currency symbol, grouped thousands. */
+function fmtPaper(value: number): string {
+  return new Intl.NumberFormat("fr-CA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+/**
+ * The overview.
+ *
+ * One headline figure, the composition behind it, then the work ranked as one
+ * list per action type. Colour is spent only where something has breached; the
+ * lime carries the single primary action.
+ */
+function OverviewScreen({
+  portfolio,
+  lists,
+  isLoading,
+  totalEvents,
+  noPoCount,
+  onOpen,
+  onOpenNoPo,
+  gmail,
+  scanning,
+  onScan,
+}: {
+  portfolio: {
+    toCollect: number;
+    toPartners: number;
+    notInvoiced: number;
+    overdue: number;
+    total: number;
+    needsMove: number;
+    breached: number;
+  };
+  lists: Array<{
+    key: ListKey;
+    meta: (typeof LIST_META)[ListKey];
+    events: number;
+    units: number;
+    byCcy: Map<string, number>;
+    title: string;
+    detail: string;
+  }>;
+  isLoading: boolean;
+  totalEvents: number;
+  noPoCount: number;
+  onOpen: (key: ListKey) => void;
+  onOpenNoPo: () => void;
+  gmail: { connected?: boolean; email?: string | null } | undefined;
+  scanning: boolean;
+  onScan: () => void;
+}) {
+  const share = (value: number) =>
+    portfolio.total > 0 ? `${Math.max((value / portfolio.total) * 100, 0)}%` : "0%";
+  const segments = [
+    { value: portfolio.toCollect, fill: "bg-paper-ink" },
+    { value: portfolio.toPartners, fill: "bg-paper-faint" },
+    { value: portfolio.notInvoiced, fill: "bg-paper-rule-strong" },
+    { value: portfolio.overdue, fill: "bg-paper-alert" },
+  ];
+  const figures = [
+    { label: "Client to collect", value: portfolio.toCollect, alert: false },
+    { label: "Owed to partners", value: portfolio.toPartners, alert: false },
+    { label: "Not yet invoiced", value: portfolio.notInvoiced, alert: false },
+    { label: "Overdue", value: portfolio.overdue, alert: true },
+  ];
+
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto bg-paper-canvas font-paper text-paper-ink lg:grid-cols-[1fr_380px]">
+      <div className="border-paper-rule px-10 pb-10 pt-11 lg:border-r">
+        <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          L'Oréal Canada · portfolio in flight
+        </div>
+        <div className="mt-[18px] flex items-end gap-[18px] whitespace-nowrap">
+          <span className="font-paper-display text-[84px] leading-[0.9] tracking-[-0.02em] tabular-nums">
+            {isLoading ? "…" : fmtPaper(portfolio.total)}
+          </span>
+          <span className="pb-2 font-paper-display text-[22px] text-paper-muted">$CA</span>
+        </div>
+        <p className="mt-3.5 max-w-[640px] text-[14px] leading-relaxed text-paper-body [text-wrap:pretty]">
+          {isLoading
+            ? "Loading data from BigQuery…"
+            : `Across ${totalEvents} ${eventsLabel(portfolio)}`}
+        </p>
+
+        <div className="mt-8 flex h-[6px] border border-paper-rule-strong">
+          {segments.map((s, i) => (
+            <span key={i} className={s.fill} style={{ width: share(s.value) }} />
+          ))}
+        </div>
+        <div className="mt-px grid grid-cols-2 gap-px md:grid-cols-4">
+          {figures.map((f) => (
+            <div key={f.label} className="pt-3.5">
+              <div
+                className={`text-[10.5px] uppercase tracking-[0.16em] ${
+                  f.alert ? "text-paper-alert" : "text-paper-label"
+                }`}
+              >
+                {f.label}
+              </div>
+              <div
+                className={`mt-1.5 text-[19px] tabular-nums ${f.alert ? "text-paper-alert" : ""}`}
+              >
+                {isLoading ? "…" : fmtPaper(f.value)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-12 flex items-baseline gap-3">
+          <span className="font-paper-display text-[26px]">What needs a move</span>
+          <span className="text-[12.5px] text-paper-label">
+            {lists.filter((l) => l.events > 0).length} list
+            {lists.filter((l) => l.events > 0).length === 1 ? "" : "s"}, one per action — open one
+            and clear it
+          </span>
+        </div>
+
+        <div className="mt-5">
+          {lists.map((list, i) => {
+            const empty = list.events === 0;
+            return (
+              <button
+                key={list.key}
+                type="button"
+                disabled={empty}
+                onClick={() => onOpen(list.key)}
+                className={`flex w-full items-center gap-6 border-t border-paper-rule py-[22px] text-left ${
+                  i === lists.length - 1 ? "border-b" : ""
+                } ${empty ? "opacity-45" : "hover:bg-paper-row"}`}
+              >
+                <span className="w-[26px] font-paper-mono text-[13px] text-paper-label">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[19px] leading-[1.35]">
+                    {empty ? `Nothing to ${LIST_META[list.key].name.toLowerCase()}` : list.title}
+                  </span>
+                  <span className="mt-[5px] block text-[12.5px] text-paper-muted">
+                    {list.detail}
+                  </span>
+                </span>
+                <span className="w-[150px] flex-none text-right">
+                  <span className="block text-[17px] tabular-nums">
+                    {list.byCcy.size === 0 ? "—" : fmtMulti(list.byCcy)}
+                  </span>
+                  <span className="mt-[3px] block text-[11px] uppercase tracking-[0.14em] text-paper-label">
+                    {list.meta.unit}
+                  </span>
+                </span>
+                <span
+                  className={`inline-flex h-[34px] flex-none items-center justify-center px-4 text-[13px] ${
+                    empty
+                      ? "text-paper-faint"
+                      : list.meta.primary
+                        ? "bg-naboo text-paper-ink"
+                        : list.meta.quiet
+                          ? "text-paper-body"
+                          : "border border-paper-ink"
+                  }`}
+                >
+                  {list.meta.primary ? "Review & send" : "Open list"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <aside className="px-8 pb-10 pt-11">
+        <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          Blocked elsewhere
+        </div>
+        <p className="mt-[18px] text-[14px] leading-relaxed text-paper-body">
+          {noPoCount === 0
+            ? "Every event has a purchase order."
+            : `${noPoCount} event${noPoCount === 1 ? " has" : "s have"} no purchase order yet. Nothing can be invoiced or paid until L'Oréal issues one.`}
+        </p>
+        {noPoCount > 0 && (
+          <button
+            type="button"
+            onClick={onOpenNoPo}
+            className="mt-3.5 inline-block border-b border-paper-ink pb-0.5 text-[13px]"
+          >
+            See the {noPoCount} event{noPoCount === 1 ? "" : "s"}
+          </button>
+        )}
+
+        <div className="mt-9 border-t border-paper-rule pt-6 text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          Mailbox
+        </div>
+        <p className="mt-4 text-[13.5px] leading-relaxed text-paper-body">
+          {gmail?.connected
+            ? `Gmail connected as ${gmail.email ?? "your account"}.`
+            : "Gmail is not connected, so email history and sending are unavailable."}
+        </p>
+        {gmail?.connected && (
+          <button
+            type="button"
+            disabled={scanning}
+            onClick={onScan}
+            className="mt-3 inline-block border-b border-paper-ink pb-0.5 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
+          >
+            {scanning ? "Scanning…" : "Scan again"}
+          </button>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+/** "34 open events. 12 need a move; 3 have breached an SLA." */
+function eventsLabel(p: { needsMove: number; breached: number }): string {
+  const move = `${p.needsMove} ${p.needsMove === 1 ? "is" : "are"} waiting on something we can do today`;
+  const breach =
+    p.breached === 0
+      ? "nothing has breached an SLA"
+      : `${p.breached} ${p.breached === 1 ? "has" : "have"} already breached an SLA`;
+  return `open events. ${move}; ${breach}.`;
 }
 
 function EventDetails({
