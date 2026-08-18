@@ -250,6 +250,70 @@ type SortKey =
   | "balance_ccy"
   | "status";
 
+/** One list per action type — the spine of the redesigned overview. */
+export type NaListKey = "commission" | "refund" | "pay" | "client_refund" | "chase" | "hold";
+
+const NA_LIST_ORDER: NaListKey[] = [
+  "commission",
+  "refund",
+  "pay",
+  "client_refund",
+  "chase",
+  "hold",
+];
+
+/**
+ * How each list introduces itself.
+ *
+ * Commission and refund stay two lists on purpose: one is revenue we never
+ * collected, the other is cash we paid out by mistake beyond it. They go to
+ * different counterparties as different emails, and merging them into a single
+ * "to recover" line is exactly what the redesign is undoing.
+ */
+const NA_LIST_META: Record<
+  NaListKey,
+  {
+    name: string;
+    title: (units: number) => string;
+    unit: string;
+    primary?: boolean;
+    quiet?: boolean;
+  }
+> = {
+  commission: {
+    name: "Recover commission",
+    title: (n) => `Recover the commission we fronted to ${n} supplier${n === 1 ? "" : "s"}`,
+    unit: "commission",
+    primary: true,
+  },
+  refund: {
+    name: "Ask for refunds",
+    title: (n) => `Ask ${n} supplier${n === 1 ? "" : "s"} to refund what they were overpaid`,
+    unit: "refund",
+  },
+  pay: {
+    name: "Pay suppliers",
+    title: (n) => `Pay ${n} supplier${n === 1 ? "" : "s"} on bookings that hold the cash`,
+    unit: "to pay out",
+  },
+  client_refund: {
+    name: "Refund clients",
+    title: (n) => `Refund ${n} client${n === 1 ? "" : "s"} who paid more than we invoiced`,
+    unit: "to refund",
+  },
+  chase: {
+    name: "Chase clients",
+    title: (n) => `Chase ${n} client${n === 1 ? "" : "s"} whose balance is still open`,
+    unit: "client outstanding",
+  },
+  hold: {
+    name: "Leave alone",
+    title: (n) => `Leave ${n} booking${n === 1 ? "" : "s"} alone for now`,
+    unit: "pending",
+    quiet: true,
+  },
+};
+
 function partnerToBePaidTotals(
   totals: Map<
     string,
@@ -470,6 +534,8 @@ function NaPage() {
   const [scope, setScope] = useState<"move" | "commission" | "refund" | "client_refund" | "all">(
     "move",
   );
+  // Which action list is open, or the overview.
+  const [activeList, setActiveList] = useState<NaListKey | null>(null);
   const [detailTab, setDetailTab] = useState<
     "partners" | "invoices" | "emails" | "docs" | "comments"
   >("partners");
@@ -977,7 +1043,135 @@ function NaPage() {
     [],
   );
 
-  const scoped = useMemo(() => withMove.filter(SCOPE_TEST[scope]), [withMove, scope, SCOPE_TEST]);
+  /**
+   * Which action lists a booking belongs to, and what it contributes to each.
+   *
+   * Read straight off the move the page already computes, so a booking cannot
+   * appear in a list the move model disagrees with — and one booking can sit in
+   * several lists, which is the point.
+   */
+  const listed = useMemo(
+    () =>
+      withMove.map((x) => {
+        const claw = rowClawbackSplit(x.partners);
+        const toPay = rowPartnerToPay(x.row, x.partners);
+        const clientBal = x.row.balance_ccy ?? 0;
+        const ccy = x.row.currency_client ?? "—";
+        const live = x.partners.filter((p) => !p.is_provision);
+
+        const keys = new Set<NaListKey>();
+        if (x.move.headlineLabel.includes("commission")) keys.add("commission");
+        if (x.move.headlineLabel.includes("refund to recover")) keys.add("refund");
+        if (x.move.label === "Pay the partner") keys.add("pay");
+        if (x.move.headlineLabel.includes("client to refund")) keys.add("client_refund");
+        if (x.move.group === "client") keys.add("chase");
+        if (x.move.group === "waiting") keys.add("hold");
+
+        const clientCredit =
+          clientBal < -0.01 ? new Map([[ccy, -clientBal]]) : new Map<string, number>();
+        const clientOwed =
+          clientBal > 0.01 ? new Map([[ccy, clientBal]]) : new Map<string, number>();
+        const pending = new Map<string, number>();
+        for (const m of [claw.commission, claw.refund, toPay, clientCredit]) {
+          for (const [c, v] of m) pending.set(c, (pending.get(c) ?? 0) + v);
+        }
+
+        return {
+          x,
+          keys,
+          /** A booking owed money it cannot pay out yet, because it holds no cash. */
+          blockedByCash: x.move.group === "client" && toPay.size > 0,
+          units: {
+            commission: live.filter((p) => partnerClawback(p).commission > 0.01).length,
+            refund: live.filter((p) => partnerClawback(p).refund > 0.01).length,
+            pay: live.filter((p) => (p.outstanding ?? 0) > 0.01).length,
+            client_refund: 1,
+            chase: 1,
+            hold: 1,
+          } as Record<NaListKey, number>,
+          amounts: {
+            commission: claw.commission,
+            refund: claw.refund,
+            pay: toPay,
+            client_refund: clientCredit,
+            chase: clientOwed,
+            hold: pending,
+          } as Record<NaListKey, Map<string, number>>,
+        };
+      }),
+    [withMove],
+  );
+
+  const actionLists = useMemo(() => {
+    const blocked = listed.filter((l) => l.blockedByCash).length;
+    return NA_LIST_ORDER.map((key) => {
+      const members = listed.filter((l) => l.keys.has(key));
+      const units = members.reduce((total, l) => total + l.units[key], 0);
+      const byCcy = new Map<string, number>();
+      members.forEach((l) => {
+        for (const [c, v] of l.amounts[key]) byCcy.set(c, (byCcy.get(c) ?? 0) + v);
+      });
+      const meta = NA_LIST_META[key];
+      const detail =
+        key === "commission"
+          ? "Revenue we never collected · one email per supplier, never mixed with a refund"
+          : key === "refund"
+            ? "Cash paid out by mistake, beyond the commission · separate claim, separate email"
+            : key === "pay"
+              ? blocked > 0
+                ? `Client money received covers them · ${blocked} more ${blocked === 1 ? "is" : "are"} payable but their booking holds no cash yet, so the client comes first`
+                : "Client money received covers them"
+              : key === "client_refund"
+                ? "Past the 14-day window · a late invoice no longer closes the gap"
+                : key === "chase"
+                  ? blocked > 0
+                    ? `${blocked} of them block a supplier payout · sales and EM are named on every row`
+                    : "Sales and EM are named on every row"
+                  : "Inside the 14 days after the event, or waiting on a supplier's reply";
+      return { key, meta, events: members.length, units, byCcy, title: meta.title(units), detail };
+    });
+  }, [listed]);
+
+  /** The four headline figures, each by currency. */
+  const portfolio = useMemo(() => {
+    const add = (m: Map<string, number>, ccy: string, v: number) =>
+      m.set(ccy, (m.get(ccy) ?? 0) + v);
+    const toCashIn = new Map<string, number>();
+    const cash = new Map<string, number>();
+    const toPay = new Map<string, number>();
+    const toRecover = new Map<string, number>();
+    const commission = new Map<string, number>();
+    const refund = new Map<string, number>();
+    let inGrace = 0;
+    for (const l of listed) {
+      const ccy = l.x.row.currency_client ?? "—";
+      const bal = l.x.row.balance_ccy ?? 0;
+      if (bal > 0.01) add(toCashIn, ccy, bal);
+      const available = availableCash(l.x.row, l.x.partners);
+      if (available > 0.01) add(cash, ccy, available);
+      for (const [c, v] of l.amounts.pay) add(toPay, c, v);
+      for (const [c, v] of l.amounts.commission) {
+        add(toRecover, c, v);
+        add(commission, c, v);
+      }
+      for (const [c, v] of l.amounts.refund) {
+        add(toRecover, c, v);
+        add(refund, c, v);
+      }
+      const age = daysSinceEvent(l.x.row);
+      if (age != null && age < 14) inGrace += 1;
+    }
+    return { toCashIn, cash, toPay, toRecover, commission, refund, inGrace };
+  }, [listed]);
+
+  const scoped = useMemo(() => {
+    let base = withMove;
+    if (activeList) {
+      const inList = new Set(listed.filter((l) => l.keys.has(activeList)).map((l) => l.x.row));
+      base = base.filter((x) => inList.has(x.row));
+    }
+    return base.filter(SCOPE_TEST[scope]);
+  }, [withMove, scope, SCOPE_TEST, activeList, listed]);
 
   const scopeCounts = useMemo(
     () => ({
@@ -1027,580 +1221,645 @@ function NaPage() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 overflow-x-auto">
-        {/* ── List column ───────────────────────────────────────────────── */}
-        <div className="flex w-[470px] flex-none flex-col border-r border-border bg-white">
-          <div className="flex-none border-b border-border px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span className="flex h-8 flex-1 items-center gap-2 rounded-md border border-input bg-white px-2.5">
-                <Search className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search booking, company, partner…"
-                  aria-label="Search"
-                  className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] outline-none"
-                />
-              </span>
-              <Popover>
-                <PopoverTrigger asChild>
+      {activeList === null ? (
+        <NaOverviewScreen
+          portfolio={portfolio}
+          lists={actionLists}
+          isLoading={isLoading}
+          totalBookings={listed.length}
+          needsMove={listed.filter((l) => Array.from(l.keys).some((k) => k !== "hold")).length}
+          noPricedLine={listed.filter((l) => l.x.partners.every((p) => p.is_provision)).length}
+          unlockedLines={listed.reduce(
+            (n, l) => n + l.x.partners.filter((p) => !p.is_provision && !p.locked).length,
+            0,
+          )}
+          cachedAge={cachedAge}
+          gmail={gmailConnection}
+          scanning={scanProgress.running}
+          syncing={syncCards.isPending}
+          onOpen={(key) => {
+            setActiveList(key);
+            setScope("all");
+          }}
+          onRecompute={async () => {
+            await queryClient.fetchQuery({
+              queryKey: ["na-rows"],
+              queryFn: () => getNaRows({ data: { force: true } }),
+            });
+            syncCards.mutate();
+          }}
+        />
+      ) : (
+        <>
+          <div className="flex flex-none items-center gap-3 border-b border-paper-rule bg-paper-canvas px-8 py-3.5 font-paper text-[13px]">
+            <button
+              type="button"
+              onClick={() => setActiveList(null)}
+              className="text-paper-label underline-offset-[3px] hover:underline"
+            >
+              Overview
+            </button>
+            <span className="text-paper-faint">/</span>
+            <span className="text-paper-ink">{NA_LIST_META[activeList].name}</span>
+            <span className="ml-auto flex flex-wrap items-center gap-5 text-[12.5px]">
+              {actionLists
+                .filter((l) => l.key !== activeList && l.events > 0)
+                .map((l) => (
                   <button
+                    key={l.key}
                     type="button"
-                    className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12px] text-slate-700"
+                    onClick={() => setActiveList(l.key)}
+                    className="text-paper-body underline-offset-[3px] hover:underline"
                   >
-                    <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
-                    Filters
+                    {l.meta.name}{" "}
+                    <span className="font-paper-mono text-[11.5px] text-paper-label">
+                      {l.units}
+                    </span>
                   </button>
-                </PopoverTrigger>
-                <PopoverContent align="end" className="w-[340px] space-y-2">
-                  <FilterSelect
-                    label="Type"
-                    value={eventType}
-                    onChange={setEventType}
-                    options={kinds}
-                  />
-                  <FilterSelect
-                    label="Sales"
-                    value={sales}
-                    onChange={setSales}
-                    options={salesList}
-                  />
-                  <FilterSelect label="EM" value={em} onChange={setEm} options={emList} />
-                  <FilterSelect label="Ccy" value={ccy} onChange={setCcy} options={ccyList} />
-                  <MultiFilter
-                    label="Billing entity"
-                    selected={billing}
-                    options={billingList}
-                    onToggle={(v: string) =>
-                      setBilling((prev) => {
-                        const n = new Set(prev);
-                        if (n.has(v)) n.delete(v);
-                        else n.add(v);
-                        return n;
-                      })
-                    }
-                    onClear={() => setBilling(new Set())}
-                  />
-                  <label className="flex cursor-pointer items-center gap-2 pt-1 text-[12px] text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={showAncient}
-                      onChange={(e) => setShowAncient(e.target.checked)}
-                      className="h-3.5 w-3.5 accent-navy"
-                    />
-                    Show events older than 100 days
-                  </label>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              {/* Scope chips: Needs a move is the default, per the handoff. */}
-              {(
-                [
-                  { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
-                  {
-                    key: "commission" as const,
-                    label: "Commission",
-                    count: scopeCounts.commission,
-                  },
-                  { key: "refund" as const, label: "Refund", count: scopeCounts.refund },
-                  {
-                    key: "client_refund" as const,
-                    label: "Client to refund",
-                    count: scopeCounts.clientRefund,
-                  },
-                  { key: "all" as const, label: "All", count: scopeCounts.all },
-                ] as const
-              ).map((s) => {
-                const active = scope === s.key;
-                return (
-                  <button
-                    key={s.key}
-                    type="button"
-                    onClick={() => setScope(s.key)}
-                    className={`inline-flex h-[26px] items-center rounded-full px-2.5 text-[11.5px] ${
-                      active
-                        ? "bg-navy font-semibold text-white"
-                        : "bg-[#F3F4F6] font-medium text-[#4B5563]"
-                    }`}
-                  >
-                    {s.label} {s.count}
-                  </button>
-                );
-              })}
-              {gmailConnection?.connected && unaskedRecoveryTargets.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => commissionRefundDialog.open(unaskedRecoveryTargets)}
-                  className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
-                >
-                  Recover from {unaskedRecoveryTargets.length} partner
-                  {unaskedRecoveryTargets.length > 1 ? "s" : ""}
-                </button>
-              )}
-              {/* Say when the figures were computed, so a cached page never looks
-                  live when it is not. Refresh in the top bar forces a recompute. */}
-              {cachedAge != null && cachedAge > 30 && (
-                <span
-                  className="rounded-full px-2 py-[3px] text-[11.5px] text-slate-400"
-                  title="Chiffres mis en cache. Rafraîchir recalcule depuis BigQuery et resynchronise les cartes approuvées."
-                >
-                  il y a {cachedAge < 90 ? `${cachedAge} s` : `${Math.round(cachedAge / 60)} min`}
-                </span>
-              )}
-            </div>
+                ))}
+            </span>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto">
-            {isLoading && (
-              <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</p>
-            )}
-            {!isLoading && scoped.length === 0 && (
-              <div className="flex flex-col items-center gap-2.5 px-12 py-16 text-center">
-                <SearchX className="h-6 w-6 text-slate-400" aria-hidden="true" />
-                <span className="font-display text-base font-bold">
-                  {search ? `Nothing matches “${search}”` : "Nothing to show"}
-                </span>
-                <span className="text-[12.5px] leading-relaxed text-slate-600">
-                  Search covers booking refs, companies, events and partner names.
-                </span>
-                {search && (
-                  <button
-                    type="button"
-                    onClick={() => setSearch("")}
-                    className="inline-flex h-[30px] items-center rounded-md border border-input bg-white px-3 text-[12px] font-medium text-slate-700"
-                  >
-                    Clear the search
-                  </button>
-                )}
-              </div>
-            )}
-            {!isLoading &&
-              groups.map((g) => (
-                <Fragment key={g.key}>
-                  <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-100 bg-[#fafaf8] px-4 py-2">
-                    <span
-                      className="h-[7px] w-[7px] flex-none rounded-full"
-                      style={{ background: g.dot }}
+          <div className="flex min-h-0 flex-1 overflow-x-auto">
+            {/* ── List column ───────────────────────────────────────────────── */}
+            <div className="flex w-[470px] flex-none flex-col border-r border-border bg-white">
+              <div className="flex-none border-b border-border px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 flex-1 items-center gap-2 rounded-md border border-input bg-white px-2.5">
+                    <Search className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+                    <input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search booking, company, partner…"
+                      aria-label="Search"
+                      className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] outline-none"
                     />
-                    <span className="text-[11px] font-bold uppercase tracking-[0.07em] text-slate-600">
-                      {g.title}
-                    </span>
-                    <span className="text-[11px] text-slate-400">{g.rows.length}</span>
-                  </div>
-                  {g.rows.map(({ row: r, partners: ps, move }) => {
-                    const ref = r.readable_id ?? "";
-                    const isSel = selRef === ref;
+                  </span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12px] text-slate-700"
+                      >
+                        <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                        Filters
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-[340px] space-y-2">
+                      <FilterSelect
+                        label="Type"
+                        value={eventType}
+                        onChange={setEventType}
+                        options={kinds}
+                      />
+                      <FilterSelect
+                        label="Sales"
+                        value={sales}
+                        onChange={setSales}
+                        options={salesList}
+                      />
+                      <FilterSelect label="EM" value={em} onChange={setEm} options={emList} />
+                      <FilterSelect label="Ccy" value={ccy} onChange={setCcy} options={ccyList} />
+                      <MultiFilter
+                        label="Billing entity"
+                        selected={billing}
+                        options={billingList}
+                        onToggle={(v: string) =>
+                          setBilling((prev) => {
+                            const n = new Set(prev);
+                            if (n.has(v)) n.delete(v);
+                            else n.add(v);
+                            return n;
+                          })
+                        }
+                        onClear={() => setBilling(new Set())}
+                      />
+                      <label className="flex cursor-pointer items-center gap-2 pt-1 text-[12px] text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={showAncient}
+                          onChange={(e) => setShowAncient(e.target.checked)}
+                          className="h-3.5 w-3.5 accent-navy"
+                        />
+                        Show events older than 100 days
+                      </label>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  {/* Scope chips: Needs a move is the default, per the handoff. */}
+                  {(
+                    [
+                      { key: "move" as const, label: "Needs a move", count: scopeCounts.move },
+                      {
+                        key: "commission" as const,
+                        label: "Commission",
+                        count: scopeCounts.commission,
+                      },
+                      { key: "refund" as const, label: "Refund", count: scopeCounts.refund },
+                      {
+                        key: "client_refund" as const,
+                        label: "Client to refund",
+                        count: scopeCounts.clientRefund,
+                      },
+                      { key: "all" as const, label: "All", count: scopeCounts.all },
+                    ] as const
+                  ).map((s) => {
+                    const active = scope === s.key;
                     return (
                       <button
-                        key={ref}
+                        key={s.key}
                         type="button"
-                        onClick={() => {
-                          setSelectedRef(ref);
-                          setDetailTab("partners");
-                        }}
-                        className={`flex w-full gap-2.5 border-b border-slate-100 px-4 py-2.5 text-left ${
-                          isSel ? "bg-[#fafaf8]" : "hover:bg-[#fafaf8]"
+                        onClick={() => setScope(s.key)}
+                        className={`inline-flex h-[26px] items-center rounded-full px-2.5 text-[11.5px] ${
+                          active
+                            ? "bg-navy font-semibold text-white"
+                            : "bg-[#F3F4F6] font-medium text-[#4B5563]"
                         }`}
-                        style={{ borderLeft: `3px solid ${isSel ? "#101f34" : "transparent"}` }}
                       >
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-1.5">
-                            <span className="truncate text-[13px] font-medium">
-                              {r.company_name ?? "—"}
-                            </span>
-                            <span className="flex-none font-mono text-[10.5px] text-slate-400">
-                              {ref}
-                            </span>
-                          </span>
-                          <span className="mt-0.5 block truncate text-[11.5px] text-slate-500">
-                            {r.event_name ?? "—"}
-                          </span>
-                          <span className="mt-[5px] inline-flex">
-                            <span
-                              className={`rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${MOVE_PILL[move.group]}`}
-                            >
-                              {move.label}
-                            </span>
-                          </span>
-                        </span>
-                        <span className="flex-none whitespace-nowrap text-right">
-                          <span className="block text-[13px] font-semibold tabular-nums">
-                            {move.headline}
-                          </span>
-                          <span className="block text-[10.5px] text-[#9CA3AF]">
-                            {move.headlineLabel}
-                          </span>
-                          <span className="mt-1.5 block text-[10.5px] text-slate-400">
-                            {fmtDate(r.start_date)}
-                          </span>
-                        </span>
+                        {s.label} {s.count}
                       </button>
                     );
                   })}
-                </Fragment>
-              ))}
-          </div>
-        </div>
+                  {gmailConnection?.connected && unaskedRecoveryTargets.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => commissionRefundDialog.open(unaskedRecoveryTargets)}
+                      className="rounded-full bg-naboo px-2.5 py-[3px] text-[11.5px] font-semibold text-navy"
+                    >
+                      Recover from {unaskedRecoveryTargets.length} partner
+                      {unaskedRecoveryTargets.length > 1 ? "s" : ""}
+                    </button>
+                  )}
+                  {/* Say when the figures were computed, so a cached page never looks
+                  live when it is not. Refresh in the top bar forces a recompute. */}
+                  {cachedAge != null && cachedAge > 30 && (
+                    <span
+                      className="rounded-full px-2 py-[3px] text-[11.5px] text-slate-400"
+                      title="Chiffres mis en cache. Rafraîchir recalcule depuis BigQuery et resynchronise les cartes approuvées."
+                    >
+                      il y a{" "}
+                      {cachedAge < 90 ? `${cachedAge} s` : `${Math.round(cachedAge / 60)} min`}
+                    </span>
+                  )}
+                </div>
+              </div>
 
-        {/* ── Detail pane ───────────────────────────────────────────────── */}
-        <div className="flex min-w-[780px] flex-1 flex-col bg-[#fafaf8]">
-          {sel == null ? (
-            <div className="flex flex-1 items-center justify-center px-10 text-center">
-              <span className="text-sm text-slate-500">
-                Select a booking on the left to see its detail.
-              </span>
+              <div className="min-h-0 flex-1 overflow-auto">
+                {isLoading && (
+                  <p className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</p>
+                )}
+                {!isLoading && scoped.length === 0 && (
+                  <div className="flex flex-col items-center gap-2.5 px-12 py-16 text-center">
+                    <SearchX className="h-6 w-6 text-slate-400" aria-hidden="true" />
+                    <span className="font-display text-base font-bold">
+                      {search ? `Nothing matches “${search}”` : "Nothing to show"}
+                    </span>
+                    <span className="text-[12.5px] leading-relaxed text-slate-600">
+                      Search covers booking refs, companies, events and partner names.
+                    </span>
+                    {search && (
+                      <button
+                        type="button"
+                        onClick={() => setSearch("")}
+                        className="inline-flex h-[30px] items-center rounded-md border border-input bg-white px-3 text-[12px] font-medium text-slate-700"
+                      >
+                        Clear the search
+                      </button>
+                    )}
+                  </div>
+                )}
+                {!isLoading &&
+                  groups.map((g) => (
+                    <Fragment key={g.key}>
+                      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-100 bg-[#fafaf8] px-4 py-2">
+                        <span
+                          className="h-[7px] w-[7px] flex-none rounded-full"
+                          style={{ background: g.dot }}
+                        />
+                        <span className="text-[11px] font-bold uppercase tracking-[0.07em] text-slate-600">
+                          {g.title}
+                        </span>
+                        <span className="text-[11px] text-slate-400">{g.rows.length}</span>
+                      </div>
+                      {g.rows.map(({ row: r, partners: ps, move }) => {
+                        const ref = r.readable_id ?? "";
+                        const isSel = selRef === ref;
+                        return (
+                          <button
+                            key={ref}
+                            type="button"
+                            onClick={() => {
+                              setSelectedRef(ref);
+                              setDetailTab("partners");
+                            }}
+                            className={`flex w-full gap-2.5 border-b border-slate-100 px-4 py-2.5 text-left ${
+                              isSel ? "bg-[#fafaf8]" : "hover:bg-[#fafaf8]"
+                            }`}
+                            style={{ borderLeft: `3px solid ${isSel ? "#101f34" : "transparent"}` }}
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-1.5">
+                                <span className="truncate text-[13px] font-medium">
+                                  {r.company_name ?? "—"}
+                                </span>
+                                <span className="flex-none font-mono text-[10.5px] text-slate-400">
+                                  {ref}
+                                </span>
+                              </span>
+                              <span className="mt-0.5 block truncate text-[11.5px] text-slate-500">
+                                {r.event_name ?? "—"}
+                              </span>
+                              <span className="mt-[5px] inline-flex">
+                                <span
+                                  className={`rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${MOVE_PILL[move.group]}`}
+                                >
+                                  {move.label}
+                                </span>
+                              </span>
+                            </span>
+                            <span className="flex-none whitespace-nowrap text-right">
+                              <span className="block text-[13px] font-semibold tabular-nums">
+                                {move.headline}
+                              </span>
+                              <span className="block text-[10.5px] text-[#9CA3AF]">
+                                {move.headlineLabel}
+                              </span>
+                              <span className="mt-1.5 block text-[10.5px] text-slate-400">
+                                {fmtDate(r.start_date)}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
+              </div>
             </div>
-          ) : (
-            <>
-              <div className="flex-none border-b border-border bg-white px-6 pb-3.5 pt-4">
-                <div className="flex items-start gap-3.5">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <h1 className="font-display text-2xl font-bold tracking-tight">
-                        {sel.company_name ?? "—"}
-                      </h1>
-                      {sel.booking_url ? (
-                        <a
-                          href={sel.booking_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="border-b border-dotted border-slate-400 font-mono text-[12.5px] no-underline"
-                        >
-                          {selRef}
-                        </a>
-                      ) : (
-                        <span className="font-mono text-[12.5px]">{selRef}</span>
-                      )}
-                      <LockChip
-                        locked={selPartners.some((p) => p.locked)}
-                        admin={selPartners.some((p) => p.locked_by_admin)}
-                        client={selPartners.some((p) => p.locked_by_client)}
-                        em={sel.em_referent}
-                      />
+
+            {/* ── Detail pane ───────────────────────────────────────────────── */}
+            <div className="flex min-w-[780px] flex-1 flex-col bg-[#fafaf8]">
+              {sel == null ? (
+                <div className="flex flex-1 items-center justify-center px-10 text-center">
+                  <span className="text-sm text-slate-500">
+                    Select a booking on the left to see its detail.
+                  </span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex-none border-b border-border bg-white px-6 pb-3.5 pt-4">
+                    <div className="flex items-start gap-3.5">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <h1 className="font-display text-2xl font-bold tracking-tight">
+                            {sel.company_name ?? "—"}
+                          </h1>
+                          {sel.booking_url ? (
+                            <a
+                              href={sel.booking_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="border-b border-dotted border-slate-400 font-mono text-[12.5px] no-underline"
+                            >
+                              {selRef}
+                            </a>
+                          ) : (
+                            <span className="font-mono text-[12.5px]">{selRef}</span>
+                          )}
+                          <LockChip
+                            locked={selPartners.some((p) => p.locked)}
+                            admin={selPartners.some((p) => p.locked_by_admin)}
+                            client={selPartners.some((p) => p.locked_by_client)}
+                            em={sel.em_referent}
+                          />
+                        </div>
+                        <div className="mt-1 text-[13px] text-slate-500">
+                          {sel.event_name ?? "—"} ·{" "}
+                          {(sel.transaction_kind ?? "—").replaceAll("_", " ").toLowerCase()} ·{" "}
+                          {sel.billing_entity ?? "—"} · {fmtDate(sel.start_date)}
+                          {sel.participants ? ` · ${sel.participants} pax` : ""}
+                        </div>
+                      </div>
+                      <div className="ml-auto flex flex-none items-center gap-2">
+                        {sel.booking_url && (
+                          <a
+                            href={sel.booking_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 no-underline"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                            Back office
+                          </a>
+                        )}
+                        {/* Same targets as the list-level button, narrowed to this booking. */}
+                        {(() => {
+                          if (!gmailConnection?.connected) return null;
+                          // Marketplace NA only ever asks for commission or a refund —
+                          // bank details and tax numbers are a L'Oreal concern.
+                          // Header button: the ones nobody has asked yet. A partner
+                          // already chased is reachable from their own card.
+                          const mine = unaskedRecoveryTargets.filter((t) => t.eventRef === selRef);
+                          if (mine.length === 0) return null;
+                          const anyRefund = mine.some((t) => t.mode !== "commission");
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => commissionRefundDialog.open(mine)}
+                              className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-naboo px-3 text-[12.5px] font-bold text-navy"
+                            >
+                              <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                              {anyRefund
+                                ? `Recover from ${mine.length} partner${mine.length > 1 ? "s" : ""}`
+                                : `Ask ${mine.length} partner${mine.length > 1 ? "s" : ""} for the commission`}
+                            </button>
+                          );
+                        })()}
+                      </div>
                     </div>
-                    <div className="mt-1 text-[13px] text-slate-500">
-                      {sel.event_name ?? "—"} ·{" "}
-                      {(sel.transaction_kind ?? "—").replaceAll("_", " ").toLowerCase()} ·{" "}
-                      {sel.billing_entity ?? "—"} · {fmtDate(sel.start_date)}
-                      {sel.participants ? ` · ${sel.participants} pax` : ""}
+
+                    <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-6">
+                      {[
+                        {
+                          label: "Client GMV",
+                          side: "client" as const,
+                          node: <Money value={sel.gmv_client_ccy} currency={sel.currency_client} />,
+                        },
+                        {
+                          label: "Invoiced",
+                          side: "client" as const,
+                          node: <Money value={sel.invoiced_ccy} currency={sel.currency_client} />,
+                        },
+                        {
+                          label: "Received",
+                          side: "client" as const,
+                          node: <Money value={sel.paid_ccy} currency={sel.currency_client} />,
+                        },
+                        {
+                          label: "To cash in",
+                          side: "client" as const,
+                          node: (
+                            <Money
+                              value={sel.balance_ccy}
+                              currency={sel.currency_client}
+                              kind="danger"
+                            />
+                          ),
+                        },
+                        {
+                          label: "Available cash",
+                          side: "partner" as const,
+                          node: (
+                            <Money
+                              value={availableCash(sel, selPartners)}
+                              currency={sel.currency_client}
+                              kind={availableCash(sel, selPartners) > 0.01 ? "neutral" : "muted"}
+                            />
+                          ),
+                        },
+                        {
+                          label: "To pay partners",
+                          side: "partner" as const,
+                          node: <MultiMoney map={selTotals} field="outstanding" kind="danger" />,
+                        },
+                      ].map((s) => (
+                        <div key={s.label} className="bg-white px-3 py-2.5">
+                          {/* Label colour is what replaces the old tinted column
+                          blocks: teal client side, lime partner side. */}
+                          <div
+                            className={`text-[9.5px] font-bold uppercase tracking-[0.08em] ${
+                              s.side === "client" ? "text-[#0F766E]" : "text-[#5B6511]"
+                            }`}
+                          >
+                            {s.label}
+                          </div>
+                          <div className="mt-0.5 text-base font-semibold tabular-nums">
+                            {s.node}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                  <div className="ml-auto flex flex-none items-center gap-2">
-                    {sel.booking_url && (
-                      <a
-                        href={sel.booking_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-input bg-white px-2.5 text-[12.5px] text-slate-700 no-underline"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                        Back office
-                      </a>
-                    )}
-                    {/* Same targets as the list-level button, narrowed to this booking. */}
-                    {(() => {
-                      if (!gmailConnection?.connected) return null;
-                      // Marketplace NA only ever asks for commission or a refund —
-                      // bank details and tax numbers are a L'Oreal concern.
-                      // Header button: the ones nobody has asked yet. A partner
-                      // already chased is reachable from their own card.
-                      const mine = unaskedRecoveryTargets.filter((t) => t.eventRef === selRef);
-                      if (mine.length === 0) return null;
-                      const anyRefund = mine.some((t) => t.mode !== "commission");
+
+                  {/* Tab bar — counts come from the same data the panels render. */}
+                  <div className="flex flex-none gap-[18px] border-b border-border bg-white px-6">
+                    {(
+                      [
+                        {
+                          key: "partners" as const,
+                          label: "Partners",
+                          count: selPartners.filter((p) => !p.is_provision).length,
+                        },
+                        {
+                          key: "invoices" as const,
+                          label: "Client invoicing",
+                          count: selInvoices.length,
+                        },
+                        {
+                          key: "emails" as const,
+                          label: "Emails",
+                          count: selPartners.filter((p) => !p.is_provision && p.email).length,
+                        },
+                        { key: "docs" as const, label: "Documents", count: null },
+                        {
+                          key: "comments" as const,
+                          label: "Comments",
+                          count: commentSummaries?.get(selRef)?.count ?? null,
+                        },
+                      ] as const
+                    ).map((t) => {
+                      const active = detailTab === t.key;
                       return (
                         <button
+                          key={t.key}
                           type="button"
-                          onClick={() => commissionRefundDialog.open(mine)}
-                          className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border-0 bg-naboo px-3 text-[12.5px] font-bold text-navy"
+                          onClick={() => setDetailTab(t.key)}
+                          className={`inline-flex h-10 items-center gap-1.5 whitespace-nowrap border-b-2 bg-transparent p-0 text-[13px] ${
+                            active
+                              ? "border-navy font-semibold text-navy"
+                              : "border-transparent font-normal text-slate-600"
+                          }`}
                         >
-                          <Send className="h-3.5 w-3.5" aria-hidden="true" />
-                          {anyRefund
-                            ? `Recover from ${mine.length} partner${mine.length > 1 ? "s" : ""}`
-                            : `Ask ${mine.length} partner${mine.length > 1 ? "s" : ""} for the commission`}
+                          {t.label}
+                          {t.count != null && (
+                            <span className="font-normal text-slate-400">{t.count}</span>
+                          )}
                         </button>
                       );
-                    })()}
+                    })}
                   </div>
-                </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-6">
-                  {[
-                    {
-                      label: "Client GMV",
-                      side: "client" as const,
-                      node: <Money value={sel.gmv_client_ccy} currency={sel.currency_client} />,
-                    },
-                    {
-                      label: "Invoiced",
-                      side: "client" as const,
-                      node: <Money value={sel.invoiced_ccy} currency={sel.currency_client} />,
-                    },
-                    {
-                      label: "Received",
-                      side: "client" as const,
-                      node: <Money value={sel.paid_ccy} currency={sel.currency_client} />,
-                    },
-                    {
-                      label: "To cash in",
-                      side: "client" as const,
-                      node: (
-                        <Money
-                          value={sel.balance_ccy}
-                          currency={sel.currency_client}
-                          kind="danger"
-                        />
-                      ),
-                    },
-                    {
-                      label: "Available cash",
-                      side: "partner" as const,
-                      node: (
-                        <Money
-                          value={availableCash(sel, selPartners)}
-                          currency={sel.currency_client}
-                          kind={availableCash(sel, selPartners) > 0.01 ? "neutral" : "muted"}
-                        />
-                      ),
-                    },
-                    {
-                      label: "To pay partners",
-                      side: "partner" as const,
-                      node: <MultiMoney map={selTotals} field="outstanding" kind="danger" />,
-                    },
-                  ].map((s) => (
-                    <div key={s.label} className="bg-white px-3 py-2.5">
-                      {/* Label colour is what replaces the old tinted column
-                          blocks: teal client side, lime partner side. */}
-                      <div
-                        className={`text-[9.5px] font-bold uppercase tracking-[0.08em] ${
-                          s.side === "client" ? "text-[#0F766E]" : "text-[#5B6511]"
-                        }`}
-                      >
-                        {s.label}
-                      </div>
-                      <div className="mt-0.5 text-base font-semibold tabular-nums">{s.node}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Tab bar — counts come from the same data the panels render. */}
-              <div className="flex flex-none gap-[18px] border-b border-border bg-white px-6">
-                {(
-                  [
-                    {
-                      key: "partners" as const,
-                      label: "Partners",
-                      count: selPartners.filter((p) => !p.is_provision).length,
-                    },
-                    {
-                      key: "invoices" as const,
-                      label: "Client invoicing",
-                      count: selInvoices.length,
-                    },
-                    {
-                      key: "emails" as const,
-                      label: "Emails",
-                      count: selPartners.filter((p) => !p.is_provision && p.email).length,
-                    },
-                    { key: "docs" as const, label: "Documents", count: null },
-                    {
-                      key: "comments" as const,
-                      label: "Comments",
-                      count: commentSummaries?.get(selRef)?.count ?? null,
-                    },
-                  ] as const
-                ).map((t) => {
-                  const active = detailTab === t.key;
-                  return (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => setDetailTab(t.key)}
-                      className={`inline-flex h-10 items-center gap-1.5 whitespace-nowrap border-b-2 bg-transparent p-0 text-[13px] ${
-                        active
-                          ? "border-navy font-semibold text-navy"
-                          : "border-transparent font-normal text-slate-600"
-                      }`}
-                    >
-                      {t.label}
-                      {t.count != null && (
-                        <span className="font-normal text-slate-400">{t.count}</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
-                {detailTab === "partners" && (
-                  <PartnerSectionCard
-                    id={selRef}
-                    partners={selPartners}
-                    totals={selTotals}
-                    actionFor={actionFor}
-                    factsMap={factsMap}
-                    cardApprovedCodes={cardApprovedCodes}
-                    askedFor={(name) => askedFor(selRef, name)}
-                    onMarkAsked={(p) => {
-                      const cb = partnerClawback(p);
-                      markAsked.mutate({
-                        event_ref: selRef,
-                        partner_key: partnerKey(p.name ?? ""),
-                        partner_name: p.name,
-                        mode:
-                          cb.commission > 0.01 && cb.refund > 0.01
-                            ? "combined"
-                            : cb.commission > 0.01
-                              ? "commission"
-                              : "refund",
-                        sent_to: p.email,
-                      });
-                    }}
-                    onRequest={(p) => {
-                      // Same targets the list-level button builds, narrowed to
-                      // this partner — no new email logic.
-                      const mine = commissionRefundTargets.filter(
-                        (t) =>
-                          t.eventRef === selRef &&
-                          t.address.toLowerCase() === (p.email ?? "").toLowerCase(),
-                      );
-                      if (mine.length > 0) commissionRefundDialog.open(mine);
-                      else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
-                    }}
-                  />
-                )}
-                {detailTab === "invoices" && (
-                  <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
-                    <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
-                      <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
-                      Client invoicing
-                    </header>
-                    {selInvoices.length === 0 ? (
-                      <div className="px-9 py-9 text-center">
-                        <div className="font-display text-[15px] font-bold">
-                          No invoice issued yet
-                        </div>
-                        <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-slate-500">
-                          Nothing has been billed to the client on this booking so far.
-                        </p>
-                      </div>
-                    ) : (
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr>
-                            {["Invoice", "Issued", "Due", "Amount", "Status"].map((h, i) => (
-                              <th
-                                key={h}
-                                className={`border-b border-slate-100 px-3.5 py-2 text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500 ${
-                                  i === 3 ? "text-right" : "text-left"
-                                }`}
-                              >
-                                {h}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selInvoices.map((iv, i) => (
-                            <tr key={`${iv.invoice_ref ?? i}`}>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
-                                {iv.invoice_ref ?? "—"}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
-                                {fmtDate(iv.emission_date)}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
-                                {fmtDate(iv.due_date)}
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
-                                <Money value={iv.amount_ttc} currency={iv.currency} />
-                              </td>
-                              <td className="border-b border-slate-100 px-3.5 py-2.5">
-                                <span
-                                  className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
-                                    iv.status === "CANCELLED"
-                                      ? "bg-slate-100 text-slate-600"
-                                      : iv.is_sent
-                                        ? "bg-emerald-100 text-emerald-800"
-                                        : "bg-amber-100 text-amber-800"
-                                  }`}
-                                >
-                                  {iv.status === "CANCELLED"
-                                    ? "Cancelled"
-                                    : iv.is_sent
-                                      ? "Sent"
-                                      : "Not sent"}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                )}
-                {detailTab === "emails" &&
-                  (gmailConnection?.connected ? (
-                    <div className="flex flex-col gap-3">
-                      {/* The AI recap belongs with the threads it summarises, not on
-                          the payment card. */}
-                      {selPartners
-                        .filter((p) => !p.is_provision && p.email)
-                        .map((p, i) => {
-                          const key = partnerKey(p.name ?? p.email ?? "");
-                          return (
-                            <div
-                              key={`${selRef}-sum-${i}`}
-                              className="rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)]"
-                            >
-                              <div className="text-sm font-semibold">{p.name ?? p.email}</div>
-                              <NaFinancialSummaryBox
-                                existing={financialSummaries?.get(`${selRef}::${key}`)}
-                                loading={
-                                  summarize.isPending &&
-                                  summarize.variables?.event_ref === selRef &&
-                                  summarize.variables?.partner_name === (p.name ?? p.email ?? "")
-                                }
-                                onSummarize={() =>
-                                  summarize.mutate({
-                                    event_ref: selRef,
-                                    partner_name: p.name ?? p.email ?? "",
-                                    partner_email: p.email,
-                                  })
-                                }
-                              />
-                            </div>
+                  <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
+                    {detailTab === "partners" && (
+                      <PartnerSectionCard
+                        id={selRef}
+                        partners={selPartners}
+                        totals={selTotals}
+                        actionFor={actionFor}
+                        factsMap={factsMap}
+                        cardApprovedCodes={cardApprovedCodes}
+                        askedFor={(name) => askedFor(selRef, name)}
+                        onMarkAsked={(p) => {
+                          const cb = partnerClawback(p);
+                          markAsked.mutate({
+                            event_ref: selRef,
+                            partner_key: partnerKey(p.name ?? ""),
+                            partner_name: p.name,
+                            mode:
+                              cb.commission > 0.01 && cb.refund > 0.01
+                                ? "combined"
+                                : cb.commission > 0.01
+                                  ? "commission"
+                                  : "refund",
+                            sent_to: p.email,
+                          });
+                        }}
+                        onRequest={(p) => {
+                          // Same targets the list-level button builds, narrowed to
+                          // this partner — no new email logic.
+                          const mine = commissionRefundTargets.filter(
+                            (t) =>
+                              t.eventRef === selRef &&
+                              t.address.toLowerCase() === (p.email ?? "").toLowerCase(),
                           );
-                        })}
-                      <PartnerEmails
-                        eventRef={selRef}
-                        partners={selPartners
-                          .filter((p) => !p.is_provision && p.email)
-                          .map((p) => ({
-                            name: p.name,
-                            email: p.email,
-                            owed: p.outstanding != null ? fmtAmount(p.outstanding) : null,
-                          }))}
+                          if (mine.length > 0) commissionRefundDialog.open(mine);
+                          else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
+                        }}
                       />
-                    </div>
-                  ) : (
-                    <p className="rounded-lg border border-border bg-white px-4 py-8 text-center text-[12.5px] text-slate-600">
-                      Connectez Gmail depuis le menu de votre compte pour retrouver vos échanges
-                      avec ces prestataires.
-                    </p>
-                  ))}
-                {detailTab === "docs" && (
-                  <PartnerInvoicePdfs clientRequestId={sel.client_request_id} />
-                )}
-                {detailTab === "comments" && <CommentsSectionCard eventRef={selRef} />}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+                    )}
+                    {detailTab === "invoices" && (
+                      <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-sm">
+                        <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
+                          <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
+                          Client invoicing
+                        </header>
+                        {selInvoices.length === 0 ? (
+                          <div className="px-9 py-9 text-center">
+                            <div className="font-display text-[15px] font-bold">
+                              No invoice issued yet
+                            </div>
+                            <p className="mx-auto mt-1.5 max-w-[440px] text-[12.5px] leading-relaxed text-slate-500">
+                              Nothing has been billed to the client on this booking so far.
+                            </p>
+                          </div>
+                        ) : (
+                          <table className="w-full border-collapse">
+                            <thead>
+                              <tr>
+                                {["Invoice", "Issued", "Due", "Amount", "Status"].map((h, i) => (
+                                  <th
+                                    key={h}
+                                    className={`border-b border-slate-100 px-3.5 py-2 text-[9.5px] font-bold uppercase tracking-[0.07em] text-slate-500 ${
+                                      i === 3 ? "text-right" : "text-left"
+                                    }`}
+                                  >
+                                    {h}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selInvoices.map((iv, i) => (
+                                <tr key={`${iv.invoice_ref ?? i}`}>
+                                  <td className="border-b border-slate-100 px-3.5 py-2.5 font-mono text-[12.5px]">
+                                    {iv.invoice_ref ?? "—"}
+                                  </td>
+                                  <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                    {fmtDate(iv.emission_date)}
+                                  </td>
+                                  <td className="border-b border-slate-100 px-3.5 py-2.5 text-[12.5px] text-slate-700">
+                                    {fmtDate(iv.due_date)}
+                                  </td>
+                                  <td className="border-b border-slate-100 px-3.5 py-2.5 text-right text-[12.5px] tabular-nums">
+                                    <Money value={iv.amount_ttc} currency={iv.currency} />
+                                  </td>
+                                  <td className="border-b border-slate-100 px-3.5 py-2.5">
+                                    <span
+                                      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-semibold ${
+                                        iv.status === "CANCELLED"
+                                          ? "bg-slate-100 text-slate-600"
+                                          : iv.is_sent
+                                            ? "bg-emerald-100 text-emerald-800"
+                                            : "bg-amber-100 text-amber-800"
+                                      }`}
+                                    >
+                                      {iv.status === "CANCELLED"
+                                        ? "Cancelled"
+                                        : iv.is_sent
+                                          ? "Sent"
+                                          : "Not sent"}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    )}
+                    {detailTab === "emails" &&
+                      (gmailConnection?.connected ? (
+                        <div className="flex flex-col gap-3">
+                          {/* The AI recap belongs with the threads it summarises, not on
+                          the payment card. */}
+                          {selPartners
+                            .filter((p) => !p.is_provision && p.email)
+                            .map((p, i) => {
+                              const key = partnerKey(p.name ?? p.email ?? "");
+                              return (
+                                <div
+                                  key={`${selRef}-sum-${i}`}
+                                  className="rounded-[10px] border border-border bg-white p-[14px_16px] shadow-[0_1px_2px_rgba(16,31,52,0.06)]"
+                                >
+                                  <div className="text-sm font-semibold">{p.name ?? p.email}</div>
+                                  <NaFinancialSummaryBox
+                                    existing={financialSummaries?.get(`${selRef}::${key}`)}
+                                    loading={
+                                      summarize.isPending &&
+                                      summarize.variables?.event_ref === selRef &&
+                                      summarize.variables?.partner_name ===
+                                        (p.name ?? p.email ?? "")
+                                    }
+                                    onSummarize={() =>
+                                      summarize.mutate({
+                                        event_ref: selRef,
+                                        partner_name: p.name ?? p.email ?? "",
+                                        partner_email: p.email,
+                                      })
+                                    }
+                                  />
+                                </div>
+                              );
+                            })}
+                          <PartnerEmails
+                            eventRef={selRef}
+                            partners={selPartners
+                              .filter((p) => !p.is_provision && p.email)
+                              .map((p) => ({
+                                name: p.name,
+                                email: p.email,
+                                owed: p.outstanding != null ? fmtAmount(p.outstanding) : null,
+                              }))}
+                          />
+                        </div>
+                      ) : (
+                        <p className="rounded-lg border border-border bg-white px-4 py-8 text-center text-[12.5px] text-slate-600">
+                          Connectez Gmail depuis le menu de votre compte pour retrouver vos échanges
+                          avec ces prestataires.
+                        </p>
+                      ))}
+                    {detailTab === "docs" && (
+                      <PartnerInvoicePdfs clientRequestId={sel.client_request_id} />
+                    )}
+                    {detailTab === "comments" && <CommentsSectionCard eventRef={selRef} />}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       {commissionRefundDialog.targets && (
         <NaCommissionRequestDialog
@@ -1617,6 +1876,274 @@ function NaPage() {
  * paid, less what we have already disbursed, less our own service charge — that
  * fee is revenue, not money held on their behalf.
  */
+/** Figures on the overview: grouped thousands, the currency named separately. */
+function fmtPaper(value: number): string {
+  return new Intl.NumberFormat("fr-CA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+/** Biggest currency first — the hero shows that one large and stacks the rest. */
+function byCcyDesc(m: Map<string, number>): Array<[string, number]> {
+  return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
+}
+
+function paperTotal(m: Map<string, number>): string {
+  const entries = byCcyDesc(m);
+  if (entries.length === 0) return "—";
+  return entries.map(([c, v]) => `${fmtPaper(v)} ${ccyLabel(c)}`).join(" · ");
+}
+
+/**
+ * The Marketplace NA overview.
+ *
+ * Same treatment as L'Oréal CA, with this tracker's own rules kept intact:
+ * commission and refund are two claims and never share a list, the fortnight of
+ * grace after an event is stated rather than hidden, available cash is what
+ * decides whether paying a supplier is our move, and every figure carries its
+ * currency because this book is not in one.
+ */
+function NaOverviewScreen({
+  portfolio,
+  lists,
+  isLoading,
+  totalBookings,
+  needsMove,
+  noPricedLine,
+  unlockedLines,
+  cachedAge,
+  gmail,
+  scanning,
+  syncing,
+  onOpen,
+  onRecompute,
+}: {
+  portfolio: {
+    toCashIn: Map<string, number>;
+    cash: Map<string, number>;
+    toPay: Map<string, number>;
+    toRecover: Map<string, number>;
+    commission: Map<string, number>;
+    refund: Map<string, number>;
+    inGrace: number;
+  };
+  lists: Array<{
+    key: NaListKey;
+    meta: (typeof NA_LIST_META)[NaListKey];
+    events: number;
+    units: number;
+    byCcy: Map<string, number>;
+    title: string;
+    detail: string;
+  }>;
+  isLoading: boolean;
+  totalBookings: number;
+  /** Distinct bookings in at least one actionable list — not list memberships. */
+  needsMove: number;
+  noPricedLine: number;
+  unlockedLines: number;
+  cachedAge: number | null;
+  gmail: { connected?: boolean; email?: string | null } | undefined;
+  scanning: boolean;
+  syncing: boolean;
+  onOpen: (key: NaListKey) => void;
+  onRecompute: () => void;
+}) {
+  const hero = byCcyDesc(portfolio.toCashIn);
+  const [main, ...rest] = hero;
+
+  const figures = [
+    {
+      label: "Client to cash in",
+      total: portfolio.toCashIn,
+      hint: `${portfolio.toCashIn.size || 1} currenc${portfolio.toCashIn.size === 1 ? "y" : "ies"}`,
+      alert: false,
+    },
+    {
+      label: "Available cash",
+      total: portfolio.cash,
+      hint: "received, less paid out and our fee",
+      alert: false,
+    },
+    {
+      label: "To pay suppliers",
+      total: portfolio.toPay,
+      hint: "virtual-card legs excluded",
+      alert: false,
+    },
+    {
+      label: "To recover",
+      total: portfolio.toRecover,
+      hint: `commission ${paperTotal(portfolio.commission)} · refund ${paperTotal(portfolio.refund)}`,
+      alert: true,
+    },
+  ];
+
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto bg-paper-canvas font-paper text-paper-ink lg:grid-cols-[1fr_380px]">
+      <div className="border-paper-rule px-10 pb-10 pt-11 lg:border-r">
+        <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          Marketplace North America · in flight
+        </div>
+        <div className="mt-[18px] flex items-end gap-[18px]">
+          <span className="whitespace-nowrap font-paper-display text-[84px] leading-[0.9] tracking-[-0.02em] tabular-nums">
+            {isLoading ? "…" : main ? fmtPaper(main[1]) : "—"}
+          </span>
+          {main && (
+            <span className="pb-2 font-paper-display text-[22px] text-paper-muted">
+              {ccyLabel(main[0])}
+            </span>
+          )}
+          {rest.length > 0 && (
+            <span className="flex flex-col gap-1 pb-2">
+              {rest.map(([c, v]) => (
+                <span
+                  key={c}
+                  className="whitespace-nowrap text-[15px] tabular-nums text-paper-muted"
+                >
+                  {fmtPaper(v)} <span className="text-paper-label">{ccyLabel(c)}</span>
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+        <p className="mt-3.5 max-w-[640px] text-[14px] leading-relaxed text-paper-body [text-wrap:pretty]">
+          {isLoading
+            ? "Loading…"
+            : `Across ${totalBookings} live booking${totalBookings === 1 ? "" : "s"}, excluding L'Oréal and Veolia. ${needsMove} need a move today. ${portfolio.inGrace} ${portfolio.inGrace === 1 ? "is" : "are"} still inside the 14-day window after the event, where amounts usually settle on their own.`}
+        </p>
+
+        <div className="mt-8 grid grid-cols-2 gap-px border-t border-paper-rule-strong pt-px md:grid-cols-4">
+          {figures.map((f) => (
+            <div key={f.label} className="pt-3.5">
+              <div
+                className={`text-[10.5px] uppercase tracking-[0.16em] ${
+                  f.alert ? "text-paper-alert" : "text-paper-label"
+                }`}
+              >
+                {f.label}
+              </div>
+              <div
+                className={`mt-1.5 text-[19px] tabular-nums ${f.alert ? "text-paper-alert" : ""}`}
+              >
+                {isLoading ? "…" : paperTotal(f.total)}
+              </div>
+              <div className="mt-1 text-[11.5px] text-paper-label">{f.hint}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-12 flex items-baseline gap-3">
+          <span className="font-paper-display text-[26px]">What needs a move</span>
+          <span className="text-[12.5px] text-paper-label">
+            one list per action — commission and refund never share an email
+          </span>
+        </div>
+
+        <div className="mt-5">
+          {lists.map((list, i) => {
+            const empty = list.events === 0;
+            return (
+              <button
+                key={list.key}
+                type="button"
+                disabled={empty}
+                onClick={() => onOpen(list.key)}
+                className={`flex w-full items-center gap-6 border-t border-paper-rule py-[22px] text-left ${
+                  i === lists.length - 1 ? "border-b" : ""
+                } ${empty ? "opacity-45" : "hover:bg-paper-row"}`}
+              >
+                <span className="w-[26px] font-paper-mono text-[13px] text-paper-label">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[19px] leading-[1.35]">
+                    {empty ? `Nothing to ${list.meta.name.toLowerCase()}` : list.title}
+                  </span>
+                  <span className="mt-[5px] block text-[12.5px] text-paper-muted">
+                    {list.detail}
+                  </span>
+                </span>
+                <span className="w-[170px] flex-none text-right">
+                  <span className="block text-[17px] tabular-nums">{paperTotal(list.byCcy)}</span>
+                  <span className="mt-[3px] block text-[11px] uppercase tracking-[0.14em] text-paper-label">
+                    {list.meta.unit}
+                  </span>
+                </span>
+                <span
+                  className={`inline-flex h-[34px] flex-none items-center justify-center px-4 text-[13px] ${
+                    empty
+                      ? "text-paper-faint"
+                      : list.meta.primary
+                        ? "bg-naboo text-paper-ink"
+                        : list.meta.quiet
+                          ? "text-paper-body"
+                          : "border border-paper-ink"
+                  }`}
+                >
+                  {list.meta.primary ? "Review & send" : "Open list"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <aside className="px-8 pb-10 pt-11">
+        <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          Blocked elsewhere
+        </div>
+        <p className="mt-[18px] text-[14px] leading-relaxed text-paper-body">
+          {noPricedLine === 0
+            ? "Every booking carries at least one priced supplier line."
+            : `${noPricedLine} booking${noPricedLine === 1 ? "" : "s"} carry no priced supplier line yet. Nothing can be paid or claimed until a quote lands.`}
+        </p>
+        <p className="mt-4 text-[14px] leading-relaxed text-paper-body">
+          {unlockedLines === 0
+            ? "Every supplier line is locked."
+            : `${unlockedLines} supplier line${unlockedLines === 1 ? " is" : "s are"} not locked. The EM has to lock them before we can pay.`}
+        </p>
+
+        <div className="mt-9 border-t border-paper-rule pt-6 text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          Sources
+        </div>
+        {[
+          {
+            label: "Figures from BigQuery",
+            value:
+              cachedAge == null
+                ? "just recomputed"
+                : cachedAge < 90
+                  ? `cached ${cachedAge} s`
+                  : `cached ${Math.round(cachedAge / 60)} min`,
+          },
+          { label: "Approved cards from Slack", value: syncing ? "syncing…" : "on last refresh" },
+          {
+            label: "Gmail, your mailbox",
+            value: gmail?.connected ? (scanning ? "scanning…" : "on demand") : "not connected",
+          },
+        ].map((row) => (
+          <div
+            key={row.label}
+            className="flex items-baseline justify-between gap-3 border-b border-paper-hairline py-4"
+          >
+            <span className="text-[13.5px] text-paper-body">{row.label}</span>
+            <span className="font-paper-mono text-[11.5px] text-paper-label">{row.value}</span>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={onRecompute}
+          className="mt-4 inline-block border-b border-paper-ink pb-0.5 text-[13px]"
+        >
+          Recompute everything
+        </button>
+      </aside>
+    </div>
+  );
+}
+
 function availableCash(r: NaRow, partners: NaPartnerLine[]): number {
   const received = r.paid_ccy ?? 0;
   const disbursed = partners.filter((p) => !p.is_provision).reduce((t, p) => t + (p.paid ?? 0), 0);
