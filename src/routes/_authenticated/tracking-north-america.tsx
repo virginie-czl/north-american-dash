@@ -22,6 +22,13 @@ import {
   type NaFinancialSummary,
 } from "@/lib/na-financial-summary.functions";
 import { partnerKey } from "@/lib/annotations.functions";
+import { zipStored } from "@/lib/zip";
+import {
+  archiveName,
+  clientStatement,
+  supplierStatement,
+  type StatementEvent,
+} from "@/lib/account-statements";
 import {
   fetchNaRecoveryRequests,
   recordNaRecoveryRequests,
@@ -37,7 +44,7 @@ import {
   useEventComments,
   type EventCommentSummary,
 } from "@/lib/use-annotations";
-import { useCallback, Fragment, useMemo, useState } from "react";
+import { useCallback, useEffect, Fragment, useMemo, useRef, useState } from "react";
 import { Mail } from "lucide-react";
 import {
   getNaRows,
@@ -83,6 +90,7 @@ import {
   Banknote,
   ChevronDown,
   ChevronRight,
+  Download,
   ExternalLink,
   Lock,
   MessageSquare,
@@ -450,6 +458,80 @@ function exportCsv(rows: Array<{ row: NaRow; partners: ReturnType<typeof parseNa
     }
   }
   downloadCsv(lines, `tracking-north-america-${new Date().toISOString().slice(0, 10)}.csv`);
+}
+
+function statementEvent(row: NaRow): StatementEvent {
+  const from = (row.start_date ?? "").slice(0, 10);
+  const to = (row.end_date ?? "").slice(0, 10);
+  return {
+    ref: row.readable_id ?? "—",
+    client: row.company_name ?? "client",
+    eventType: row.event_name || (row.event_type ?? "").replaceAll("_", " ").toLowerCase() || null,
+    dates: from ? (from === to || !to ? from : `${from} → ${to}`) : null,
+    currency: row.currency_client,
+  };
+}
+
+/**
+ * One statement per supplier on a booking. Provision legs are left out: they are
+ * not payable and the booking view already says so.
+ */
+function naSupplierStatement(row: NaRow, p: ReturnType<typeof parseNaPartners>[number]) {
+  const claw = partnerClawback(p);
+  return supplierStatement(statementEvent(row), {
+    name: p.name ?? "Prestataire inconnu",
+    email: p.email,
+    currency: p.currency,
+    payable: p.payable,
+    due: Math.max(p.outstanding ?? 0, 0),
+    paid: p.paid,
+    commission: p.commission,
+    commissionToRecover: claw.commission,
+    refundToRecover: claw.refund,
+    payments: (p.disbursements ?? []).map((d) => ({
+      amount: d.amount,
+      paidOn: d.paid_on,
+      method: d.method,
+      reference: d.reference,
+    })),
+  });
+}
+
+function naSupplierStatements({
+  row,
+  partners,
+}: {
+  row: NaRow;
+  partners: ReturnType<typeof parseNaPartners>;
+}) {
+  return partners.filter((p) => !p.is_provision).map((p) => naSupplierStatement(row, p));
+}
+
+function naClientStatement({ row }: { row: NaRow }, invoices: ReturnType<typeof parseNaInvoices>) {
+  return clientStatement(statementEvent(row), {
+    invoiced: row.invoiced_ccy,
+    collected: row.paid_ccy,
+    outstanding: row.balance_ccy,
+    invoices: invoices.map((i) => ({
+      ref: i.invoice_ref,
+      status: i.status,
+      issued: (i.emission_date ?? "").slice(0, 10),
+      sent: i.is_sent ? "yes" : "",
+      due: (i.due_date ?? "").slice(0, 10),
+      amount: i.amount_ttc,
+    })),
+  });
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function downloadCsv(lines: string[], filename: string) {
@@ -1237,6 +1319,29 @@ function NaPage() {
           gmail={gmailConnection}
           scanning={scanProgress.running}
           syncing={syncCards.isPending}
+          search={search}
+          onSearch={setSearch}
+          statements={{
+            suppliers: filtered.reduce((n, d) => n + naSupplierStatements(d).length, 0),
+            clients: filtered.length,
+            onSuppliers: () => {
+              const entries = filtered.flatMap((d) => naSupplierStatements(d));
+              downloadBlob(
+                new Blob([zipStored(entries)], { type: "application/zip" }),
+                archiveName("supplier", new Date().toISOString().slice(0, 10)),
+              );
+            },
+            onClients: () => {
+              const entries = filtered.map((d) =>
+                naClientStatement(d, parseNaInvoices(d.row.invoices_json ?? null)),
+              );
+              downloadBlob(
+                new Blob([zipStored(entries)], { type: "application/zip" }),
+                archiveName("client", new Date().toISOString().slice(0, 10)),
+              );
+            },
+            onRecover: () => exportRecoverCsv(sorted),
+          }}
           onOpen={(key) => {
             setActiveList(key);
             setScope("all");
@@ -1726,6 +1831,13 @@ function NaPage() {
                           if (mine.length > 0) commissionRefundDialog.open(mine);
                           else if (sel?.booking_url) window.open(sel.booking_url, "_blank");
                         }}
+                        onStatement={(p) => {
+                          const entry = naSupplierStatement(sel, p);
+                          downloadBlob(
+                            new Blob([entry.text], { type: "text/csv;charset=utf-8;" }),
+                            entry.name,
+                          );
+                        }}
                       />
                     )}
                     {detailTab === "invoices" && (
@@ -1733,6 +1845,20 @@ function NaPage() {
                         <header className="flex items-center gap-2 border-b border-[#cdeaf0] bg-[#e8f6f9] px-3.5 py-2.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-teal-700">
                           <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
                           Client invoicing
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const entry = naClientStatement({ row: sel }, selInvoices);
+                              downloadBlob(
+                                new Blob([entry.text], { type: "text/csv;charset=utf-8;" }),
+                                entry.name,
+                              );
+                            }}
+                            className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-normal normal-case tracking-normal text-teal-800 underline-offset-2 hover:underline"
+                          >
+                            <Download className="h-3 w-3" strokeWidth={1.6} aria-hidden="true" />
+                            Client statement · {sel.company_name ?? "client"}, this booking
+                          </button>
                         </header>
                         {selInvoices.length === 0 ? (
                           <div className="px-9 py-9 text-center">
@@ -1916,6 +2042,9 @@ function NaOverviewScreen({
   gmail,
   scanning,
   syncing,
+  search,
+  onSearch,
+  statements,
   onOpen,
   onRecompute,
 }: {
@@ -1947,9 +2076,31 @@ function NaOverviewScreen({
   gmail: { connected?: boolean; email?: string | null } | undefined;
   scanning: boolean;
   syncing: boolean;
+  search: string;
+  onSearch: (value: string) => void;
+  statements: {
+    suppliers: number;
+    clients: number;
+    onSuppliers: () => void;
+    onClients: () => void;
+    onRecover: () => void;
+  };
   onOpen: (key: NaListKey) => void;
   onRecompute: () => void;
 }) {
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const hero = byCcyDesc(portfolio.toCashIn);
   const [main, ...rest] = hero;
 
@@ -1983,8 +2134,34 @@ function NaOverviewScreen({
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto bg-paper-canvas font-paper text-paper-ink lg:grid-cols-[1fr_380px]">
       <div className="border-paper-rule px-10 pb-10 pt-11 lg:border-r">
-        <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
-          Marketplace North America · in flight
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+            Marketplace North America · in flight
+          </div>
+          {/* Search narrows every figure and every list on this screen, so the
+              overview always describes the bookings it is showing. */}
+          <label className="ml-auto flex h-[34px] w-[320px] items-center gap-2 border border-paper-rule-strong bg-white px-2.5">
+            <Search className="h-3.5 w-3.5 flex-none text-paper-label" aria-hidden="true" />
+            <input
+              ref={searchRef}
+              value={search}
+              onChange={(e) => onSearch(e.target.value)}
+              placeholder="Booking, company, supplier, EM"
+              aria-label="Search bookings"
+              className="min-w-0 flex-1 border-0 bg-transparent text-[13px] outline-none placeholder:text-paper-label"
+            />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => onSearch("")}
+                className="flex-none font-paper-mono text-[11px] text-paper-label"
+              >
+                clear
+              </button>
+            ) : (
+              <span className="flex-none font-paper-mono text-[11px] text-paper-faint">⌘K</span>
+            )}
+          </label>
         </div>
         <div className="mt-[18px] flex items-end gap-[18px]">
           <span className="whitespace-nowrap font-paper-display text-[84px] leading-[0.9] tracking-[-0.02em] tabular-nums">
@@ -2104,6 +2281,49 @@ function NaOverviewScreen({
             ? "Every supplier line is locked."
             : `${unlockedLines} supplier line${unlockedLines === 1 ? " is" : "s are"} not locked. The EM has to lock them before we can pay.`}
         </p>
+
+        <div className="mt-9 border-t border-paper-rule pt-6 text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          Account statements
+        </div>
+        <p className="mt-3.5 text-[13px] leading-relaxed text-paper-body">
+          One statement per supplier per booking, and one per client per booking. Download them on
+          the booking, or take the whole filtered set — {totalBookings} booking
+          {totalBookings === 1 ? "" : "s"}, {statements.suppliers + statements.clients} statements.
+        </p>
+        <div className="mt-3.5 flex flex-col gap-2">
+          <button
+            type="button"
+            disabled={statements.suppliers === 0}
+            onClick={statements.onSuppliers}
+            className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
+          >
+            <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
+            All supplier statements
+            <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
+              {statements.suppliers} · zip
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={statements.clients === 0}
+            onClick={statements.onClients}
+            className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
+          >
+            <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
+            All client statements
+            <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
+              {statements.clients} · zip
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={statements.onRecover}
+            className="flex h-9 items-center gap-2.5 border border-paper-rule-strong px-3 text-[13px] text-paper-body"
+          >
+            <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
+            Commission &amp; refunds to recover
+          </button>
+        </div>
 
         <div className="mt-9 border-t border-paper-rule pt-6 text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
           Sources
@@ -2503,6 +2723,7 @@ function PartnerSectionCard({
   askedFor,
   onMarkAsked,
   onRequest,
+  onStatement,
 }: {
   id: string;
   partners: ReturnType<typeof parseNaPartners>;
@@ -2513,6 +2734,7 @@ function PartnerSectionCard({
   askedFor: (partnerName: string | null | undefined) => NaRecoveryRequest | null;
   onMarkAsked: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
   onRequest: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
+  onStatement: (partner: ReturnType<typeof parseNaPartners>[number]) => void;
 }) {
   const payableCount = partners.filter((p) => !p.is_provision).length;
   const provisionCount = partners.filter((p) => p.is_provision).length;
@@ -2613,6 +2835,16 @@ function PartnerSectionCard({
                   className="mt-[3px] block text-xs text-[#6B7280] underline-offset-2 hover:text-navy hover:underline"
                 >
                   Already asked — note it
+                </button>
+              )}
+              {!prov && (
+                <button
+                  type="button"
+                  onClick={() => onStatement(p)}
+                  className="mt-[3px] inline-flex items-center gap-1.5 text-xs text-[#6B7280] underline-offset-2 hover:text-navy hover:underline"
+                >
+                  <Download className="h-3 w-3" strokeWidth={1.6} aria-hidden="true" />
+                  Supplier statement · this booking
                 </button>
               )}
               {!prov && action && (

@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState, useEffect, Fragment } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect, Fragment } from "react";
 import {
   getSlaRows,
   parsePartners,
@@ -59,6 +59,13 @@ import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
 import { buildTargets, describeNeeds, needsOf } from "@/lib/partner-requests";
+import { zipStored } from "@/lib/zip";
+import {
+  archiveName,
+  clientStatement,
+  supplierStatement,
+  type StatementEvent,
+} from "@/lib/account-statements";
 import { UserAvatar } from "@/components/user-avatar";
 import { useActionIndex, tagsForEvent, TAG_FILTER_GROUPS } from "@/lib/use-partner-actions";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
@@ -92,6 +99,7 @@ import {
   ExternalLink,
   Search,
   SearchX,
+  Download,
   Send,
   SlidersHorizontal,
 } from "lucide-react";
@@ -546,6 +554,67 @@ function fmtMulti(m: Map<string, number>): string {
 function partnerLabel(p: PartnerLine): string {
   const name = p.name?.trim();
   return name || "Unnamed provider";
+}
+
+/** Hands the browser a file without leaving anything behind. */
+function download(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function statementEvent(row: SlaRow): StatementEvent {
+  const from = fmtDate(row.start_date);
+  const to = fmtDate(row.end_date);
+  return {
+    ref: row.readable_id ?? row.client_request_id ?? "—",
+    client: row.company_name ?? "L'Oréal Canada",
+    eventType: (row.event_type ?? "").replaceAll("_", " ").toLowerCase() || null,
+    dates: from === "—" ? null : from === to ? from : `${from} → ${to}`,
+    po: row.purchase_order_number ? String(row.purchase_order_number) : null,
+    poDate: row.purchase_order_date ? fmtDate(row.purchase_order_date) : null,
+    currency: row.currency,
+  };
+}
+
+/** One statement per supplier on an event — every supplier, paid or not. */
+function supplierStatementsFor({ row, partners }: { row: SlaRow; partners: PartnerLine[] }) {
+  const event = statementEvent(row);
+  return partners
+    .filter((p) => !p.is_cancelled)
+    .map((p) => {
+      const due = Math.max(p.amount_due ?? 0, 0);
+      const paid = Math.abs(p.amount_paid ?? 0);
+      return supplierStatement(event, {
+        name: partnerLabel(p),
+        email: p.email,
+        currency: p.currency ?? row.currency,
+        payable: p.net_payable_ttc,
+        due,
+        paid,
+      });
+    });
+}
+
+function clientStatementFor({ row, invoices }: { row: SlaRow; invoices: InvoiceLine[] }) {
+  return clientStatement(statementEvent(row), {
+    invoiced: row.client_invoiced_ttc,
+    collected: row.client_collected_total,
+    outstanding: row.client_reste_a_encaisser_ttc,
+    invoices: invoices.map((i) => ({
+      ref: i.invoice_ref,
+      status: i.status,
+      issued: fmtDate(i.emission_date),
+      sent: i.first_sent_at ? fmtDate(i.first_sent_at) : "",
+      due: fmtDate(i.due_date),
+      amount: i.amount_ttc,
+    })),
+  });
 }
 
 function csvEscape(v: string): string {
@@ -1546,6 +1615,27 @@ function SlaPage() {
           lists={actionLists}
           isLoading={isLoading}
           totalEvents={listed.length}
+          search={search}
+          onSearch={setSearch}
+          statements={{
+            suppliers: filtered.reduce((n, d) => n + supplierStatementsFor(d).length, 0),
+            clients: filtered.length,
+            onSuppliers: () => {
+              const entries = filtered.flatMap((d) => supplierStatementsFor(d));
+              download(
+                new Blob([zipStored(entries)], { type: "application/zip" }),
+                archiveName("supplier", new Date().toISOString().slice(0, 10)),
+              );
+            },
+            onClients: () => {
+              const entries = filtered.map((d) => clientStatementFor(d));
+              download(
+                new Blob([zipStored(entries)], { type: "application/zip" }),
+                archiveName("client", new Date().toISOString().slice(0, 10)),
+              );
+            },
+            onContactTodo: () => exportContactToBeDone(decorated, statusMap),
+          }}
           noPoCount={listed.filter(({ item }) => !hasPurchaseOrder(item.row)).length}
           onOpen={(key) => {
             setActiveList(key);
@@ -2108,6 +2198,9 @@ function OverviewScreen({
   isLoading,
   totalEvents,
   noPoCount,
+  search,
+  onSearch,
+  statements,
   onOpen,
   onOpenNoPo,
   gmail,
@@ -2135,12 +2228,34 @@ function OverviewScreen({
   isLoading: boolean;
   totalEvents: number;
   noPoCount: number;
+  search: string;
+  onSearch: (value: string) => void;
+  statements: {
+    suppliers: number;
+    clients: number;
+    onSuppliers: () => void;
+    onClients: () => void;
+    onContactTodo: () => void;
+  };
   onOpen: (key: ListKey) => void;
   onOpenNoPo: () => void;
   gmail: { connected?: boolean; email?: string | null } | undefined;
   scanning: boolean;
   onScan: () => void;
 }) {
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const share = (value: number) =>
     portfolio.total > 0 ? `${Math.max((value / portfolio.total) * 100, 0)}%` : "0%";
   const segments = [
@@ -2159,8 +2274,34 @@ function OverviewScreen({
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto bg-paper-canvas font-paper text-paper-ink lg:grid-cols-[1fr_380px]">
       <div className="border-paper-rule px-10 pb-10 pt-11 lg:border-r">
-        <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
-          L'Oréal Canada · portfolio in flight
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+            L'Oréal Canada · portfolio in flight
+          </div>
+          {/* Search narrows every figure and every list on this screen, so the
+              overview always describes the events it is showing. */}
+          <label className="ml-auto flex h-[34px] w-[320px] items-center gap-2 border border-paper-rule-strong bg-white px-2.5">
+            <Search className="h-3.5 w-3.5 flex-none text-paper-label" aria-hidden="true" />
+            <input
+              ref={searchRef}
+              value={search}
+              onChange={(e) => onSearch(e.target.value)}
+              placeholder="Event code, PO, partner, invoice"
+              aria-label="Search events"
+              className="min-w-0 flex-1 border-0 bg-transparent text-[13px] outline-none placeholder:text-paper-label"
+            />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => onSearch("")}
+                className="flex-none font-paper-mono text-[11px] text-paper-label"
+              >
+                clear
+              </button>
+            ) : (
+              <span className="flex-none font-paper-mono text-[11px] text-paper-faint">⌘K</span>
+            )}
+          </label>
         </div>
         <div className="mt-[18px] flex items-end gap-[18px] whitespace-nowrap">
           <span className="font-paper-display text-[84px] leading-[0.9] tracking-[-0.02em] tabular-nums">
@@ -2276,6 +2417,49 @@ function OverviewScreen({
             See the {noPoCount} event{noPoCount === 1 ? "" : "s"}
           </button>
         )}
+
+        <div className="mt-9 border-t border-paper-rule pt-6 text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
+          Account statements
+        </div>
+        <p className="mt-3.5 text-[13px] leading-relaxed text-paper-body">
+          One statement per supplier per event, and one per client per event. Download them on the
+          event, or take the whole filtered set — {totalEvents} event
+          {totalEvents === 1 ? "" : "s"}, {statements.suppliers + statements.clients} statements.
+        </p>
+        <div className="mt-3.5 flex flex-col gap-2">
+          <button
+            type="button"
+            disabled={statements.suppliers === 0}
+            onClick={statements.onSuppliers}
+            className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
+          >
+            <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
+            All supplier statements
+            <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
+              {statements.suppliers} · zip
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={statements.clients === 0}
+            onClick={statements.onClients}
+            className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
+          >
+            <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
+            All client statements
+            <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
+              {statements.clients} · zip
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={statements.onContactTodo}
+            className="flex h-9 items-center gap-2.5 border border-paper-rule-strong px-3 text-[13px] text-paper-body"
+          >
+            <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
+            Unpaid partners · contact to-do
+          </button>
+        </div>
 
         <div className="mt-9 border-t border-paper-rule pt-6 text-[10.5px] uppercase tracking-[0.2em] text-paper-label">
           Mailbox
@@ -2503,6 +2687,26 @@ function EventDetails({
                             </button>
                           );
                         })()}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const entry = supplierStatement(statementEvent(row), {
+                              name: partnerLabel(p),
+                              email: p.email,
+                              currency: p.currency ?? row.currency,
+                              payable: p.net_payable_ttc,
+                              due,
+                              paid,
+                            });
+                            download(
+                              new Blob([entry.text], { type: "text/csv;charset=utf-8;" }),
+                              entry.name,
+                            );
+                          }}
+                          className="mt-1 block text-[10.5px] text-slate-600 underline-offset-2 hover:underline"
+                        >
+                          Supplier statement · {partnerLabel(p)}, this event
+                        </button>
                       </td>
                       <td className="px-2 py-1.5 text-muted-foreground">
                         <div>{p.email || "—"}</div>
@@ -2563,6 +2767,17 @@ function EventDetails({
         <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <FileText className="h-3.5 w-3.5" />
           Invoices ({invoices.length})
+          <button
+            type="button"
+            onClick={() => {
+              const entry = clientStatementFor({ row, invoices });
+              download(new Blob([entry.text], { type: "text/csv;charset=utf-8;" }), entry.name);
+            }}
+            className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-normal normal-case tracking-normal text-slate-600 underline-offset-2 hover:underline"
+          >
+            <Download className="h-3 w-3" strokeWidth={1.6} aria-hidden="true" />
+            Client statement · {row.company_name ?? "client"}, this event
+          </button>
         </div>
         {invoices.length === 0 ? (
           <div className="rounded border border-dashed bg-white px-3 py-4 text-xs text-muted-foreground">

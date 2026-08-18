@@ -448,3 +448,34 @@ skipped and the email signal still works — the page does not break.
 next to *Carte OK* reads as an outstanding item when there is nothing to chase, so
 the bank sticker is hidden once a partner is payable by card — unless we actually
 hold their details, which is worth seeing either way.
+
+### Account statements
+
+An amount is only credible if it carries its reasoning. Both trackers can hand
+someone that reasoning as a file: **one statement per supplier per event, and
+one per client per event**.
+
+A supplier statement names the event, the PO it sits under, what is payable,
+what we already paid (with each disbursement, its date, method and reference)
+and what is still due — plus, on Marketplace NA, the commission or overpayment
+still to recover. A client statement names what was invoiced, what came in,
+what is outstanding, and lists every invoice with its issue, send and due
+dates. Amounts are written raw to two decimals so a spreadsheet reads them as
+numbers.
+
+They can be taken one at a time from the event — next to each partner and above
+the invoice table — or as a zip of the whole filtered set, from *Account
+statements* on the overview. The zip is written by `src/lib/zip.ts`: store-only,
+no dependency, deterministic bytes, UTF-8 names, a BOM per file so Excel opens
+accented names correctly. Colliding names are numbered rather than dropped —
+two suppliers called *Le Balcon* on one booking would otherwise silently become
+one file. Statement text lives in `src/lib/account-statements.ts` and is pure:
+shapes in, text out. 22 tests cover both.
+
+### Search on the overview
+
+The overview screens are not a summary of the database, they describe the
+events they are showing. Their search field is the same `search` state the list
+views use, so typing narrows the headline figure, the four composition figures,
+every list count and the statement zips together. ⌘K (or Ctrl-K) focuses it from
+anywhere on the screen.
