@@ -25,6 +25,9 @@ export interface InvoiceLine {
   invoice_ref: string | null;
   direction: string | null;
   status: string | null;
+  /** The invoice this one cancels, in part or in full. */
+  cancels: string | null;
+  cancellation_reason: string | null;
   currency: string | null;
   amount_ht: number | null;
   amount_ttc: number | null;
@@ -175,6 +178,10 @@ invoices AS (
       inv.invoiceNumber      AS invoice_ref,
       inv.invoiceDirection   AS invoice_direction,
       inv.status             AS invoice_status,
+      -- Parent/child, as the back office shows it: a credit note names the
+      -- invoice it cancels.
+      inv.cancelledInvoiceNumber AS cancels,
+      inv.cancellationReason     AS cancellation_reason,
       inv.currency           AS invoice_currency,
       ROUND(inv.totals.totalamountexcludingtaxes.amount / 100, 2) AS amount_ht,
       ROUND(inv.totals.totalamountincludingtaxes.amount / 100, 2) AS amount_ttc,
@@ -245,12 +252,28 @@ income_invoice_dates AS (
     clientRequestId AS client_request_id,
     DATE(MIN(IF(invoiceDirection='INCOME', issueDate, NULL))) AS first_income_invoice_emission_date,
     COUNTIF(invoiceDirection='INCOME' AND status = 'ISSUED') AS n_income_invoices_issued,
-    ROUND(SUM(IF(invoiceDirection='INCOME'  AND status='ISSUED' AND amt_ttc > 0, amt_ttc, 0)), 2) AS net_income_invoiced_ttc
+    -- What the client has been billed: every document we sent them, at the
+    -- total printed on it.
+    --
+    -- Not "positives only": ignoring credit notes bills the client for amounts
+    -- that were voided. Not every INCOME invoice either: a commission note to
+    -- the partner is income to us but was never billed to the client, so it is
+    -- excluded by requiring a client-facing line (SERVICE or FEE_CLIENT).
+    ROUND(SUM(IF(invoiceDirection='INCOME' AND is_client_facing, amt_ttc, 0)), 2)
+      AS net_income_invoiced_ttc
   FROM (
     SELECT
-      clientRequestId, status, issueDate, invoiceDirection,
-      ROUND(totals.totalamountincludingtaxes.amount / 100, 2) AS amt_ttc
-    FROM \`naboo-app-365515.raw_naboo_data.invoices\`
+      inv.clientRequestId, inv.status, inv.issueDate, inv.invoiceDirection,
+      ROUND(inv.totals.totalamountincludingtaxes.amount / 100, 2) AS amt_ttc,
+      cl.invoice_id IS NOT NULL AS is_client_facing
+    FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
+    LEFT JOIN (
+      SELECT li.invoice_id
+      FROM \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+      WHERE li.deleted = false
+      GROUP BY li.invoice_id
+      HAVING SUM(IF(li.line_type IN ('SERVICE', 'FEE_CLIENT'), 1, 0)) > 0
+    ) cl ON cl.invoice_id = inv.invoice_id
   )
   GROUP BY clientRequestId
 ),
@@ -444,6 +467,8 @@ SELECT
       inv.invoice_ref AS invoice_ref,
       inv.invoice_direction AS direction,
       inv.invoice_status AS status,
+      inv.cancels AS cancels,
+      inv.cancellation_reason AS cancellation_reason,
       inv.invoice_currency AS currency,
       inv.amount_ht AS amount_ht,
       inv.amount_ttc AS amount_ttc,
@@ -491,6 +516,23 @@ export function parsePartners(json: string | null): PartnerLine[] {
       amount_due: p.amount_due == null ? null : Math.max(p.amount_due, 0),
     }));
     return mergePartners(raw);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Every client invoice on the booking, credit notes and cancellations included.
+ *
+ * The statement of account has to list and total the whole set — a cancelled
+ * invoice always comes with the credit notes that void it, and dropping one side
+ * of that pair moves the balance. `parseInvoices` below is the narrower view the
+ * screens use.
+ */
+export function parseAllInvoices(json: string | null): InvoiceLine[] {
+  if (!json) return [];
+  try {
+    return JSON.parse(json) as InvoiceLine[];
   } catch {
     return [];
   }

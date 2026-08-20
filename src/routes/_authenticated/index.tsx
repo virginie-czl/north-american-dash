@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState, useEffect, Fragment } from "rea
 import {
   getSlaRows,
   parsePartners,
+  parseAllInvoices,
   parseInvoices,
   type SlaRow,
   type PartnerLine,
@@ -621,7 +622,10 @@ function supplierStatementsFor({ row, partners }: { row: SlaRow; partners: Partn
     });
 }
 
-function clientStatementFor({ row, invoices }: { row: SlaRow; invoices: InvoiceLine[] }) {
+function clientStatementFor({ row }: { row: SlaRow; invoices?: InvoiceLine[] }) {
+  // Every document, not the screens' filtered view: a statement that lists only
+  // the positive invoices bills the client for amounts that were credited back.
+  const invoices = parseAllInvoices(row.invoices_json);
   return clientStatement(statementEvent(row), {
     invoiced: row.client_invoiced_ttc,
     collected: row.client_collected_total,
@@ -629,6 +633,7 @@ function clientStatementFor({ row, invoices }: { row: SlaRow; invoices: InvoiceL
     invoices: invoices.map((i) => ({
       ref: i.invoice_ref,
       status: i.status,
+      cancels: i.cancels,
       issued: i.emission_date,
       sent: i.first_sent_at,
       due: i.due_date,

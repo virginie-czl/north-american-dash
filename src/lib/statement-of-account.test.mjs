@@ -212,9 +212,38 @@ t(
       { ref: "X", type: "invoice", amount: 4500 },
       { ref: "Y", type: "credit_note", amount: -4500 },
     ],
-  }).includes(
-    "1 invoice and credit-note pair cancelling each other in full is netted off and not listed",
-  ),
+  }).includes("2 documents that cancel each other in full — 1 group — are netted off"),
+);
+
+// The hierarchy the back office draws: an invoice and the credit notes against
+// it. C-U332's USI-US26-00047 is voided by four of them.
+const grouped = [
+  { ref: "USI-US26-00047", type: "invoice", group: "USI-US26-00047", amount: 15587.69 },
+  { ref: "USI-US26-00055", type: "credit_note", group: "USI-US26-00047", amount: -4800 },
+  { ref: "USI-US26-00064", type: "credit_note", group: "USI-US26-00047", amount: -8016.64 },
+  { ref: "USI-US26-00071", type: "credit_note", group: "USI-US26-00047", amount: -5741.95 },
+  { ref: "USI-US26-00073", type: "invoice", group: "USI-US26-00047", amount: 2970.9 },
+];
+const groupNet = netOffCancellingLines(grouped);
+t(
+  "a fully cancelled group goes in one piece",
+  groupNet.lines.length === 0 && groupNet.netted === 1,
+);
+t("it counts the documents it removed", groupNet.omitted === 5);
+t(
+  "and the group's own total is zero, so no figure can move",
+  Math.abs(grouped.reduce((sum, l) => sum + l.amount, 0)) < 0.005,
+);
+
+// Partially cancelled: the reduction is something the reader needs to see.
+const partiallyCancelled = netOffCancellingLines([
+  { ref: "USI-US26-00069", type: "invoice", group: "USI-US26-00069", amount: 40678.46 },
+  { ref: "USI-US26-00072", type: "invoice", group: "USI-US26-00069", amount: 7213.25 },
+  { ref: "USI-US26-00074", type: "credit_note", group: "USI-US26-00069", amount: -7407 },
+]);
+t(
+  "a partially cancelled invoice keeps its whole group",
+  partiallyCancelled.lines.length === 3 && partiallyCancelled.netted === 0,
 );
 
 // A settled statement must not ask to be paid.

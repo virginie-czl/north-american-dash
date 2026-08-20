@@ -50,6 +50,9 @@ export interface NaPartnerLine {
 export interface NaInvoiceLine {
   invoice_ref: string | null;
   status: string | null;
+  /** The invoice this one cancels, in part or in full. */
+  cancels: string | null;
+  cancellation_reason: string | null;
   currency: string | null;
   amount_ttc: number | null;
   emission_date: string | null;
@@ -165,6 +168,11 @@ client_invoices AS (
     ARRAY_AGG(STRUCT(
       inv.invoiceNumber AS invoice_ref,
       inv.status        AS status,
+      -- The back office shows invoices as a parent and the credit notes that
+      -- cancel it. Carrying the link means a statement can net a fully
+      -- cancelled group out of its listing without losing it from the total.
+      inv.cancelledInvoiceNumber AS cancels,
+      inv.cancellationReason     AS cancellation_reason,
       inv.currency      AS currency,
       CAST(ROUND(inv.totals.totalamountincludingtaxes.amount / 100, 2) AS FLOAT64) AS amount_ttc,
       CAST(inv.issueDate AS STRING) AS emission_date,
@@ -256,17 +264,30 @@ client_proposal_totals AS (
 invoiced_client AS (
   SELECT
     i.clientRequestReadableId AS rid,
-    ROUND(SUM(IF(li.line_type IN ('SERVICE', 'FEE_CLIENT'), li.total_incl_taxes, 0)) / 100, 2)
-      AS invoiced_ttc,
+    -- What the client has actually been billed: the sum of the invoice totals,
+    -- as the back office shows them and as the statement of account lists them.
+    --
+    -- Summing the SERVICE + FEE_CLIENT *lines* instead reads high wherever an
+    -- invoice's own header total is lower than its lines: on C-U332 two invoices
+    -- (USI-US26-00069, -00075) put it 56 105,78 USD above the back office's
+    -- 266 494,01. The header is the document we sent, so the header wins.
+    ROUND(SUM(IF(cl.invoice_id IS NOT NULL,
+      i.totals.totalamountincludingtaxes.amount / 100, 0)), 2) AS invoiced_ttc,
     -- Our service charge to the client. It is revenue, not money held on behalf
     -- of the providers, so it is taken out of the cash available to pay them.
-    ROUND(SUM(IF(li.line_type = 'FEE_CLIENT', li.total_incl_taxes, 0)) / 100, 2)
-      AS client_service_fees_ttc
+    ROUND(SUM(IFNULL(cl.fee_client_ttc, 0)), 2) AS client_service_fees_ttc
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` i
-  JOIN \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
-    ON li.invoice_id = i.invoice_id
+  LEFT JOIN (
+    -- One row per invoice: its client-facing lines, and whether it has any.
+    SELECT
+      li.invoice_id,
+      ROUND(SUM(IF(li.line_type = 'FEE_CLIENT', li.total_incl_taxes, 0)) / 100, 2) AS fee_client_ttc
+    FROM \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+    WHERE li.deleted = false
+    GROUP BY li.invoice_id
+    HAVING SUM(IF(li.line_type IN ('SERVICE', 'FEE_CLIENT'), 1, 0)) > 0
+  ) cl ON cl.invoice_id = i.invoice_id
   WHERE i.invoiceDirection = 'INCOME'
-    AND li.deleted = false
     AND i.clientRequestReadableId IS NOT NULL
   GROUP BY rid
 ),
@@ -515,7 +536,8 @@ base AS (
     ) AS partners_json,
     TO_JSON_STRING(
       IFNULL(civ.items, CAST([] AS ARRAY<STRUCT<
-        invoice_ref STRING, status STRING, currency STRING, amount_ttc FLOAT64,
+        invoice_ref STRING, status STRING, cancels STRING, cancellation_reason STRING,
+        currency STRING, amount_ttc FLOAT64,
         emission_date STRING, due_date STRING, is_sent BOOL
       >>))
     ) AS invoices_json

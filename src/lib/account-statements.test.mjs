@@ -175,44 +175,207 @@ t("the total is unmoved by netting", netted.includes("5,802.79"));
 const empty = read(clientStatement(event, { invoiced: 0, collected: 0, outstanding: 0 }));
 t("an event with no invoice says so", empty.includes("Nothing issued on this booking yet."));
 
-// ── What a cancelled invoice must not do (C-U332) ──────────────────────────
-const withCancelled = clientStatement(
-  { ...event, ref: "C-U332", client: "Bland AI", eventType: "C-U332 / Bland AI", currency: "USD" },
+// ── C-U332, against the back office ────────────────────────────────────────
+// Every client-facing document on the booking. The back office totals these at
+// USD 266 494,01, and the statement has to agree with it.
+const u332Invoices = [
   {
-    invoiced: 266494.01,
-    collected: 267617.45,
-    outstanding: 0,
-    invoices: [
-      {
-        ref: "USI-US26-00029",
-        status: "ISSUED",
-        issued: "2026-07-22",
-        due: "2026-07-29",
-        amount: 57314.85,
-      },
-      {
-        ref: "USI-US26-00047",
-        status: "CANCELLED",
-        issued: "2026-07-30",
-        due: "2026-08-06",
-        amount: 15587.69,
-      },
-    ],
+    ref: "USI-US26-00002",
+    status: "ISSUED",
+    issued: "2026-06-10",
+    due: "2026-06-17",
+    amount: 148056.0,
   },
+  {
+    ref: "USI-US26-00012",
+    status: "ISSUED",
+    cancels: "USI-US26-00002",
+    issued: "2026-07-02",
+    amount: -53000.0,
+  },
+  {
+    ref: "USI-US26-00020",
+    status: "ISSUED",
+    issued: "2026-07-16",
+    due: "2026-07-23",
+    amount: 16210.5,
+  },
+  {
+    ref: "USI-US26-00024",
+    status: "ISSUED",
+    issued: "2026-07-17",
+    due: "2026-07-24",
+    amount: 45023.3,
+  },
+  {
+    ref: "USI-US26-00029",
+    status: "ISSUED",
+    issued: "2026-07-22",
+    due: "2026-07-29",
+    amount: 57314.85,
+  },
+  {
+    ref: "USI-US26-00034",
+    status: "ISSUED",
+    issued: "2026-07-24",
+    due: "2026-07-31",
+    amount: 10700.0,
+  },
+  {
+    ref: "USI-US26-00035",
+    status: "ISSUED",
+    issued: "2026-07-24",
+    due: "2026-07-31",
+    amount: 12142.34,
+  },
+  {
+    ref: "USI-US26-00047",
+    status: "CANCELLED",
+    issued: "2026-07-30",
+    due: "2026-08-06",
+    amount: 15587.69,
+  },
+  {
+    ref: "USI-US26-00054",
+    status: "ISSUED",
+    cancels: "USI-US26-00002",
+    issued: "2026-08-03",
+    amount: -7200.0,
+  },
+  {
+    ref: "USI-US26-00055",
+    status: "ISSUED",
+    cancels: "USI-US26-00047",
+    issued: "2026-08-03",
+    amount: -4800.0,
+  },
+  {
+    ref: "USI-US26-00063",
+    status: "ISSUED",
+    cancels: "USI-US26-00002",
+    issued: "2026-08-04",
+    amount: -4800.0,
+  },
+  {
+    ref: "USI-US26-00064",
+    status: "ISSUED",
+    cancels: "USI-US26-00047",
+    issued: "2026-08-04",
+    amount: -8016.64,
+  },
+  {
+    ref: "USI-US26-00065",
+    status: "ISSUED",
+    issued: "2026-08-04",
+    due: "2026-08-11",
+    amount: 2538.59,
+  },
+  {
+    ref: "USI-US26-00069",
+    status: "ISSUED",
+    issued: "2026-08-05",
+    due: "2026-08-12",
+    amount: 40678.46,
+  },
+  {
+    ref: "USI-US26-00070",
+    status: "ISSUED",
+    cancels: "USI-US26-00002",
+    issued: "2026-08-06",
+    amount: -6000.0,
+  },
+  {
+    ref: "USI-US26-00071",
+    status: "ISSUED",
+    cancels: "USI-US26-00047",
+    issued: "2026-08-06",
+    amount: -5741.95,
+  },
+  {
+    ref: "USI-US26-00072",
+    status: "ISSUED",
+    cancels: "USI-US26-00069",
+    issued: "2026-08-06",
+    amount: 7213.25,
+  },
+  {
+    ref: "USI-US26-00073",
+    status: "ISSUED",
+    cancels: "USI-US26-00047",
+    issued: "2026-08-06",
+    amount: 2970.9,
+  },
+  {
+    ref: "USI-US26-00074",
+    status: "ISSUED",
+    cancels: "USI-US26-00069",
+    issued: "2026-08-06",
+    amount: -7407.0,
+  },
+  {
+    ref: "USI-US26-00075",
+    status: "ISSUED",
+    issued: "2026-08-06",
+    due: "2026-08-13",
+    amount: 4643.26,
+  },
+  {
+    ref: "USI-US26-00078",
+    status: "ISSUED",
+    issued: "2026-08-07",
+    due: "2026-08-14",
+    amount: 1157.78,
+  },
+  {
+    ref: "USI-US26-00083",
+    status: "ISSUED",
+    issued: "2026-08-11",
+    due: "2026-08-18",
+    amount: -777.32,
+  },
+];
+const u332 = read(
+  clientStatement(
+    {
+      ref: "C-U332",
+      client: "Bland AI",
+      eventType: "C-U332 / Bland AI",
+      from: "2026-08-10",
+      to: "2026-08-13",
+      currency: "USD",
+      billingEntity: "Naboo Inc",
+    },
+    { invoiced: 266494.01, collected: 267617.45, outstanding: -1123.44, invoices: u332Invoices },
+  ),
 );
-const cancelledDoc = read(withCancelled);
-t("a cancelled invoice is not listed", !cancelledDoc.includes("USI-US26-00047"));
+
+t("the total invoiced matches the back office", u332.includes("266,494.01"), "");
 t(
-  "a cancelled invoice is not counted as owed",
-  !cancelledDoc.includes("72,902.54") && cancelledDoc.includes("57,314.85"),
+  "the fully cancelled invoice and its four credit notes are not listed",
+  !u332.includes("USI-US26-00047") &&
+    !u332.includes("USI-US26-00055") &&
+    !u332.includes("USI-US26-00064") &&
+    !u332.includes("USI-US26-00071") &&
+    !u332.includes("USI-US26-00073"),
 );
 t(
-  "the document says one was left off",
-  cancelledDoc.includes("1 cancelled invoice is not listed."),
+  "the document says five documents came off",
+  u332.includes("5 documents that cancel each other in full"),
 );
+t(
+  "a partially cancelled invoice keeps its children on the page",
+  u332.includes("USI-US26-00069") &&
+    u332.includes("USI-US26-00072") &&
+    u332.includes("USI-US26-00074"),
+);
+t(
+  "the partial credit notes against the first invoice stay listed",
+  u332.includes("USI-US26-00002") && u332.includes("USI-US26-00012"),
+);
+t("17 documents are listed", u332.includes("17 lines · USD"), "");
 t(
   "an event name that repeats the reference and the client is cleaned up",
-  !cancelledDoc.includes("C-U332 / Bland AI"),
+  !u332.includes("C-U332 / Bland AI"),
 );
 
 // ── Names and dates ────────────────────────────────────────────────────────

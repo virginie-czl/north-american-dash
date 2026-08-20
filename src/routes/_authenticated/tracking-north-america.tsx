@@ -590,6 +590,8 @@ function naSupplierStatements({
 }
 
 function naClientStatement({ row }: { row: NaRow }, invoices: ReturnType<typeof parseNaInvoices>) {
+  // `parseNaInvoices` already returns every document on the booking, cancelled
+  // ones included, which is what a statement has to total.
   return clientStatement(statementEvent(row), {
     invoiced: row.invoiced_ccy,
     collected: row.paid_ccy,
@@ -597,6 +599,7 @@ function naClientStatement({ row }: { row: NaRow }, invoices: ReturnType<typeof 
     invoices: invoices.map((i) => ({
       ref: i.invoice_ref,
       status: i.status,
+      cancels: i.cancels,
       issued: i.emission_date,
       sent: i.is_sent ? i.emission_date : null,
       due: i.due_date,

@@ -23,6 +23,11 @@ export type StatementLine = {
   type: StatementLineType;
   /** Overrides the word in the Type column — "Commission", "Adjustment". */
   chip?: string | null;
+  /**
+   * The invoice this line belongs with: its own reference, or the reference of
+   * the invoice it cancels. A parent and its credit notes share a group.
+   */
+  group?: string | null;
   /** ISO or already-formatted; printed as given. */
   issued?: string | null;
   due?: string | null;
@@ -98,37 +103,68 @@ export function money(value: number): string {
 }
 
 /**
- * Drop invoice and credit-note pairs that cancel each other out.
+ * Drop the documents that cancel each other out.
  *
- * A credit note issued to void an invoice in full tells the reader nothing: the
- * two lines net to zero and only make the statement longer and harder to tie to
- * the balance. Removing both leaves every total untouched — which is the point,
- * and why it is safe.
+ * An invoice and the credit notes that void it in full tell the reader nothing:
+ * the group nets to zero and only makes the statement longer and harder to tie
+ * to the balance. Every total is computed over all the lines, so hiding a
+ * zero-sum group cannot move a figure — which is what makes it safe.
  *
- * Pairing is on the amount alone, biggest first, one credit note against one
- * invoice. It is deliberately conservative: a partial credit note never cancels
- * anything, and stays listed.
+ * Two rules, in order:
+ *
+ * 1. **By the link.** A credit note names the invoice it cancels, so a parent
+ *    and its children form a group; if the group sums to zero, all of it goes.
+ *    A *partially* cancelled invoice stays, children and all — the reduction is
+ *    something the reader needs to see.
+ * 2. **By the amount**, for lines with no link: one credit note against one
+ *    invoice of the same amount. Conservative on purpose; a partial credit note
+ *    never cancels anything.
  */
 export function netOffCancellingLines(lines: StatementLine[]): {
   lines: StatementLine[];
   netted: number;
+  /** How many documents were left off, so the note can say. */
+  omitted: number;
 } {
-  const credits = lines.filter((l) => l.amount < -0.005).sort((a, b) => a.amount - b.amount); // most negative first
   const remaining = new Set(lines);
   let netted = 0;
+  let omitted = 0;
 
+  // 1. Groups, as the back office draws them.
+  const groups = new Map<string, StatementLine[]>();
+  for (const line of lines) {
+    const key = line.group ?? line.ref;
+    groups.set(key, [...(groups.get(key) ?? []), line]);
+  }
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    const total = members.reduce((sum, l) => sum + l.amount, 0);
+    if (Math.abs(total) > 0.005) continue;
+    for (const member of members) remaining.delete(member);
+    netted += 1;
+    omitted += members.length;
+  }
+
+  // 2. Unlinked one-for-one pairs. "Unlinked" means nothing else shares its
+  //    group — a document the data does not tie to any other.
+  const alone = (line: StatementLine) => (groups.get(line.group ?? line.ref)?.length ?? 1) === 1;
+  const credits = [...remaining]
+    .filter((l) => l.amount < -0.005 && alone(l))
+    .sort((a, b) => a.amount - b.amount);
   for (const credit of credits) {
     if (!remaining.has(credit)) continue;
     const match = [...remaining].find(
-      (l) => l !== credit && l.amount > 0.005 && Math.abs(l.amount + credit.amount) < 0.005,
+      (l) =>
+        l !== credit && alone(l) && l.amount > 0.005 && Math.abs(l.amount + credit.amount) < 0.005,
     );
     if (!match) continue;
     remaining.delete(credit);
     remaining.delete(match);
     netted += 1;
+    omitted += 2;
   }
 
-  return { lines: lines.filter((l) => remaining.has(l)), netted };
+  return { lines: lines.filter((l) => remaining.has(l)), netted, omitted };
 }
 
 export type StatementTotals = {
@@ -196,7 +232,7 @@ function tile(opts: {
  */
 export function statementHtml(data: StatementOfAccount): string {
   const totals = statementTotals(data);
-  const { lines, netted } = netOffCancellingLines(data.lines);
+  const { lines, netted, omitted } = netOffCancellingLines(data.lines);
   const supplier = data.side === "supplier";
   const contact = data.contactEmail ?? "finance@naboo.app";
   const meta = [`Booking ${data.bookingRef}`, `issued ${data.issuedOn}`, data.currency].join(" · ");
@@ -645,7 +681,9 @@ export function statementHtml(data: StatementOfAccount): string {
     <p class="footnote">
       Generated on ${escapeHtml(data.issuedOn)}.${
         netted > 0
-          ? ` ${netted} invoice and credit-note pair${netted === 1 ? "" : "s"} cancelling each other in full ${netted === 1 ? "is" : "are"} netted off and not listed; the totals are unchanged.`
+          ? ` ${omitted} document${omitted === 1 ? "" : "s"} that cancel each other in full — ${netted} ${
+              netted === 1 ? "group" : "groups"
+            } — ${omitted === 1 ? "is" : "are"} netted off and not listed; the totals are unchanged.`
           : ""
       }${(data.omissions ?? []).map((note) => ` ${escapeHtml(note)}`).join("")}
       Questions on any line: <a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a>.

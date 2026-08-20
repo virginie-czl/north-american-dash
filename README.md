@@ -548,33 +548,40 @@ The word is "account statement" throughout the UI, matching what the file itself
 says — the design handoff called them "account summaries", and one vocabulary
 beats two.
 
-### What belongs on a client's statement
+### What belongs on a client's statement, and what it adds up to
 
-Three rules, each of them a bug found on a real statement (C-U332, Bland AI —
-BigQuery audits `283a93df`, `1310e8eb`, `17d0a3a0`):
+Four rules, each of them a bug found on a real statement (C-U332, Bland AI —
+BigQuery audits `283a93df`, `1310e8eb`, `a35f0289`, `181fd69c`, `e69fef9d`):
 
 1. **Commission notes are not the client's invoices.** `invoiceDirection =
-   'INCOME'` is not enough to identify an invoice billed to the client: our
-   commission notes to the *partner* are income to us too. They carry only
-   `FEE_OWNER` lines and no `SERVICE` or `FEE_CLIENT` line, and both trackers
-   were listing them among the client's own invoices — five of them, 7 100,70
-   USD, on a document addressed to Bland AI, and 158 on one Capgemini entity.
-   Both queries now require a client-facing line.
-2. **A cancelled invoice is not owed.** Listing one with a "cancelled" label
-   still adds its amount to what the client is being told they owe. C-U332 asked
-   for 15 587,69 USD that had been voided, with no credit note anywhere on the
-   booking to reverse it. Cancelled invoices are left off the statement, and the
-   footnote says how many.
-3. **A client who paid more than we billed is not in arrears.** The document now
-   reads "Credit balance", drops the due-date pill, and says who refunds it.
-   A due date is only shown when something is actually due, and only if it is
-   still ahead — "Due 17 June" on a statement issued in August is noise.
+   'INCOME'` does not mean "billed to the client": our commission notes to the
+   *partner* are income to us too. They carry only `FEE_OWNER` lines and no
+   `SERVICE` or `FEE_CLIENT` line, and both trackers were listing and counting
+   them among the client's own invoices — five of them, 7 100,70 USD, on a
+   document addressed to Bland AI, and 158 on one Capgemini entity. Both queries
+   now require a client-facing line.
+2. **Every document counts toward the total.** A cancelled invoice always comes
+   with the credit notes that void it, so dropping the parent alone leaves the
+   children subtracting an amount that was never added — that is the difference
+   between 250 906,32 and the right figure, 266 494,01. The rule is: total over
+   everything, hide only what nets to zero.
+3. **The invoice total is the total printed on the invoice.** Summing an
+   invoice's `SERVICE` + `FEE_CLIENT` *lines* reads high wherever its own header
+   total is lower: two invoices on C-U332 put the figure 56 105,78 USD above the
+   back office. Both trackers' invoiced figures are now header-based, matching
+   the document we actually sent. On L'Oréal that also means credit notes stop
+   being ignored — the old rule counted `status = 'ISSUED' AND amount > 0`.
+4. **A client who paid more than we billed is not in arrears.** The document
+   reads "Credit balance", drops the due-date pill and says who refunds it. A due
+   date is shown only when something is due, and only if it is still ahead.
 
-**Known and unresolved:** on C-U332 the invoice *header* totals sum to
-266 494,01 USD while the sum of those same invoices' `SERVICE` + `FEE_CLIENT`
-*lines* — which is what the tracker's on-screen "Invoiced" figure uses — comes
-to 322 599,79. Two invoices account for it: USI-US26-00069 has a header of
-40 678,46 against 83 784,24 of client lines, and USI-US26-00075 4 643,26 against
-17 643,26. The statement lists header amounts and totals them, so it is
-internally consistent; whether the header or the lines are right is a question
-for whoever owns invoicing.
+**Netting follows the back office's own hierarchy.** `cancelledInvoiceNumber`
+links a credit note to the invoice it cancels, so a parent and its children form
+a group. A group that sums to zero is left off the listing in one piece — on
+C-U332 that is `USI-US26-00047` and the four documents against it — and the
+footnote says how many documents went. A *partially* cancelled invoice keeps its
+whole group on the page: the reduction is something the reader needs to see, and
+the remaining figures then tie to the back office's own "Remaining" line. For
+documents the data does not link, the older one-for-one amount match still
+applies. 49 tests on the template, 36 on the adapter, including C-U332 end to
+end.

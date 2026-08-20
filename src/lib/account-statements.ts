@@ -54,6 +54,8 @@ export type StatementSupplier = {
 export type StatementInvoice = {
   ref?: string | null;
   status?: string | null;
+  /** The invoice this one cancels, in part or in full. */
+  cancels?: string | null;
   issued?: string | null;
   sent?: string | null;
   due?: string | null;
@@ -214,21 +216,27 @@ export function supplierStatement(event: StatementEvent, supplier: StatementSupp
 }
 
 export function clientStatement(event: StatementEvent, client: StatementClient): ZipEntry {
-  const all = client.invoices ?? [];
+  const invoices = client.invoices ?? [];
 
-  // A cancelled invoice never stood. Listing it with a "cancelled" label still
-  // adds its amount to what the client is being told they owe, which is how
-  // C-U332 asked Bland AI for 15 587,69 USD that had been voided — so it is
-  // left off, and the footnote says how many.
-  const cancelled = all.filter((i) => (i.status ?? "").toUpperCase() === "CANCELLED");
-  const invoices = all.filter((i) => !cancelled.includes(i));
-
+  /**
+   * Every document counts toward the total — invoices, credit notes and the
+   * cancellations between them. A cancelled invoice always comes with the credit
+   * notes that void it, so dropping the parent on its own leaves the children
+   * subtracting an amount that was never added: on C-U332 that is the difference
+   * between 250 906,32 and the right figure, 266 494,01.
+   *
+   * What a fully cancelled group does earn is being left off the *listing* —
+   * `group` carries the link, and the netting reads it.
+   */
   const lines: StatementLine[] = invoices.map((invoice) => {
     const amount = invoice.amount ?? 0;
+    const cancels = invoice.cancels?.trim() || null;
     return {
       ref: invoice.ref ?? "—",
       // A negative amount is a credit note whatever the status says.
       type: amount < 0 ? "credit_note" : "invoice",
+      chip: cancels ? (amount < 0 ? "Credit note" : "Cancellation") : null,
+      group: cancels ?? invoice.ref ?? null,
       issued: longDate(invoice.issued),
       due: longDate(invoice.due),
       amount,
@@ -256,14 +264,6 @@ export function clientStatement(event: StatementEvent, client: StatementClient):
     receivedTotal: client.collected ?? 0,
     payee: event.billingEntity ?? "Naboo Group",
     paymentReference: event.po ? `${event.ref} · PO ${event.po}` : event.ref,
-    omissions:
-      cancelled.length > 0
-        ? [
-            `${cancelled.length} cancelled invoice${cancelled.length === 1 ? "" : "s"} ${
-              cancelled.length === 1 ? "is" : "are"
-            } not listed.`,
-          ]
-        : [],
   };
 
   return {
