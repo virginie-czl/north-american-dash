@@ -548,7 +548,7 @@ function statementEvent(row: NaRow): StatementEvent {
     ref: row.readable_id ?? "—",
     client: row.company_name ?? "client",
     eventType: row.event_name || (row.event_type ?? "").replaceAll("_", " ").toLowerCase() || null,
-    dates: from ? (from === to || !to ? from : `${from} → ${to}`) : null,
+    dates: from ? (from === to || !to ? from : `${from} – ${to}`) : null,
     currency: row.currency_client,
   };
 }
@@ -1962,10 +1962,7 @@ function NaPage() {
               className="text-[12.5px]"
               onClick={() => {
                 const entry = naSupplierStatement(sel, p);
-                downloadBlob(
-                  new Blob([entry.text], { type: "text/csv;charset=utf-8;" }),
-                  entry.name,
-                );
+                downloadBlob(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
               }}
             >
               Supplier statement
@@ -2184,7 +2181,7 @@ function NaPage() {
           invoices={bookingScreen.invoiceRows}
           onClientStatement={() => {
             const entry = naClientStatement({ row: sel }, selInvoices);
-            downloadBlob(new Blob([entry.text], { type: "text/csv;charset=utf-8;" }), entry.name);
+            downloadBlob(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
           }}
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this booking`}
           history={bookingScreen.history}

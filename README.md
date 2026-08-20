@@ -452,25 +452,37 @@ hold their details, which is worth seeing either way.
 ### Account statements
 
 An amount is only credible if it carries its reasoning. Both trackers can hand
-someone that reasoning as a file: **one statement per supplier per event, and
-one per client per event**.
+someone that reasoning as a document: **one statement per supplier per event,
+and one per client per event**.
 
 A supplier statement names the event, the PO it sits under, what is payable,
 what we already paid (with each disbursement, its date, method and reference)
 and what is still due — plus, on Marketplace NA, the commission or overpayment
 still to recover. A client statement names what was invoiced, what came in,
-what is outstanding, and lists every invoice with its issue, send and due
-dates. Amounts are written raw to two decimals so a spreadsheet reads them as
-numbers.
+what is outstanding, and lists every invoice with its issue, send and due dates.
+
+**They are PDFs.** A statement leaves the company: a supplier reads it, files it
+and quotes it back, and a client's accounts payable attaches it to a payment
+run. The ledger exports elsewhere in the tracker are CSV precisely because those
+are for reconciling in a spreadsheet, not for sending.
+
+`src/lib/pdf.ts` writes them, dependency-free like the zip next to it, with two
+constraints that keep it small: only the 14 standard PDF fonts (so no glyph
+widths to carry), and **figures set in Courier**, whose glyphs are all 0.6 em
+wide — which is what makes a column of right-aligned amounts land on the margin
+to the point. Streams are uncompressed, so the copy can be read straight out of
+the file, by a person and by the tests. `pdf.test.mjs` checks the file structure,
+that every xref offset lands on its object, that nothing overflows the margins,
+that amounts of different lengths share a right edge, and that a long statement
+pages and numbers itself (15 checks); `account-statements.test.mjs` checks what
+each statement actually says (23).
 
 They can be taken one at a time from the event — next to each partner and above
 the invoice table — or as a zip of the whole filtered set, from *Account
 statements* on the overview. The zip is written by `src/lib/zip.ts`: store-only,
-no dependency, deterministic bytes, UTF-8 names, a BOM per file so Excel opens
-accented names correctly. Colliding names are numbered rather than dropped —
-two suppliers called *Le Balcon* on one booking would otherwise silently become
-one file. Statement text lives in `src/lib/account-statements.ts` and is pure:
-shapes in, text out. 22 tests cover both.
+no dependency, deterministic bytes, UTF-8 names. Colliding names are numbered
+rather than dropped — two suppliers called *Le Balcon* on one booking would
+otherwise silently become one file.
 
 ### Search on the overview
 
@@ -542,12 +554,12 @@ back button; ← Previous / Next → walk the list you came from.
 Three places, all the same generator:
 
 - **On the event or booking** — "Account statement · this event" in the header
-  bar takes every statement for that file as one zip; the rail lists it too, and
-  each partner and the client have their own single-file link.
+  bar takes every statement for that file as one zip of PDFs; the rail lists it
+  too, and each partner and the client have their own single-PDF link.
 - **On the overview** — the *Account statements* block takes the whole filtered
   set: all supplier statements, all client statements.
-- **On a list** — "Download this list" exports the rows as they read on screen
-  (`src/lib/list-export.ts`).
+- **On a list** — "Download this list" exports the rows as they read on screen,
+  as CSV, because that one is for a spreadsheet (`src/lib/list-export.ts`).
 
 The word is "account statement" throughout the UI, matching what the file itself
 says — the design handoff called them "account summaries", and one vocabulary

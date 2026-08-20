@@ -573,7 +573,7 @@ function statementEvent(row: SlaRow): StatementEvent {
     ref: row.readable_id ?? row.client_request_id ?? "—",
     client: row.company_name ?? "L'Oréal Canada",
     eventType: (row.event_type ?? "").replaceAll("_", " ").toLowerCase() || null,
-    dates: from === "—" ? null : from === to ? from : `${from} → ${to}`,
+    dates: from === "—" ? null : from === to ? from : `${from} – ${to}`,
     po: row.purchase_order_number ? String(row.purchase_order_number) : null,
     poDate: row.purchase_order_date ? fmtDate(row.purchase_order_date) : null,
     currency: row.currency,
@@ -1690,7 +1690,7 @@ function SlaPage() {
             due,
             paid,
           });
-          download(new Blob([entry.text], { type: "text/csv;charset=utf-8;" }), entry.name);
+          download(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
         };
         return {
           key,
@@ -2046,7 +2046,7 @@ function SlaPage() {
           invoices={eventScreen.invoiceRows}
           onClientStatement={() => {
             const entry = clientStatementFor({ row: sel, invoices: selInvoices });
-            download(new Blob([entry.text], { type: "text/csv;charset=utf-8;" }), entry.name);
+            download(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
           }}
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this event`}
           history={eventScreen.history}

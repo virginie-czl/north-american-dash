@@ -1,15 +1,32 @@
 /**
  * A minimal ZIP writer — enough to hand someone a folder of statements.
  *
- * Store-only: no compression. The statements are small CSVs and the point of the
- * zip is that 96 files arrive as one download, not that they arrive smaller. That
- * keeps this to a CRC and two header records, with no dependency to add and
- * nothing to keep in step with a library's API.
+ * Store-only: no compression. The statements are small PDFs — already about as
+ * small as they get — and the point of the zip is that 96 files arrive as one
+ * download, not that they arrive smaller. That keeps this to a CRC and two
+ * header records, with no dependency to add and nothing to keep in step with a
+ * library's API.
  *
- * Pure: takes text, returns bytes. The caller wraps it in a Blob.
+ * Pure: takes named files, returns bytes. The caller wraps it in a Blob.
  */
 
-export type ZipEntry = { name: string; text: string };
+/**
+ * `bytes` is explicitly backed by an ArrayBuffer (not a SharedArrayBuffer) so an
+ * entry can go straight into a Blob without a copy.
+ */
+export type ZipEntry = { name: string; bytes: Uint8Array<ArrayBuffer> };
+
+/**
+ * A text file for the archive. The BOM is what makes Excel read an accented
+ * name and a comma-decimal figure as UTF-8 rather than mojibake — statements are
+ * PDFs, but the archive should not care what it is handed.
+ */
+export function textEntry(name: string, text: string): ZipEntry {
+  const encoded = new TextEncoder().encode(`\uFEFF${text}`);
+  const bytes = new Uint8Array(new ArrayBuffer(encoded.length));
+  bytes.set(encoded);
+  return { name, bytes };
+}
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -79,8 +96,7 @@ export function zipStored(entries: ZipEntry[]): Uint8Array<ArrayBuffer> {
 
   for (const file of files) {
     const name = encoder.encode(file.name);
-    // A BOM so Excel opens accented names and figures as UTF-8.
-    const body = encoder.encode(`\uFEFF${file.text}`);
+    const body = file.bytes;
     const crc = crc32(body);
     offsets.push(local.length);
 
