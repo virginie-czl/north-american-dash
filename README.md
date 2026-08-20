@@ -451,95 +451,47 @@ hold their details, which is worth seeing either way.
 
 ### Account statements
 
-An amount is only credible if it carries its reasoning. Both trackers can hand
-someone that reasoning as a document: **one statement per supplier per event,
-and one per client per event**.
+An amount is only credible if it carries its reasoning. Both trackers hand
+someone that reasoning as a document — **one statement per supplier per event,
+and one per client per event** — laid out to Naboo's brand: navy and the yellow
+accent, Bricolage Grotesque for headings and every figure, Roboto for the body,
+12px cards, hairline rules, no shadows.
 
-A supplier statement names the event, the PO it sits under, what is payable,
-what we already paid (with each disbursement, its date, method and reference)
-and what is still due — plus, on Marketplace NA, the commission or overpayment
-still to recover. A client statement names what was invoiced, what came in,
-what is outstanding, and lists every invoice with its issue, send and due dates.
+A client statement states what was invoiced, what came in and what is
+outstanding, then lists the invoices and credit notes and the payments received.
+A supplier statement is the same document in the other voice: what is payable,
+our commission shown as the deduction it is, every disbursement with its date,
+method and reference, and a balance that reads "to pay" or "to recover"
+depending on which way the money goes.
 
-**They are PDFs.** A statement leaves the company: a supplier reads it, files it
-and quotes it back, and a client's accounts payable attaches it to a payment
-run. The ledger exports elsewhere in the tracker are CSV precisely because those
-are for reconciling in a spreadsheet, not for sending.
+**Cancelling pairs are left off.** A credit note that voids an invoice in full
+tells the reader nothing: the two lines net to zero and only make the statement
+longer to tie to the balance. Both are dropped from the listing and the document
+says how many pairs it netted off — removing them cannot move a total, which is
+what makes it safe. A *partial* credit note is never netted away.
 
-`src/lib/pdf.ts` writes them, dependency-free like the zip next to it, with two
-constraints that keep it small: only the 14 standard PDF fonts (so no glyph
-widths to carry), and **figures set in Courier**, whose glyphs are all 0.6 em
-wide — which is what makes a column of right-aligned amounts land on the margin
-to the point. Streams are uncompressed, so the copy can be read straight out of
-the file, by a person and by the tests. `pdf.test.mjs` checks the file structure,
-that every xref offset lands on its object, that nothing overflows the margins,
-that amounts of different lengths share a right edge, and that a long statement
-pages and numbers itself (15 checks); `account-statements.test.mjs` checks what
-each statement actually says (23).
+**It is an HTML print template** (`src/lib/statement-of-account.ts`), not a
+hand-built PDF, because the design needs what a print engine gives you: the
+brand faces, coloured surfaces, a running header and footer that repeat on every
+page and `<thead>` rows that repeat with a table. Opening a statement from the
+tracker goes straight to the print dialog, where "Save as PDF" produces the
+file. Letter, flowing, `@page { margin: 0 }` and nothing else; `break-inside:
+avoid` on the meta strip, the tiles and the closing bar; `orphans: 3; widows: 3`.
+Verified by printing a 46-line statement headless: 3 pages, header, footer and
+both table heads on each.
 
-They can be taken one at a time from the event — next to each partner and above
-the invoice table — or as a zip of the whole filtered set, from *Account
+`src/lib/account-statements.ts` is the adapter from a tracker row to that
+document, and it is where the honesty about our own data lives — client receipts
+are held as a total rather than line by line, so the payments table says exactly
+that instead of implying nothing was paid. 40 tests on the template, 29 on the
+adapter.
+
+Statements are taken one at a time from the event — next to each partner and
+above the invoice table — or as a zip of the whole filtered set from *Account
 statements* on the overview. The zip is written by `src/lib/zip.ts`: store-only,
 no dependency, deterministic bytes, UTF-8 names. Colliding names are numbered
 rather than dropped — two suppliers called *Le Balcon* on one booking would
 otherwise silently become one file.
-
-### Search on the overview
-
-The overview screens are not a summary of the database, they describe the
-events they are showing. Their search field is the same `search` state the list
-views use, so typing narrows the headline figure, the four composition figures,
-every list count and the statement zips together. ⌘K (or Ctrl-K) focuses it from
-anywhere on the screen.
-
-### The redesign: overview → list → event
-
-Both trackers follow the same three screens, and nothing else.
-
-**The overview** is where you land: one headline figure, the four slices behind
-it, then the work as one list per action type. An event with three outstanding
-actions appears in three lists, once per task, instead of collapsing into a
-single pill that has to stand for all of them. The lime button on the first row
-opens the review dialog for the whole list; every other row opens its list.
-L'Oréal CA also carries the six finance figures (client outstanding, collected,
-owed to partners, invoices issued and sent, to invoice, waiting for a PO) — each
-one clickable, opening exactly the events it counts.
-
-**The list screen** is one action, spelled out per row: the sentence ("Ask
-Espace Canal for bank details and a GST number"), the evidence in mono (ref, PO,
-type, age, partner count), what is already known ("Never contacted", "asked 16
-days ago by Shayma, no reply"), and the two figures that decide priority.
-Selection and the send buttons only appear on a list that actually sends an
-email — reusing `RequestInfoDialog` on L'Oréal and `NaCommissionRequestDialog`
-on Marketplace NA, so nothing goes out without the existing confirmation.
-
-**The event screen** answers "what is true, and what can I do about it": the
-figures, the moves each with their own button, the partners as sentences rather
-than pills, the invoices, and a rail carrying the history, the notes, and the
-links to emails, PDFs and statements.
-
-The detail below the moves is split in two — **partner side** and **client
-side** — because stacked they read as one long column, and the two answer
-different questions: what we owe out, and what is owed to us. The moves stay
-above the split, since a move belongs to whichever side it names and the list is
-short. A count in the alert tone on the tab you are *not* on says that side
-needs looking at, so splitting the screen cannot hide a problem.
-
-Those rail links replaced a tab bar, and they have to work as well as tabs did:
-each one says whether its panel is open, opening one scrolls to it, and the
-panel is a titled section with a Close. The partner-invoice PDFs keep their own
-rule — signed links that expire in 15 minutes, so nothing is fetched until you
-ask — which is why that link says "load the PDFs" rather than promising a count
-it cannot know.
-
-Colour is spent only where something has breached, and the Naboo lime only on
-the single primary action per screen. Tokens live in `src/styles.css`
-(`--color-paper-*`, `--font-paper*`); the shared pieces are
-`src/components/paper.tsx` (primitives), `paper-screens.tsx` (the two screens),
-`paper-notes.tsx` and `command-palette.tsx`. The screens hold no data logic —
-every sentence, figure and verdict is built by the page that owns the data, so
-the two trackers cannot drift apart. `paper-screens.test.tsx` renders both and
-checks the load-bearing states (11 checks).
 
 ### Finding one booking: ⌘K
 

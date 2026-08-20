@@ -556,6 +556,27 @@ function partnerLabel(p: PartnerLine): string {
 }
 
 /** Hands the browser a file without leaving anything behind. */
+/**
+ * Open a statement and go straight to the print dialog, where "Save as PDF"
+ * produces the file. The `#print` hash is what tells the document to do that —
+ * the same file opened later out of a zip just renders.
+ */
+function openStatement(entry: { name: string; bytes: Uint8Array<ArrayBuffer> }) {
+  const url = URL.createObjectURL(new Blob([entry.bytes], { type: "text/html;charset=utf-8" }));
+  const opened = window.open(`${url}#print`, "_blank");
+  if (!opened) {
+    // Pop-up blocked: fall back to handing over the file itself.
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = entry.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+  // The tab has the bytes; the URL can go once it has loaded.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -568,16 +589,16 @@ function download(blob: Blob, filename: string) {
 }
 
 function statementEvent(row: SlaRow): StatementEvent {
-  const from = fmtDate(row.start_date);
-  const to = fmtDate(row.end_date);
   return {
     ref: row.readable_id ?? row.client_request_id ?? "—",
     client: row.company_name ?? "L'Oréal Canada",
     eventType: (row.event_type ?? "").replaceAll("_", " ").toLowerCase() || null,
-    dates: from === "—" ? null : from === to ? from : `${from} – ${to}`,
+    from: row.start_date,
+    to: row.end_date,
     po: row.purchase_order_number ? String(row.purchase_order_number) : null,
     poDate: row.purchase_order_date ? fmtDate(row.purchase_order_date) : null,
     currency: row.currency,
+    billingEntity: row.billing_entity,
   };
 }
 
@@ -608,9 +629,9 @@ function clientStatementFor({ row, invoices }: { row: SlaRow; invoices: InvoiceL
     invoices: invoices.map((i) => ({
       ref: i.invoice_ref,
       status: i.status,
-      issued: fmtDate(i.emission_date),
-      sent: i.first_sent_at ? fmtDate(i.first_sent_at) : "",
-      due: fmtDate(i.due_date),
+      issued: i.emission_date,
+      sent: i.first_sent_at,
+      due: i.due_date,
       amount: i.amount_ttc,
     })),
   });
@@ -1712,7 +1733,7 @@ function SlaPage() {
             due,
             paid,
           });
-          download(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
+          openStatement(entry);
         };
         return {
           key,
@@ -2081,7 +2102,7 @@ function SlaPage() {
           invoices={eventScreen.invoiceRows}
           onClientStatement={() => {
             const entry = clientStatementFor({ row: sel, invoices: selInvoices });
-            download(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
+            openStatement(entry);
           }}
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this event`}
           clientAlert={paymentStatus(sel, selInvoices).variant === "overdue"}

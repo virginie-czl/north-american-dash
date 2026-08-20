@@ -24,10 +24,7 @@ function escape(value: string): string {
   return value;
 }
 
-export function listCsv(
-  rows: ExportableRow[],
-  columns: [string, string, string],
-): string {
+export function listCsv(rows: ExportableRow[], columns: [string, string, string]): string {
   const lines = [
     ["Action", "Reference", "Detail", "State", ...columns].map(escape).join(","),
     ...rows.map((r) =>
@@ -37,10 +34,13 @@ export function listCsv(
     ),
   ];
   // A BOM, so Excel opens the accented names as UTF-8.
-  return `﻿${lines.join("\n")}`;
+  return `\uFEFF${lines.join("\n")}`;
 }
 
 /** `pay-partners-2026-08-18.csv` */
 export function listFileName(name: string, today: string): string {
-  return `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${today}.csv`;
+  return `${name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")}-${today}.csv`;
 }

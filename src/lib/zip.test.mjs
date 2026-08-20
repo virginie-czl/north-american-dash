@@ -34,7 +34,10 @@ t(
 const entries = [
   textEntry("Espace Canal — CA-2411-0847.csv", "Poste;Montant\nDû;8 200,00\n"),
   // A binary entry: the bytes must come out exactly as they went in.
-  { name: "Traiteur Agnus Dei — CA-2411-0847.pdf", bytes: new Uint8Array([37, 80, 68, 70, 45, 0, 255, 10]) },
+  {
+    name: "Traiteur Agnus Dei — CA-2411-0847.pdf",
+    bytes: new Uint8Array([37, 80, 68, 70, 45, 0, 255, 10]),
+  },
 ];
 const bytes = zipStored(entries);
 t("starts with the local file header signature", bytes[0] === 0x50 && bytes[1] === 0x4b);

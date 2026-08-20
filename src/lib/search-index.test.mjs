@@ -58,8 +58,14 @@ t("a partial PO finds its booking", matching(rows, "45012773")[0]?.ref === "CA-2
 t("a company finds every booking of theirs", matching(rows, "l’oréal").length === 2);
 t("case does not matter", matching(rows, "LIGHTSPEED")[0]?.ref === "NA-2411-4362");
 t("an accent is matched as typed", matching(rows, "nelligan")[0]?.ref === "NA-2411-4362");
-t("a partner name finds the booking they are on", matching(rows, "agnus")[0]?.ref === "CA-2411-0798");
-t("an invoice reference finds its booking", matching(rows, "fa-2026-0489")[0]?.ref === "CA-2411-0798");
+t(
+  "a partner name finds the booking they are on",
+  matching(rows, "agnus")[0]?.ref === "CA-2411-0798",
+);
+t(
+  "an invoice reference finds its booking",
+  matching(rows, "fa-2026-0489")[0]?.ref === "CA-2411-0798",
+);
 t("an empty query matches nothing", matching(rows, "   ").length === 0);
 
 // The two regressions, stated as rules.

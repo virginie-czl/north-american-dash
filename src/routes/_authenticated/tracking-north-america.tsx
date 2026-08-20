@@ -543,14 +543,14 @@ function naStateLine(
 }
 
 function statementEvent(row: NaRow): StatementEvent {
-  const from = (row.start_date ?? "").slice(0, 10);
-  const to = (row.end_date ?? "").slice(0, 10);
   return {
     ref: row.readable_id ?? "—",
     client: row.company_name ?? "client",
     eventType: row.event_name || (row.event_type ?? "").replaceAll("_", " ").toLowerCase() || null,
-    dates: from ? (from === to || !to ? from : `${from} – ${to}`) : null,
+    from: row.start_date,
+    to: row.end_date,
     currency: row.currency_client,
+    billingEntity: row.billing_entity,
   };
 }
 
@@ -597,12 +597,33 @@ function naClientStatement({ row }: { row: NaRow }, invoices: ReturnType<typeof 
     invoices: invoices.map((i) => ({
       ref: i.invoice_ref,
       status: i.status,
-      issued: (i.emission_date ?? "").slice(0, 10),
-      sent: i.is_sent ? "yes" : "",
-      due: (i.due_date ?? "").slice(0, 10),
+      issued: i.emission_date,
+      sent: i.is_sent ? i.emission_date : null,
+      due: i.due_date,
       amount: i.amount_ttc,
     })),
   });
+}
+
+/**
+ * Open a statement and go straight to the print dialog, where "Save as PDF"
+ * produces the file. The `#print` hash is what tells the document to do that —
+ * the same file opened later out of a zip just renders.
+ */
+function openStatement(entry: { name: string; bytes: Uint8Array<ArrayBuffer> }) {
+  const url = URL.createObjectURL(new Blob([entry.bytes], { type: "text/html;charset=utf-8" }));
+  const opened = window.open(`${url}#print`, "_blank");
+  if (!opened) {
+    // Pop-up blocked: fall back to handing over the file itself.
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = entry.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+  // The tab has the bytes; the URL can go once it has loaded.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -2005,7 +2026,7 @@ function NaPage() {
               className="text-[12.5px]"
               onClick={() => {
                 const entry = naSupplierStatement(sel, p);
-                downloadBlob(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
+                openStatement(entry);
               }}
             >
               Supplier statement
@@ -2229,7 +2250,7 @@ function NaPage() {
           invoices={bookingScreen.invoiceRows}
           onClientStatement={() => {
             const entry = naClientStatement({ row: sel }, selInvoices);
-            downloadBlob(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
+            openStatement(entry);
           }}
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this booking`}
           clientAlert={Math.abs(sel.balance_ccy ?? 0) > 0.01}
