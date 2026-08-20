@@ -62,6 +62,9 @@
   --color-paper-rule: #e4dfd6;
   --color-paper-hairline: #efebe4;
   --color-paper-row: #f6f1ee;
+  /* The highlighted row in the ⌘K palette — a shade cooler than a breach row,
+     so "where the cursor is" never reads as "something is wrong here". */
+  --color-paper-selected: #f6f4ef;
   --color-paper-alert: #a32a1c;
 
   /* Naboo brand */

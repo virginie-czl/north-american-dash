@@ -26,6 +26,13 @@ export type TrackerActions = {
   onRefresh?: () => void;
   isFetching?: boolean;
   exports?: ExportAction[];
+  /**
+   * The ⌘K field in the top bar. The panel itself belongs to the page — only the
+   * page knows what its rows mean — so the bar just says how to open it.
+   */
+  search?: { placeholder: string; onOpen: () => void };
+  /** "Synced 12 min ago" / "Figures cached 4 min ago", with its own link. */
+  status?: { text: string; action?: { label: string; onClick: () => void } };
 };
 
 type ChromeContextValue = {
@@ -67,6 +74,23 @@ export function useRegisterTrackerActions(actions: TrackerActions, deps: unknown
         disabled: action.disabled,
         onClick: () => ref.current.exports?.[i]?.onClick(),
       })),
+      search: ref.current.search
+        ? {
+            placeholder: ref.current.search.placeholder,
+            onOpen: () => ref.current.search?.onOpen(),
+          }
+        : undefined,
+      status: ref.current.status
+        ? {
+            text: ref.current.status.text,
+            action: ref.current.status.action
+              ? {
+                  label: ref.current.status.action.label,
+                  onClick: () => ref.current.status?.action?.onClick(),
+                }
+              : undefined,
+          }
+        : undefined,
     });
     return () => setActions({});
     // eslint-disable-next-line react-hooks/exhaustive-deps

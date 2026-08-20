@@ -479,3 +479,76 @@ events they are showing. Their search field is the same `search` state the list
 views use, so typing narrows the headline figure, the four composition figures,
 every list count and the statement zips together. ⌘K (or Ctrl-K) focuses it from
 anywhere on the screen.
+
+### The redesign: overview → list → event
+
+Both trackers follow the same three screens, and nothing else.
+
+**The overview** is where you land: one headline figure, the four slices behind
+it, then the work as one list per action type. An event with three outstanding
+actions appears in three lists, once per task, instead of collapsing into a
+single pill that has to stand for all of them. The lime button on the first row
+opens the review dialog for the whole list; every other row opens its list.
+L'Oréal CA also carries the six finance figures (client outstanding, collected,
+owed to partners, invoices issued and sent, to invoice, waiting for a PO) — each
+one clickable, opening exactly the events it counts.
+
+**The list screen** is one action, spelled out per row: the sentence ("Ask
+Espace Canal for bank details and a GST number"), the evidence in mono (ref, PO,
+type, age, partner count), what is already known ("Never contacted", "asked 16
+days ago by Shayma, no reply"), and the two figures that decide priority.
+Selection and the send buttons only appear on a list that actually sends an
+email — reusing `RequestInfoDialog` on L'Oréal and `NaCommissionRequestDialog`
+on Marketplace NA, so nothing goes out without the existing confirmation.
+
+**The event screen** answers "what is true, and what can I do about it": the
+figures, the moves each with their own button, the partners as sentences rather
+than pills, the invoices, and a rail carrying the history, the notes, and the
+links to emails, PDFs and statements.
+
+Colour is spent only where something has breached, and the Naboo lime only on
+the single primary action per screen. Tokens live in `src/styles.css`
+(`--color-paper-*`, `--font-paper*`); the shared pieces are
+`src/components/paper.tsx` (primitives), `paper-screens.tsx` (the two screens),
+`paper-notes.tsx` and `command-palette.tsx`. The screens hold no data logic —
+every sentence, figure and verdict is built by the page that owns the data, so
+the two trackers cannot drift apart. `paper-screens.test.tsx` renders both and
+checks the load-bearing states (11 checks).
+
+### Finding one booking: ⌘K
+
+⌘K (or Ctrl-K) from any screen opens one search box over everything the tracker
+knows: event or booking reference, PO number, company, event name, partner name
+or email, invoice reference, sales and EM — partial codes included, because
+`0847` is how anyone actually remembers a reference. Results are grouped
+(event/booking, the partners on it, its invoices); ↑ ↓ move, ↵ opens, esc
+closes. Picking a result opens that event's own screen. The panel says what it
+searches over, so it does not have to be guessed at.
+
+The list filters are a separate thing and stayed where they were — behind the
+*Filters* control on the list screen, including a text field that narrows the
+rows in place.
+
+### Linkable screens
+
+Which list is open, which figure was clicked and which event is showing are all
+in the URL — `/?list=ask`, `/?list=pay&ref=CA-2411-0847`, `/?figure=invoices_to_do`,
+`/tracking-north-america?list=commission&ref=NA-2411-4362`. A screen can be
+bookmarked, pasted into Slack, and walked back through with the browser's own
+back button; ← Previous / Next → walk the list you came from.
+
+### Where to get an account statement
+
+Three places, all the same generator:
+
+- **On the event or booking** — "Account statement · this event" in the header
+  bar takes every statement for that file as one zip; the rail lists it too, and
+  each partner and the client have their own single-file link.
+- **On the overview** — the *Account statements* block takes the whole filtered
+  set: all supplier statements, all client statements.
+- **On a list** — "Download this list" exports the rows as they read on screen
+  (`src/lib/list-export.ts`).
+
+The word is "account statement" throughout the UI, matching what the file itself
+says — the design handoff called them "account summaries", and one vocabulary
+beats two.

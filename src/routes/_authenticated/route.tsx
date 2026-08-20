@@ -1,17 +1,5 @@
 import { createFileRoute, Link, Outlet, redirect, useRouter } from "@tanstack/react-router";
-import {
-  Download,
-  Droplets,
-  DollarSign,
-  Globe,
-  LogOut,
-  Mail,
-  MailX,
-  ReceiptText,
-  RefreshCw,
-  Users,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { LogOut, Mail, MailX, Search, Users } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -98,65 +86,78 @@ function TopBar() {
   const exports = actions.exports ?? [];
 
   return (
-    <header className="flex h-14 flex-none items-center gap-4 border-b border-border bg-white px-5">
-      <span className="flex items-center gap-1.5 text-navy">
-        <NabooMark className="h-[17px] w-auto" />
-        <span className="font-display text-[19px] font-extrabold leading-none tracking-tight">
-          naboo
-        </span>
-        <span className="ml-0.5 rounded-full bg-slate-100 px-[7px] py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-600">
-          tracker
-        </span>
+    <header className="flex h-16 flex-none items-center gap-6 border-b border-paper-rule bg-paper-canvas px-8 font-paper text-paper-ink">
+      <span className="flex flex-none items-center gap-2">
+        <NabooMark className="h-4 w-auto" />
+        <span className="font-paper-display text-[17px] leading-none">naboo tracker</span>
       </span>
 
-      <nav aria-label="Trackers" className="ml-3 flex items-center gap-1">
-        {allowed.includes("loreal") && (
-          <TrackerTab to="/" icon={<ReceiptText className="h-4 w-4" aria-hidden="true" />}>
-            L'Oréal CA
-          </TrackerTab>
-        )}
-        {allowed.includes("veolia") && (
-          <TrackerTab to="/veolia" icon={<Droplets className="h-4 w-4" aria-hidden="true" />}>
-            Veolia US
-          </TrackerTab>
-        )}
+      {/* Nav is text, not chrome: the active tracker is the one with a rule
+          under it, everything else recedes to label colour. */}
+      <nav aria-label="Trackers" className="flex flex-none items-center gap-[26px] text-[13.5px]">
+        {allowed.includes("loreal") && <TrackerTab to="/">L'Oréal CA</TrackerTab>}
+        {allowed.includes("veolia") && <TrackerTab to="/veolia">Veolia US</TrackerTab>}
         {allowed.includes("na") && (
-          <TrackerTab
-            to="/tracking-north-america"
-            icon={<Globe className="h-4 w-4" aria-hidden="true" />}
-          >
-            Marketplace NA
-          </TrackerTab>
+          <TrackerTab to="/tracking-north-america">Marketplace NA</TrackerTab>
         )}
         {allowed.includes("na-commissions") && (
-          <TrackerTab
-            to="/na-commissions"
-            icon={<DollarSign className="h-4 w-4" aria-hidden="true" />}
-          >
-            Commissions NA
-          </TrackerTab>
+          <TrackerTab to="/na-commissions">Commissions NA</TrackerTab>
         )}
       </nav>
 
-      <div className="ml-auto flex items-center gap-2">
+      {actions.search && (
+        <button
+          type="button"
+          onClick={actions.search.onOpen}
+          className="mx-auto flex h-[34px] w-[320px] flex-none items-center gap-2 whitespace-nowrap border border-paper-rule-strong bg-white px-2.5 text-left"
+        >
+          <Search
+            className="h-3.5 w-3.5 flex-none text-paper-label"
+            strokeWidth={1.6}
+            aria-hidden="true"
+          />
+          <span className="min-w-0 flex-1 truncate text-[13px] text-paper-label">
+            {actions.search.placeholder}
+          </span>
+          <span className="flex-none font-paper-mono text-[11px] text-paper-faint">⌘K</span>
+        </button>
+      )}
+
+      <div className={`flex items-center gap-5 ${actions.search ? "" : "ml-auto"}`}>
+        {actions.status && (
+          <span className="flex items-center gap-4 whitespace-nowrap text-[13px] text-paper-muted">
+            {actions.status.text}
+            {actions.status.action && (
+              <button
+                type="button"
+                onClick={actions.status.action.onClick}
+                disabled={actions.isFetching}
+                className="border-b border-paper-ink pb-0.5 text-paper-ink disabled:border-paper-rule-strong disabled:text-paper-faint"
+              >
+                {actions.status.action.label}
+              </button>
+            )}
+          </span>
+        )}
+
         {exports.length === 1 ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5"
+          <button
+            type="button"
             onClick={exports[0].onClick}
             disabled={exports[0].disabled}
+            className="whitespace-nowrap border-b border-paper-ink pb-0.5 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
           >
-            <Download className="h-3.5 w-3.5" aria-hidden="true" />
             {exports[0].label}
-          </Button>
+          </button>
         ) : exports.length > 1 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8 gap-1.5">
-                <Download className="h-3.5 w-3.5" aria-hidden="true" />
+              <button
+                type="button"
+                className="whitespace-nowrap border-b border-paper-ink pb-0.5 text-[13px]"
+              >
                 Export
-              </Button>
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {exports.map((action) => (
@@ -172,26 +173,22 @@ function TopBar() {
           </DropdownMenu>
         ) : null}
 
-        {actions.onRefresh && (
-          <Button
-            size="sm"
+        {actions.onRefresh && !actions.status?.action && (
+          <button
+            type="button"
             onClick={actions.onRefresh}
             disabled={actions.isFetching}
-            className="h-8 gap-1.5 border-0 bg-naboo font-semibold text-navy shadow-none hover:bg-naboo-hover"
+            className="whitespace-nowrap border-b border-paper-ink pb-0.5 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
           >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${actions.isFetching ? "animate-spin" : ""}`}
-              aria-hidden="true"
-            />
-            Refresh
-          </Button>
+            {actions.isFetching ? "Refreshing…" : "Refresh"}
+          </button>
         )}
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="relative flex h-[30px] w-[30px] items-center justify-center rounded-full"
+              className="relative flex h-7 w-7 flex-none items-center justify-center rounded-full"
               aria-label={
                 (user?.pendingCount ?? 0) > 0
                   ? `${email} — ${user?.pendingCount} demande(s) d'accès en attente`
@@ -202,8 +199,9 @@ function TopBar() {
                 name={user?.name}
                 email={email}
                 picture={user?.picture}
-                className="h-[30px] w-[30px]"
-                textClassName="text-xs"
+                className="h-7 w-7"
+                fallbackClassName="bg-paper-ink text-paper-canvas"
+                textClassName="text-[11px] font-normal"
               />
               {(user?.pendingCount ?? 0) > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-amber-400 px-[3px] text-[9px] font-bold text-navy ring-2 ring-white">
@@ -265,22 +263,13 @@ function TopBar() {
   );
 }
 
-function TrackerTab({
-  to,
-  icon,
-  children,
-}: {
-  to: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function TrackerTab({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <Link
       to={to}
       activeOptions={{ exact: true }}
-      className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] text-slate-700 transition-colors hover:bg-slate-100 data-[status=active]:bg-naboo data-[status=active]:font-semibold data-[status=active]:text-navy"
+      className="whitespace-nowrap pb-0.5 text-paper-label data-[status=active]:border-b data-[status=active]:border-paper-ink data-[status=active]:text-paper-ink"
     >
-      {icon}
       {children}
     </Link>
   );
