@@ -24,7 +24,12 @@ export type PaletteItem = {
   onPick: () => void;
 };
 
-export type PaletteGroup = { label: string; items: PaletteItem[] };
+export type PaletteGroup = {
+  label: string;
+  items: PaletteItem[];
+  /** "23 more — narrow the query" when the group had to stop listing. */
+  overflow?: string | null;
+};
 
 export function CommandPalette({
   open,

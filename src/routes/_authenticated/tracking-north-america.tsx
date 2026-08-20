@@ -25,6 +25,7 @@ import { zipStored } from "@/lib/zip";
 import { CommandPalette, type PaletteGroup } from "@/components/command-palette";
 import { EventNotes } from "@/components/paper-notes";
 import { listCsv, listFileName } from "@/lib/list-export";
+import { haystack, matching, overflowNote } from "@/lib/search-index";
 import {
   EventScreen,
   ListScreen,
@@ -693,9 +694,6 @@ function NaPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [scope, setScope] = useState<"move" | "commission" | "refund" | "client_refund" | "all">(
-    "all",
-  );
   // Where we are, read from the URL.
   const navigate = Route.useNavigate();
   const params = Route.useSearch();
@@ -1228,19 +1226,6 @@ function NaPage() {
     [filtered, moveFor],
   );
 
-  // One predicate per scope, shared by the filter and the chip counts below so a
-  // chip can never claim a number the list does not show.
-  const SCOPE_TEST: Record<typeof scope, (x: (typeof withMove)[number]) => boolean> = useMemo(
-    () => ({
-      move: (x) => needsAMove(x.move.group),
-      commission: (x) => x.move.headlineLabel.includes("commission"),
-      refund: (x) => x.move.headlineLabel.includes("refund to recover"),
-      client_refund: (x) => x.move.headlineLabel.includes("client to refund"),
-      all: () => true,
-    }),
-    [],
-  );
-
   /**
    * Which action lists a booking belongs to, and what it contributes to each.
    *
@@ -1362,32 +1347,17 @@ function NaPage() {
     return { toCashIn, cash, toPay, toRecover, commission, refund, inGrace };
   }, [listed]);
 
-  const scoped = useMemo(() => {
-    let base = withMove;
-    if (activeList) {
-      const inList = new Set(listed.filter((l) => l.keys.has(activeList)).map((l) => l.x.row));
-      base = base.filter((x) => inList.has(x.row));
-    }
-    return base.filter(SCOPE_TEST[scope]);
-  }, [withMove, scope, SCOPE_TEST, activeList, listed]);
-
-  const scopeCounts = useMemo(
-    () => ({
-      move: withMove.filter(SCOPE_TEST.move).length,
-      commission: withMove.filter(SCOPE_TEST.commission).length,
-      refund: withMove.filter(SCOPE_TEST.refund).length,
-      clientRefund: withMove.filter(SCOPE_TEST.client_refund).length,
-      all: withMove.length,
-    }),
-    [withMove, SCOPE_TEST],
-  );
-
+  /**
+   * The open booking, looked up across every booking rather than the filtered
+   * list. A filter narrows a list; it must not decide what can be opened, or a
+   * search result — or a pasted link — lands on nothing.
+   */
   const selected = useMemo(
     () =>
       selectedRef
-        ? (withMove.find(({ row }) => (row.readable_id ?? "") === selectedRef) ?? null)
+        ? (decorated.find(({ row }) => (row.readable_id ?? "") === selectedRef) ?? null)
         : null,
-    [withMove, selectedRef],
+    [decorated, selectedRef],
   );
 
   const sel = selected?.row ?? null;
@@ -1667,31 +1637,59 @@ function NaPage() {
     [naListRows, selection],
   );
 
-  /** ⌘K over bookings, the suppliers on them, and their invoices. */
+  /**
+   * Everything searchable about a booking, precomputed once — including its
+   * invoice references, which are only in the JSON blob and were therefore
+   * unsearchable before.
+   */
+  const searchIndex = useMemo(
+    () =>
+      decorated
+        // L'Oréal and Veolia have their own trackers, and this one excludes them
+        // from every figure — so finding one here would open a booking whose
+        // numbers this page deliberately does not carry.
+        .filter(({ row }) => !/l['’ ]?or[eé]al|veolia/.test((row.company_name ?? "").toLowerCase()))
+        .map(({ row, partners }) => {
+          const invoices = parseNaInvoices(row.invoices_json ?? null);
+          return {
+            row,
+            partners,
+            invoices,
+            ref: row.readable_id ?? "",
+            hay: haystack([
+              row.readable_id,
+              row.company_name,
+              row.event_name,
+              row.sales_referent,
+              row.em_referent,
+              row.billing_entity,
+              row.transaction_kind,
+              ...partners.map((p) => `${p.name ?? ""} ${p.email ?? ""}`),
+              ...invoices.map((i) => i.invoice_ref ?? ""),
+            ]),
+          };
+        }),
+    [decorated],
+  );
+
+  /**
+   * ⌘K over bookings, the suppliers on them, and their invoices.
+   *
+   * It searches **every** booking this tracker covers, not the filtered list: a
+   * filter is a statement about a list, never about what can be found. Ancient
+   * bookings and ones a chip has hidden are still one search away.
+   */
   const naPaletteGroups = useMemo<PaletteGroup[]>(() => {
     const q = paletteQuery.trim().toLowerCase();
     if (!q) return [];
+    const LIMIT = 25;
     const open = (ref: string) => {
       setSelectedRef(ref);
       setPaletteOpen(false);
     };
-    const hits = decorated.filter(({ row: r, partners }) =>
-      [
-        r.readable_id,
-        r.company_name,
-        r.event_name,
-        r.sales_referent,
-        r.em_referent,
-        r.billing_entity,
-        ...partners.map((p) => `${p.name ?? ""} ${p.email ?? ""}`),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(q),
-    );
+    const matches = matching(searchIndex, q);
 
-    const bookings = hits.slice(0, 6).map(({ row: r, partners }) => {
+    const bookings = matches.slice(0, LIMIT).map(({ row: r, partners }) => {
       const entry = listed.find((l) => l.x.row === r);
       const moves = entry ? [...entry.keys].filter((k) => k !== "hold").length : 0;
       const claw = rowClawbackSplit(partners);
@@ -1723,22 +1721,21 @@ function NaPage() {
       };
     });
 
-    const suppliers = hits
-      .slice(0, 3)
-      .flatMap(({ row: r, partners }) =>
-        partners
-          .filter((p) => !p.is_provision)
-          .filter(
-            (p) =>
-              `${p.name ?? ""} ${p.email ?? ""}`.toLowerCase().includes(q) || hits.length === 1,
-          )
-          .map((p) => {
-            const claw = partnerClawback(p);
-            const both = claw.commission > 0.01 && claw.refund > 0.01;
-            return {
-              id: `supplier-${r.readable_id}-${partnerKey(p.name ?? "")}`,
-              title: p.name ?? "—",
-              meta: both
+    const suppliers = matches.flatMap(({ row: r, partners }) =>
+      partners
+        .filter((p) => !p.is_provision)
+        .filter(
+          (p) =>
+            matches.length === 1 || `${p.name ?? ""} ${p.email ?? ""}`.toLowerCase().includes(q),
+        )
+        .map((p) => {
+          const claw = partnerClawback(p);
+          const both = claw.commission > 0.01 && claw.refund > 0.01;
+          return {
+            id: `supplier-${r.readable_id}-${partnerKey(p.name ?? "")}`,
+            title: p.name ?? "—",
+            meta: `${
+              both
                 ? "Commission and refund both open · two separate emails"
                 : claw.commission > 0.01
                   ? "Commission to recover"
@@ -1746,25 +1743,52 @@ function NaPage() {
                     ? "Refund to recover"
                     : p.locked
                       ? "Payable, line locked"
-                      : "Payable, line not locked",
-              metaAlert: claw.commission > 0.01 || claw.refund > 0.01,
-              amount:
-                fmtAmount(
-                  Math.max(claw.commission + claw.refund, 0) > 0.01
-                    ? claw.commission + claw.refund
-                    : (p.outstanding ?? 0),
-                ) ?? undefined,
-              onPick: () => open(r.readable_id ?? ""),
-            };
-          }),
-      )
-      .slice(0, 6);
+                      : "Payable, line not locked"
+            } · ${r.readable_id ?? ""}`,
+            metaAlert: claw.commission > 0.01 || claw.refund > 0.01,
+            amount:
+              fmtAmount(
+                claw.commission + claw.refund > 0.01
+                  ? claw.commission + claw.refund
+                  : (p.outstanding ?? 0),
+              ) ?? undefined,
+            onPick: () => open(r.readable_id ?? ""),
+          };
+        }),
+    );
+
+    const invoices = matches.flatMap(({ row: r, invoices: list }) =>
+      list
+        .filter((i) => matches.length === 1 || (i.invoice_ref ?? "").toLowerCase().includes(q))
+        .map((i) => ({
+          id: `invoice-${r.readable_id}-${i.invoice_ref ?? i.emission_date ?? ""}`,
+          title: i.invoice_ref ?? "—",
+          meta: `${i.is_sent ? "Sent" : "Issued, not sent"} · due ${fmtDate(i.due_date)} · ${
+            r.readable_id ?? ""
+          }`,
+          amount: fmtAmount(i.amount_ttc ?? 0) ?? undefined,
+          onPick: () => open(r.readable_id ?? ""),
+        })),
+    );
 
     return [
-      { label: "Booking", items: bookings },
-      { label: "Suppliers on this booking", items: suppliers },
+      {
+        label: "Booking",
+        items: bookings,
+        overflow: overflowNote(matches.length, LIMIT, "bookings"),
+      },
+      {
+        label: "Suppliers on this booking",
+        items: suppliers.slice(0, LIMIT),
+        overflow: overflowNote(suppliers.length, LIMIT, "suppliers"),
+      },
+      {
+        label: "Invoice",
+        items: invoices.slice(0, LIMIT),
+        overflow: overflowNote(invoices.length, LIMIT, "invoices"),
+      },
     ];
-  }, [paletteQuery, decorated, listed, setSelectedRef]);
+  }, [paletteQuery, searchIndex, listed]);
 
   /**
    * Everything the open booking's screen needs.

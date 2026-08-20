@@ -551,6 +551,23 @@ or email, invoice reference, sales and EM — partial codes included, because
 closes. Picking a result opens that event's own screen. The panel says what it
 searches over, so it does not have to be guessed at.
 
+Two rules make the difference between a search and a filter, and both were
+regressions worth naming (`src/lib/search-index.ts`, 13 tests):
+
+1. **Search reaches every booking**, not the filtered list. A filter is a
+   statement about a list — "the ones that need paying" — and must never decide
+   what can be found. An event hidden by the default *hors turnkey* filter, or a
+   booking older than the 100-day cut-off, is still one search away.
+2. **Anything found can be opened.** The open event is resolved against the same
+   full population the search uses. Resolving it out of the filtered list is what
+   made a result land on nothing and look like a missing booking.
+
+The panel lists 25 matches per group and says how many it left out, rather than
+truncating silently — a list of 25 out of 43 that does not admit it is lying by
+omission. Marketplace NA deliberately excludes L'Oréal and Veolia from its
+search, as it does from every figure on the page; they are searchable on their
+own trackers.
+
 The list filters are a separate thing and stayed where they were — behind the
 *Filters* control on the list screen, including a text field that narrows the
 rows in place.

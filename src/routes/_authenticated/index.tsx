@@ -44,6 +44,7 @@ import type { PartnerFacts } from "@/lib/gmail.functions";
 import { CommandPalette, type PaletteGroup } from "@/components/command-palette";
 import { EventNotes } from "@/components/paper-notes";
 import { listCsv, listFileName } from "@/lib/list-export";
+import { haystack, matching, overflowNote } from "@/lib/search-index";
 import {
   EventScreen,
   ListScreen,
@@ -1269,21 +1270,6 @@ function SlaPage() {
   );
 
   /**
-   * The events the screens work from. `toPay` is the one derived field the
-   * screens need that `filtered` does not carry: only a PO makes a provider
-   * payable, so an event without one has nobody to pay yet however much it
-   * still owes.
-   */
-  const withMove = useMemo(
-    () =>
-      filtered.map((item) => ({
-        ...item,
-        toPay: hasPurchaseOrder(item.row) ? unpaidPartners(item.partners) : [],
-      })),
-    [filtered],
-  );
-
-  /**
    * The rows of the open action list.
    *
    * A list about partners has one row per partner — the unit the overview
@@ -1458,30 +1444,51 @@ function SlaPage() {
    * the partners on them, then invoices. Matching is deliberately loose — a
    * partial code (`0847`) is how anyone actually remembers a reference.
    */
+  /**
+   * Everything searchable about an event, precomputed once. Rebuilding this per
+   * keystroke is what pushes a search into feeling slow.
+   */
+  const searchIndex = useMemo(
+    () =>
+      decorated.map((item) => ({
+        item,
+        ref: item.row.readable_id ?? item.row.client_request_id ?? "",
+        hay: haystack([
+          item.row.readable_id,
+          item.row.client_request_id,
+          item.row.purchase_order_number,
+          item.row.company_name,
+          item.row.event_type,
+          item.row.billing_entity,
+          item.row.country_iso_code,
+          ...item.partners.map((p) => `${p.name ?? ""} ${p.email ?? ""}`),
+          ...item.invoices.map((i) => i.invoice_ref ?? ""),
+        ]),
+      })),
+    [decorated],
+  );
+
+  /**
+   * ⌘K. Three groups, in the order the design shows them: the events that match,
+   * the partners on them, then invoices. Matching is deliberately loose — a
+   * partial code (`0847`) is how anyone actually remembers a reference.
+   *
+   * It searches **every** event, not the filtered list: a filter is a statement
+   * about a list, never about what can be found. The cap exists only so the
+   * panel stays readable, and it says what it left out.
+   */
   const paletteGroups = useMemo<PaletteGroup[]>(() => {
     const q = paletteQuery.trim().toLowerCase();
     if (!q) return [];
+    const LIMIT = 25;
     const open = (ref: string) => {
       setSelectedRef(ref);
       setPaletteOpen(false);
     };
-    const events = decorated.filter(({ row: r, partners, invoices }) => {
-      const hay = [
-        r.readable_id,
-        r.client_request_id,
-        r.purchase_order_number,
-        r.company_name,
-        r.event_type,
-        ...partners.map((p) => `${p.name ?? ""} ${p.email ?? ""}`),
-        ...invoices.map((i) => i.invoice_ref ?? ""),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
-    });
 
-    const eventItems = events.slice(0, 6).map(({ row: r, partners, invoices }) => {
+    const matches = matching(searchIndex, q).map(({ item }) => item);
+
+    const eventItems = matches.slice(0, LIMIT).map(({ row: r, partners, invoices }) => {
       const ref = r.readable_id ?? r.client_request_id ?? "";
       const member = listed.find(({ item }) => item.row === r);
       const moves = member ? member.lists.keys.size : 0;
@@ -1504,64 +1511,79 @@ function SlaPage() {
       };
     });
 
-    const partnerItems = events
-      .slice(0, 3)
-      .flatMap(({ row: r, partners }) => {
-        const ref = r.readable_id ?? r.client_request_id ?? "";
-        return partners
-          .filter((p) => !p.is_cancelled)
-          .filter(
-            (p) =>
-              `${p.name ?? ""} ${p.email ?? ""}`.toLowerCase().includes(q) || events.length === 1,
-          )
-          .map((p) => {
-            const action = actionFor(ref, p, hasPurchaseOrder(r));
-            const facts = factsMap?.get(`${ref}::${partnerKey(p.name ?? p.email ?? "")}`);
-            const state = partnerState(facts, action, null);
-            return {
-              id: `partner-${ref}-${partnerKey(p.name ?? p.email ?? "")}`,
-              title: partnerLabel(p),
-              meta: state.text,
-              metaAlert: state.alert,
-              amount: fmtPaper(Math.max(p.amount_due ?? 0, 0)),
-              onPick: () => open(ref),
-            };
-          });
-      })
-      .slice(0, 6);
-
-    const invoiceItems = events
-      .slice(0, 3)
-      .flatMap(({ row: r, invoices }) => {
-        const ref = r.readable_id ?? r.client_request_id ?? "";
-        return invoices
-          .filter((i) => (i.invoice_ref ?? "").toLowerCase().includes(q) || events.length === 1)
-          .map((i) => ({
-            id: `invoice-${ref}-${i.invoice_ref ?? Math.random()}`,
-            title: i.invoice_ref ?? "—",
-            meta: `${isSent(i) ? `Sent ${fmtDate(i.first_sent_at)}` : "Issued, not sent"} · due ${fmtDate(
-              i.due_date,
-            )} · ${ref}`,
-            amount: fmtPaper(i.amount_ttc ?? 0),
+    // A partner named in the query is worth listing on every event they are on;
+    // a single matching event lists all of its partners instead.
+    const partnerHits = matches.flatMap(({ row: r, partners }) => {
+      const ref = r.readable_id ?? r.client_request_id ?? "";
+      const hasPo = hasPurchaseOrder(r);
+      return partners
+        .filter((p) => !p.is_cancelled)
+        .filter(
+          (p) =>
+            matches.length === 1 || `${p.name ?? ""} ${p.email ?? ""}`.toLowerCase().includes(q),
+        )
+        .map((p) => {
+          const action = actionFor(ref, p, hasPo);
+          const facts = factsMap?.get(`${ref}::${partnerKey(p.name ?? p.email ?? "")}`);
+          const state = partnerState(facts, action, null);
+          return {
+            id: `partner-${ref}-${partnerKey(p.name ?? p.email ?? "")}`,
+            title: partnerLabel(p),
+            meta: `${state.text} · ${ref}`,
+            metaAlert: state.alert,
+            amount: fmtPaper(Math.max(p.amount_due ?? 0, 0)),
             onPick: () => open(ref),
-          }));
-      })
-      .slice(0, 6);
+          };
+        });
+    });
+
+    const invoiceHits = matches.flatMap(({ row: r, invoices }) => {
+      const ref = r.readable_id ?? r.client_request_id ?? "";
+      return invoices
+        .filter((i) => matches.length === 1 || (i.invoice_ref ?? "").toLowerCase().includes(q))
+        .map((i) => ({
+          id: `invoice-${ref}-${i.invoice_ref ?? i.emission_date ?? ""}`,
+          title: i.invoice_ref ?? "—",
+          meta: `${isSent(i) ? `Sent ${fmtDate(i.first_sent_at)}` : "Issued, not sent"} · due ${fmtDate(
+            i.due_date,
+          )} · ${ref}`,
+          amount: fmtPaper(i.amount_ttc ?? 0),
+          onPick: () => open(ref),
+        }));
+    });
 
     return [
-      { label: "Event", items: eventItems },
-      { label: "Partners on this event", items: partnerItems },
-      { label: "Invoice", items: invoiceItems },
+      {
+        label: "Event",
+        items: eventItems,
+        overflow: overflowNote(matches.length, LIMIT, "events"),
+      },
+      {
+        label: "Partners on this event",
+        items: partnerHits.slice(0, LIMIT),
+        overflow: overflowNote(partnerHits.length, LIMIT, "partners"),
+      },
+      {
+        label: "Invoice",
+        items: invoiceHits.slice(0, LIMIT),
+        overflow: overflowNote(invoiceHits.length, LIMIT, "invoices"),
+      },
     ];
-  }, [paletteQuery, decorated, listed, actionFor, factsMap]);
+  }, [paletteQuery, searchIndex, listed, actionFor, factsMap]);
 
+  /**
+   * The open event, looked up across every event rather than the filtered list.
+   * A filter narrows a list; it must not decide what can be opened, or a search
+   * result — or a pasted link — lands on nothing.
+   */
   const selected = useMemo(() => {
     if (!selectedRef) return null;
-    return (
-      withMove.find((x) => (x.row.readable_id ?? x.row.client_request_id ?? "") === selectedRef) ??
-      null
+    const hit = decorated.find(
+      (x) => (x.row.readable_id ?? x.row.client_request_id ?? "") === selectedRef,
     );
-  }, [withMove, selectedRef]);
+    if (!hit) return null;
+    return { ...hit, toPay: hasPurchaseOrder(hit.row) ? unpaidPartners(hit.partners) : [] };
+  }, [decorated, selectedRef]);
 
   const sel = selected?.row ?? null;
   const selPartners = selected?.partners ?? [];
