@@ -2048,6 +2048,7 @@ function SlaPage() {
             const entry = clientStatementFor({ row: sel, invoices: selInvoices });
             download(new Blob([entry.text], { type: "text/csv;charset=utf-8;" }), entry.name);
           }}
+          clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this event`}
           history={eventScreen.history}
           notes={<EventNotes eventRef={selRef} />}
           rail={[

@@ -2186,6 +2186,7 @@ function NaPage() {
             const entry = naClientStatement({ row: sel }, selInvoices);
             downloadBlob(new Blob([entry.text], { type: "text/csv;charset=utf-8;" }), entry.name);
           }}
+          clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this booking`}
           history={bookingScreen.history}
           notes={<EventNotes eventRef={selRef} />}
           railTop={

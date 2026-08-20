@@ -101,6 +101,7 @@ const event = renderToString(
     subtotal={{ label: "Subtotal · $CA", values: ["69 960,00", "72 960,00", "6 420,00"] }}
     invoices={[{ id: "i", ref: "FA-2026-0412", prose: "Emitted 20 May", amount: "31 400,00" }]}
     onClientStatement={() => {}}
+    clientStatementLabel="Client statement · L’Oréal Canada, this event"
     history={[{ id: "h", title: "PO received", meta: "14 July" }]}
     rail={[{ id: "r", label: "Emails", onClick: () => {} }]}
     notes={<div>notes</div>}
@@ -149,6 +150,10 @@ const checks: Array<[string, boolean]> = [
   ["event renders the display title", event.includes("master class")],
   ["event renders the subtotal", event.includes("Subtotal")],
   ["event renders the caption", event.includes("Amounts in")],
+  [
+    "the client statement link names the client",
+    event.includes("Client statement · L’Oréal Canada, this event"),
+  ],
   ["palette renders the match count", text(palette).includes("1 match")],
   ["palette says what it searches over", palette.includes("⌘K from any screen")],
   ["palette highlights the cursor row", palette.includes("bg-paper-selected")],

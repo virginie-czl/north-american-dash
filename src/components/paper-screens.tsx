@@ -291,6 +291,7 @@ export function EventScreen({
   subtotal,
   invoices,
   onClientStatement,
+  clientStatementLabel,
   history,
   rail,
   railTop,
@@ -320,6 +321,8 @@ export function EventScreen({
   subtotal?: { label: string; values: string[] };
   invoices: Array<{ id: string; ref: string; prose: string; amount: string }>;
   onClientStatement: () => void;
+  /** Names the client, so the file's contents are obvious before downloading. */
+  clientStatementLabel: string;
   history: Array<{ id: string; title: string; meta: string }>;
   /** Links to everything that lives elsewhere: emails, PDFs, comments. */
   rail: Array<{ id: string; label: string; onClick: () => void; download?: boolean }>;
@@ -492,7 +495,7 @@ export function EventScreen({
           <div className="mt-11 flex items-center gap-4">
             <SectionLabel>Client invoicing</SectionLabel>
             <DownloadLink onClick={onClientStatement} className="ml-auto text-[12.5px]">
-              Client statement · this event
+              {clientStatementLabel}
             </DownloadLink>
           </div>
           <div className="mt-4 border-t border-paper-rule">
