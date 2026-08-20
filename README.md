@@ -489,10 +489,20 @@ be paid, a client who paid beyond what we invoiced reads as a *credit balance*
 rather than arrears, and a supplier is *payable to* rather than *billed to*. 38
 tests on the figures and the voice.
 
+**Questions go to the event manager, by name.** The footnote reads "Questions on
+any line: Emily Osei — emily.osei@naboo.app", and the footer carries the same
+address, because the EM ran the event and can answer for each line — a finance
+inbox would only forward it. The chain is EM, then whoever sold the booking, then
+`finance@naboo.app`: on L'Oréal Canada only 19 of 185 bookings carry an EM and
+the other 166 carry a seller, so pointing straight at finance would have defeated
+the change (BigQuery audits `d319a251`, `fd0981c3`). Both queries resolve the
+referent's name against `raw_naboo_data.admins`, which is the only place that
+mapping exists.
+
 `src/lib/account-statements.ts` is the adapter from a tracker row to that
 document, and it is where the honesty about our own data lives — client receipts
 are held as a total rather than line by line, so the payments table says exactly
-that instead of implying nothing was paid. 36 tests.
+that instead of implying nothing was paid. 41 tests.
 
 Statements are taken one at a time from the event — next to each partner and
 above the invoice table — or as a zip of the whole filtered set from *Account
@@ -593,5 +603,5 @@ footnote says how many documents went. A *partially* cancelled invoice keeps its
 whole group on the page: the reduction is something the reader needs to see, and
 the remaining figures then tie to the back office's own "Remaining" line. For
 documents the data does not link, the older one-for-one amount match still
-applies. 38 tests on the figures and the voice, 36 on the adapter and 10 on the
+applies. 42 tests on the figures and the voice, 41 on the adapter and 10 on the
 renderer, including C-U332 end to end.

@@ -52,6 +52,11 @@ export interface SlaRow {
   booking_status: string | null;
   country_iso_code: string | null;
   billing_entity: string | null;
+  /** Who ran the event, and who sold it — the people a statement points to. */
+  em_referent: string | null;
+  em_referent_email: string | null;
+  sales_referent: string | null;
+  sales_referent_email: string | null;
   days_since_booking: number | null;
   invoicing_sla_status: string | null;
   payout_sla_status: string | null;
@@ -76,7 +81,18 @@ export interface SlaRow {
 }
 
 const QUERY = `
-WITH loreal_free_invoicing AS (
+WITH admin_directory AS (
+  -- Who to write to about a booking. A statement names the person who ran the
+  -- event, not a shared inbox, so the referent's name has to resolve to a real
+  -- address: the admin table is the only place that mapping exists.
+  SELECT
+    LOWER(TRIM(CONCAT(IFNULL(first_name, ''), ' ', IFNULL(last_name, '')))) AS full_name,
+    ANY_VALUE(email) AS email
+  FROM \`naboo-app-365515.raw_naboo_data.admins\`
+  WHERE email IS NOT NULL AND email != ''
+  GROUP BY full_name
+),
+loreal_free_invoicing AS (
   SELECT
     cr.request_id            AS client_request_id,
     cr.readable_id           AS readable_id,
@@ -411,6 +427,10 @@ SELECT
   -- booking alone showed "No PO" on a booking we had been given one for.
   COALESCE(ev.purchase_order_number, ipo.purchase_order_number) AS purchase_order_number,
   ev.booking_url AS booking_url,
+  ev.em_referent,
+  emd.email AS em_referent_email,
+  ev.sales_referent,
+  sad.email AS sales_referent_email,
   -- When the PO reached us. NOT ev.updated_at: that is the warehouse's own
   -- ingestion stamp, identical on all 27k rows and moving to today on every
   -- refresh, which left both SLAs anchored on "now" and unable to breach.
@@ -491,6 +511,8 @@ LEFT JOIN email_agg ea ON ea.rid = t.readable_id
 LEFT JOIN pay_agg pa ON pa.crid = t.client_request_id
 LEFT JOIN invoice_po ipo ON ipo.client_request_id = t.client_request_id
 LEFT JOIN client_proposal_total cpt ON cpt.rid = t.readable_id
+LEFT JOIN admin_directory emd ON emd.full_name = LOWER(TRIM(ev.em_referent))
+LEFT JOIN admin_directory sad ON sad.full_name = LOWER(TRIM(ev.sales_referent))
 
 
 WHERE t.event.booking_status = 'ACCEPTED'

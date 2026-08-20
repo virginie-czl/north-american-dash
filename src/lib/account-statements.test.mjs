@@ -406,6 +406,39 @@ t(
   !u332.event.includes("C-U332 / Bland AI"),
 );
 
+// ── Who a question goes to ─────────────────────────────────────────────────
+// The EM ran the event and can answer for each line; finance would forward it.
+const em = { name: "Emily Osei", email: "emily.osei@naboo.app" };
+const seller = { name: "Mathieu Gonzalez", email: "mathieu.gonzalez@naboo.app" };
+
+t(
+  "a client statement points at the event manager",
+  statementVoice(clientStatementData({ ...event, em, sales: seller }, {})).footnote.includes(
+    "Questions on any line: Emily Osei — emily.osei@naboo.app.",
+  ),
+);
+t(
+  "so does a supplier statement — same event, same person",
+  statementVoice(
+    supplierStatementData({ ...event, em, sales: seller }, { name: "Lois Freestone" }),
+  ).footnote.includes("Emily Osei — emily.osei@naboo.app"),
+);
+t(
+  "with no EM on the booking, the seller takes the question",
+  statementVoice(clientStatementData({ ...event, sales: seller }, {})).contact ===
+    "mathieu.gonzalez@naboo.app",
+);
+t(
+  "an EM with a name but no address does not shadow the seller",
+  statementVoice(
+    clientStatementData({ ...event, em: { name: "Emily Osei", email: null }, sales: seller }, {}),
+  ).contact === "mathieu.gonzalez@naboo.app",
+);
+t(
+  "a booking with nobody on it falls back to finance",
+  statementVoice(clientStatementData(event, {})).contact === "finance@naboo.app",
+);
+
 // ── Names and dates ────────────────────────────────────────────────────────
 t(
   "a slash cannot become a directory",

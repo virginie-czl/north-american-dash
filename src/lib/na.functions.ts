@@ -65,6 +65,8 @@ export interface NaRow {
   client_request_id: string | null;
   company_name: string | null;
   sales_referent: string | null;
+  /** The seller's address — the fallback contact on a booking with no EM. */
+  sales_referent_email: string | null;
   em_referent: string | null;
   /** The EM's address, resolved from their name — copied on recovery emails. */
   em_referent_email: string | null;
@@ -503,6 +505,7 @@ base AS (
     e.clientRequestId AS client_request_id,
     e.company_name,
     e.sales_referent,
+    sa.email AS sales_referent_email,
     e.em_referent,
     em.email AS em_referent_email,
     e.days_before_start,
@@ -551,11 +554,15 @@ base AS (
   LEFT JOIN partners_rm p ON p.rid = e.client_request_readable_id
   LEFT JOIN partners_fi_fallback pfb ON pfb.rid = e.client_request_readable_id
   LEFT JOIN em_directory em ON em.full_name = LOWER(TRIM(e.em_referent))
+  -- Not every booking has an EM; the person who sold it is the next best
+  -- address for a question about it, and one of the two is always known.
+  LEFT JOIN em_directory sa ON sa.full_name = LOWER(TRIM(e.sales_referent))
   WHERE e.bk_market = 'North America'
     AND e.booking_status = 'ACCEPTED'
 )
 SELECT
-  readable_id, client_request_id, company_name, sales_referent, em_referent, em_referent_email, days_before_start,
+  readable_id, client_request_id, company_name, sales_referent, sales_referent_email,
+  em_referent, em_referent_email, days_before_start,
   currency_client, event_name, start_date, end_date, event_type, transaction_kind, participants, billing_entity, booking_url,
   client_service_fees_ttc,
   gmv_client_ccy, gmv_client_eur, invoiced_ccy, paid_ccy, invoices_json,

@@ -551,6 +551,9 @@ function statementEvent(row: NaRow): StatementEvent {
     to: row.end_date,
     currency: row.currency_client,
     billingEntity: row.billing_entity,
+    // A question about the document goes to the person who ran the booking.
+    em: { name: row.em_referent, email: row.em_referent_email },
+    sales: { name: row.sales_referent, email: row.sales_referent_email },
   };
 }
 

@@ -63,7 +63,14 @@ export type StatementOfAccount = {
   omissions?: string[];
   /** Reverses the voice: what we owe a supplier rather than what a client owes. */
   side?: "client" | "supplier";
+  /**
+   * Who to write to about this statement. The event manager, by name, rather
+   * than a shared finance inbox: they ran the event, they know what each line
+   * is, and a question that lands with them gets answered instead of forwarded.
+   * Falls back to finance@naboo.app when no one is on the booking.
+   */
   contactEmail?: string;
+  contactName?: string | null;
 };
 
 /** `210,606.84`. A true minus sign, never a hyphen, on a negative figure. */
@@ -225,7 +232,11 @@ export function statementVoice(data: StatementOfAccount): StatementVoice {
   const totals = statementTotals(data);
   const { lines, netted, omitted } = netOffCancellingLines(data.lines);
   const supplier = data.side === "supplier";
-  const contact = data.contactEmail ?? "finance@naboo.app";
+  const contact = data.contactEmail?.trim() || "finance@naboo.app";
+  // Named, when we know the name: "write to Emily" beats "write to an address".
+  const contactLine = data.contactName?.trim()
+    ? `${data.contactName.trim()} — ${contact}`
+    : contact;
 
   const settled = Math.abs(totals.balance) < 0.005;
   // Money going the other way: a supplier we overpaid, or a client who paid us
@@ -277,7 +288,7 @@ export function statementVoice(data: StatementOfAccount): StatementVoice {
         )} — ${omitted === 1 ? "is" : "are"} netted off and not listed; the totals are unchanged.`
       : "",
     ...(data.omissions ?? []),
-    `Questions on any line: ${contact}.`,
+    `Questions on any line: ${contactLine}.`,
   ]
     .filter(Boolean)
     .join(" ");

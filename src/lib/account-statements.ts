@@ -27,7 +27,17 @@ export type StatementEvent = {
   poDate?: string | null;
   currency?: string | null;
   billingEntity?: string | null;
+  /**
+   * Who to write to about this booking, in order of preference: the event
+   * manager, then whoever sold it. A statement points at the person who ran the
+   * event rather than a finance inbox — they know what each line is, so the
+   * question gets answered rather than forwarded.
+   */
+  em?: StatementContact | null;
+  sales?: StatementContact | null;
 };
+
+export type StatementContact = { name?: string | null; email?: string | null };
 
 export type StatementPayment = {
   amount?: number | null;
@@ -166,6 +176,18 @@ function eventLabel(event: StatementEvent, side: "client" | "supplier"): string 
   return parts.filter(Boolean).join(" · ") || event.ref;
 }
 
+/**
+ * The address a question about this statement should go to. The EM first, the
+ * seller when there is no EM — on L'Oréal Canada only 19 of 185 bookings have an
+ * EM, and putting finance@naboo.app on the other 166 would defeat the point.
+ * Nothing found: the voice falls back to finance@naboo.app on its own.
+ */
+function contactFor(event: StatementEvent): { contactEmail?: string; contactName?: string | null } {
+  const candidate = [event.em, event.sales].find((c) => c?.email?.trim());
+  if (!candidate?.email) return {};
+  return { contactEmail: candidate.email.trim(), contactName: candidate.name?.trim() || null };
+}
+
 /** The statement's data, before it is rendered as anything. */
 export function supplierStatementData(
   event: StatementEvent,
@@ -211,6 +233,7 @@ export function supplierStatementData(
     receivedTotal: supplier.paid ?? 0,
     payee: supplier.name,
     paymentReference: event.ref,
+    ...contactFor(event),
   };
 
   return data;
@@ -268,6 +291,7 @@ export function clientStatementData(
     receivedTotal: client.collected ?? 0,
     payee: event.billingEntity ?? "Naboo Group",
     paymentReference: event.po ? `${event.ref} · PO ${event.po}` : event.ref,
+    ...contactFor(event),
   };
 
   return data;

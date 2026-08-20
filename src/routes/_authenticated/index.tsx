@@ -567,6 +567,9 @@ function statementEvent(row: SlaRow): StatementEvent {
     poDate: row.purchase_order_date ? fmtDate(row.purchase_order_date) : null,
     currency: row.currency,
     billingEntity: row.billing_entity,
+    // A question about the document goes to the person who ran the event.
+    em: { name: row.em_referent, email: row.em_referent_email },
+    sales: { name: row.sales_referent, email: row.sales_referent_email },
   };
 }
 

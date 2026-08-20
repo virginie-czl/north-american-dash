@@ -176,7 +176,38 @@ t(
     v.closing.sub === "Payable to Naboo Group · due 4 August 2026 · reference C-P222" &&
     v.closing.currency === "USD",
 );
-t("the footnote gives an address for a question", v.footnote.endsWith("finance@naboo.app."));
+t(
+  "the footnote gives an address for a question",
+  v.footnote.endsWith("Questions on any line: finance@naboo.app."),
+  v.footnote,
+);
+// A statement points at whoever ran the event, not at a finance inbox.
+const withEm = statementVoice({
+  ...seed,
+  contactName: "Emily Osei",
+  contactEmail: "emily.osei@naboo.app",
+});
+t(
+  "the event manager is named, and their address is the one to write to",
+  withEm.footnote.endsWith("Questions on any line: Emily Osei — emily.osei@naboo.app."),
+  withEm.footnote,
+);
+t(
+  "the footer carries that address too, so there is only one to pick",
+  withEm.footerLeft === "Naboo Group · emily.osei@naboo.app",
+  withEm.footerLeft,
+);
+t(
+  "an address with no name still reads as a sentence",
+  statementVoice({ ...seed, contactEmail: "em@naboo.app" }).footnote.endsWith(
+    "Questions on any line: em@naboo.app.",
+  ),
+);
+t(
+  "a blank contact falls back to finance rather than printing nothing",
+  statementVoice({ ...seed, contactEmail: "  ", contactName: "  " }).contact ===
+    "finance@naboo.app",
+);
 t("nothing is said about netting when nothing was netted", !v.footnote.includes("netted off"));
 t(
   "a netted statement says what it left out",
