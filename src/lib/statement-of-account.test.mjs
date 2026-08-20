@@ -229,6 +229,27 @@ t(
 t("a settled statement drops the due pill", !paidUp.includes("Due 4 August 2026"));
 t("a settled statement does not invite a payment", !paidUp.includes("Payable to Naboo Group"));
 
+// A client who paid more than we billed is not "in arrears".
+const overpaid = statementHtml({
+  ...seed,
+  dueOn: "4 August 2026",
+  payments: [...seed.payments, { paidOn: "1 Aug 2026", amount: 40000 }],
+});
+t(
+  "an overpaid client reads as a credit balance",
+  overpaid.includes("Credit balance") && overpaid.includes("Paid beyond what we invoiced"),
+);
+t(
+  "the figure drops its sign, because the label carries the direction",
+  overpaid.includes(">16,667.61<") && !overpaid.includes("−16,667.61"),
+);
+t("a credit balance is not given a due date", !overpaid.includes("Due 4 August 2026"));
+t("a credit balance says who refunds it", overpaid.includes("To be refunded by Naboo Group"));
+t(
+  "the footer names the entity that issued the statement",
+  overpaid.includes("<span>Naboo Group ·"),
+);
+
 // ── Safety and the supplier voice ──────────────────────────────────────────
 t(
   "a name cannot inject markup",

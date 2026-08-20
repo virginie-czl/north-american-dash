@@ -56,6 +56,11 @@ export type StatementOfAccount = {
   /** Who the money is paid to, and the reference to quote — the closing bar. */
   payee?: string | null;
   paymentReference?: string | null;
+  /**
+   * Anything deliberately left off the listing, said plainly in the footnote. A
+   * document that quietly omits a line is worse than a longer one.
+   */
+  omissions?: string[];
   /** Reverses the voice: what we owe a supplier rather than what a client owes. */
   side?: "client" | "supplier";
   contactEmail?: string;
@@ -227,33 +232,40 @@ export function statementHtml(data: StatementOfAccount): string {
     .join("\n");
 
   const settled = Math.abs(totals.balance) < 0.005;
+  // Money going the other way: a supplier we overpaid, or a client who paid us
+  // more than we billed. Either way it is not a "balance due".
   const recovering = supplier && totals.balance < -0.005;
+  const credit = !supplier && totals.balance < -0.005;
   // A settled statement must not ask to be paid: no due date, no payee, no
   // "balance due" over a zero.
   const balanceLabel = settled
     ? "Nothing outstanding"
-    : supplier
-      ? recovering
-        ? "Balance to recover"
-        : "Balance to pay"
-      : "Balance due";
+    : credit
+      ? "Credit balance"
+      : supplier
+        ? recovering
+          ? "Balance to recover"
+          : "Balance to pay"
+        : "Balance due";
   // The direction is in the label, so the figure is written without its sign —
   // "Balance to recover −15,600.00" reads as a double negative.
-  const balanceFigure = money(recovering ? Math.abs(totals.balance) : totals.balance);
+  const balanceFigure = money(recovering || credit ? Math.abs(totals.balance) : totals.balance);
 
   const closingSub = settled
     ? `Settled in full · reference ${data.paymentReference ?? data.bookingRef}`
-    : [
-        data.payee
-          ? recovering
-            ? `To be refunded by ${data.payee}`
-            : `Payable to ${data.payee}`
-          : null,
-        data.dueOn ? `due ${data.dueOn}` : null,
-        data.paymentReference ? `reference ${data.paymentReference}` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ");
+    : credit
+      ? `To be refunded by ${data.billingEntity} · reference ${data.paymentReference ?? data.bookingRef}`
+      : [
+          data.payee
+            ? recovering
+              ? `To be refunded by ${data.payee}`
+              : `Payable to ${data.payee}`
+            : null,
+          data.dueOn ? `due ${data.dueOn}` : null,
+          data.paymentReference ? `reference ${data.paymentReference}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
 
   return `<!doctype html>
 <html lang="en">
@@ -548,9 +560,14 @@ export function statementHtml(data: StatementOfAccount): string {
       ${tile({
         label: balanceLabel,
         figure: balanceFigure,
-        caption: settled ? "Settled in full" : `In ${data.currency}`,
+        caption: settled
+          ? "Settled in full"
+          : credit
+            ? "Paid beyond what we invoiced"
+            : `In ${data.currency}`,
         tone: "balance",
-        pill: !settled && data.dueOn ? `Due ${data.dueOn}` : null,
+        // A due date only means anything when something is actually due.
+        pill: !settled && !credit && !recovering && data.dueOn ? `Due ${data.dueOn}` : null,
       })}
     </section>
 
@@ -630,13 +647,13 @@ export function statementHtml(data: StatementOfAccount): string {
         netted > 0
           ? ` ${netted} invoice and credit-note pair${netted === 1 ? "" : "s"} cancelling each other in full ${netted === 1 ? "is" : "are"} netted off and not listed; the totals are unchanged.`
           : ""
-      }
+      }${(data.omissions ?? []).map((note) => ` ${escapeHtml(note)}`).join("")}
       Questions on any line: <a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a>.
     </p>
   </main>
 
   <div class="running-footer">
-    <span>Naboo Group · <a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a></span>
+    <span>${escapeHtml(data.billingEntity)} · <a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a></span>
     <span>Statement ${escapeHtml(data.bookingRef)} · ${escapeHtml(data.issuedOn)}</span>
   </div>
 

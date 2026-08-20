@@ -197,6 +197,17 @@ invoices AS (
       END AS days_overdue
     ) ORDER BY inv.issueDate) AS invoices
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
+  -- Only invoices actually billed to the client. INCOME direction is not enough:
+  -- our commission notes to the *partner* are income to us too, carry only
+  -- FEE_OWNER lines, and were being listed and counted as the client's own
+  -- invoices — 158 of them on one Capgemini entity alone.
+  JOIN (
+    SELECT li.invoice_id
+    FROM \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+    WHERE li.deleted = false
+    GROUP BY li.invoice_id
+    HAVING SUM(IF(li.line_type IN ('SERVICE', 'FEE_CLIENT'), 1, 0)) > 0
+  ) cl ON cl.invoice_id = inv.invoice_id
   GROUP BY inv.clientRequestId
 ),
 -- What the client agreed to pay, from the confirmed proposal.

@@ -547,3 +547,34 @@ Three places, all the same generator:
 The word is "account statement" throughout the UI, matching what the file itself
 says — the design handoff called them "account summaries", and one vocabulary
 beats two.
+
+### What belongs on a client's statement
+
+Three rules, each of them a bug found on a real statement (C-U332, Bland AI —
+BigQuery audits `283a93df`, `1310e8eb`, `17d0a3a0`):
+
+1. **Commission notes are not the client's invoices.** `invoiceDirection =
+   'INCOME'` is not enough to identify an invoice billed to the client: our
+   commission notes to the *partner* are income to us too. They carry only
+   `FEE_OWNER` lines and no `SERVICE` or `FEE_CLIENT` line, and both trackers
+   were listing them among the client's own invoices — five of them, 7 100,70
+   USD, on a document addressed to Bland AI, and 158 on one Capgemini entity.
+   Both queries now require a client-facing line.
+2. **A cancelled invoice is not owed.** Listing one with a "cancelled" label
+   still adds its amount to what the client is being told they owe. C-U332 asked
+   for 15 587,69 USD that had been voided, with no credit note anywhere on the
+   booking to reverse it. Cancelled invoices are left off the statement, and the
+   footnote says how many.
+3. **A client who paid more than we billed is not in arrears.** The document now
+   reads "Credit balance", drops the due-date pill, and says who refunds it.
+   A due date is only shown when something is actually due, and only if it is
+   still ahead — "Due 17 June" on a statement issued in August is noise.
+
+**Known and unresolved:** on C-U332 the invoice *header* totals sum to
+266 494,01 USD while the sum of those same invoices' `SERVICE` + `FEE_CLIENT`
+*lines* — which is what the tracker's on-screen "Invoiced" figure uses — comes
+to 322 599,79. Two invoices account for it: USI-US26-00069 has a header of
+40 678,46 against 83 784,24 of client lines, and USI-US26-00075 4 643,26 against
+17 643,26. The statement lists header amounts and totals them, so it is
+internally consistent; whether the header or the lines are right is a question
+for whoever owns invoicing.

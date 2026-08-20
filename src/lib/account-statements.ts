@@ -95,15 +95,19 @@ function today(): string {
 }
 
 /**
- * The date the client's money is next due: the earliest due date still open,
- * falling back to the latest one when everything has been billed.
+ * The next date money is actually due: the earliest due date still ahead of us.
+ * The earliest date overall is usually in the past — "Due 17 June" on a
+ * statement issued in August is noise — so when every date has passed, the
+ * latest one is used, which is the date the balance became overdue.
  */
-function nextDue(invoices: StatementInvoice[]): string | null {
+function nextDue(invoices: StatementInvoice[], asOf = new Date()): string | null {
   const dates = invoices
     .map((i) => i.due)
     .filter((d): d is string => !!d)
     .sort();
-  return longDate(dates[0] ?? null);
+  if (dates.length === 0) return null;
+  const ahead = dates.find((d) => Date.parse(d) >= asOf.getTime());
+  return longDate(ahead ?? dates[dates.length - 1]);
 }
 
 /** `27–29 March 2026`, or `28 March – 2 April 2026` across a month. */
@@ -127,15 +131,36 @@ export function dateRange(
 }
 
 /**
+ * Event names are often keyed as "C-U332 / Bland AI" — the reference and the
+ * company again. Repeating them in the Event cell, next to the Booking cell and
+ * the Billed to cell, reads as a mistake, so the parts that are already on the
+ * document are dropped.
+ */
+export function cleanEventName(
+  name: string | null | undefined,
+  ref: string,
+  client: string,
+): string | null {
+  if (!name) return null;
+  const noise = new Set([ref.toLowerCase(), client.toLowerCase()]);
+  const kept = name
+    .split(/\s*[/·|]\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part !== "" && !noise.has(part.toLowerCase()));
+  return kept.join(" · ") || null;
+}
+
+/**
  * What the Event cell says. A supplier is told whose event it was — they know
  * the venue and the dates, not always the end client, and it is the first thing
  * they ask when reconciling.
  */
 function eventLabel(event: StatementEvent, side: "client" | "supplier"): string {
+  const name = cleanEventName(event.eventType, event.ref, event.client);
   const parts =
     side === "supplier"
-      ? [event.eventType, event.client, dateRange(event.from, event.to)]
-      : [event.eventType, dateRange(event.from, event.to)];
+      ? [name, event.client, dateRange(event.from, event.to)]
+      : [name, dateRange(event.from, event.to)];
   return parts.filter(Boolean).join(" · ") || event.ref;
 }
 
@@ -189,17 +214,21 @@ export function supplierStatement(event: StatementEvent, supplier: StatementSupp
 }
 
 export function clientStatement(event: StatementEvent, client: StatementClient): ZipEntry {
-  const invoices = client.invoices ?? [];
+  const all = client.invoices ?? [];
+
+  // A cancelled invoice never stood. Listing it with a "cancelled" label still
+  // adds its amount to what the client is being told they owe, which is how
+  // C-U332 asked Bland AI for 15 587,69 USD that had been voided — so it is
+  // left off, and the footnote says how many.
+  const cancelled = all.filter((i) => (i.status ?? "").toUpperCase() === "CANCELLED");
+  const invoices = all.filter((i) => !cancelled.includes(i));
 
   const lines: StatementLine[] = invoices.map((invoice) => {
     const amount = invoice.amount ?? 0;
-    const cancelled = (invoice.status ?? "").toUpperCase() === "CANCELLED";
     return {
       ref: invoice.ref ?? "—",
-      // A negative amount is a credit note whatever the status says; a cancelled
-      // invoice is labelled as such rather than passed off as live.
+      // A negative amount is a credit note whatever the status says.
       type: amount < 0 ? "credit_note" : "invoice",
-      chip: cancelled ? "Cancelled" : null,
       issued: longDate(invoice.issued),
       due: longDate(invoice.due),
       amount,
@@ -227,6 +256,14 @@ export function clientStatement(event: StatementEvent, client: StatementClient):
     receivedTotal: client.collected ?? 0,
     payee: event.billingEntity ?? "Naboo Group",
     paymentReference: event.po ? `${event.ref} · PO ${event.po}` : event.ref,
+    omissions:
+      cancelled.length > 0
+        ? [
+            `${cancelled.length} cancelled invoice${cancelled.length === 1 ? "" : "s"} ${
+              cancelled.length === 1 ? "is" : "are"
+            } not listed.`,
+          ]
+        : [],
   };
 
   return {

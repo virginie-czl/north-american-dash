@@ -151,6 +151,14 @@ commissionable AS (
   )
   GROUP BY quote_id
 ),
+-- Invoices billed to the client, for the invoicing panel and the statement of
+-- account.
+--
+-- INCOME direction is not enough on its own: our commission notes to the
+-- *partner* (FEE_OWNER lines, the USCO- series) are income to us too, and were
+-- being listed among the client's own invoices. On C-U332 that put five
+-- commission notes worth 7 100,70 USD on a document addressed to Bland AI.
+-- An invoice belongs to the client only if it carries a client-facing line.
 client_invoices AS (
   SELECT
     inv.clientRequestId AS crid,
@@ -164,6 +172,13 @@ client_invoices AS (
       (COALESCE(ARRAY_LENGTH(JSON_EXTRACT_ARRAY(inv.send_events)), 0) > 0) AS is_sent
     ) ORDER BY inv.issueDate) AS items
   FROM \`naboo-app-365515.raw_naboo_data.invoices\` inv
+  JOIN (
+    SELECT li.invoice_id
+    FROM \`naboo-app-365515.raw_naboo_data.invoice_line_items\` li
+    WHERE li.deleted = false
+    GROUP BY li.invoice_id
+    HAVING SUM(IF(li.line_type IN ('SERVICE', 'FEE_CLIENT'), 1, 0)) > 0
+  ) cl ON cl.invoice_id = inv.invoice_id
   WHERE inv.invoiceDirection = 'INCOME'
   GROUP BY crid
 ),

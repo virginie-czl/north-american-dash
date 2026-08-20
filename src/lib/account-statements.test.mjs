@@ -175,6 +175,46 @@ t("the total is unmoved by netting", netted.includes("5,802.79"));
 const empty = read(clientStatement(event, { invoiced: 0, collected: 0, outstanding: 0 }));
 t("an event with no invoice says so", empty.includes("Nothing issued on this booking yet."));
 
+// ── What a cancelled invoice must not do (C-U332) ──────────────────────────
+const withCancelled = clientStatement(
+  { ...event, ref: "C-U332", client: "Bland AI", eventType: "C-U332 / Bland AI", currency: "USD" },
+  {
+    invoiced: 266494.01,
+    collected: 267617.45,
+    outstanding: 0,
+    invoices: [
+      {
+        ref: "USI-US26-00029",
+        status: "ISSUED",
+        issued: "2026-07-22",
+        due: "2026-07-29",
+        amount: 57314.85,
+      },
+      {
+        ref: "USI-US26-00047",
+        status: "CANCELLED",
+        issued: "2026-07-30",
+        due: "2026-08-06",
+        amount: 15587.69,
+      },
+    ],
+  },
+);
+const cancelledDoc = read(withCancelled);
+t("a cancelled invoice is not listed", !cancelledDoc.includes("USI-US26-00047"));
+t(
+  "a cancelled invoice is not counted as owed",
+  !cancelledDoc.includes("72,902.54") && cancelledDoc.includes("57,314.85"),
+);
+t(
+  "the document says one was left off",
+  cancelledDoc.includes("1 cancelled invoice is not listed."),
+);
+t(
+  "an event name that repeats the reference and the client is cleaned up",
+  !cancelledDoc.includes("C-U332 / Bland AI"),
+);
+
 // ── Names and dates ────────────────────────────────────────────────────────
 t(
   "a slash cannot become a directory",
