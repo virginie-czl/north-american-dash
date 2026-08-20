@@ -518,6 +518,13 @@ figures, the moves each with their own button, the partners as sentences rather
 than pills, the invoices, and a rail carrying the history, the notes, and the
 links to emails, PDFs and statements.
 
+The detail below the moves is split in two — **partner side** and **client
+side** — because stacked they read as one long column, and the two answer
+different questions: what we owe out, and what is owed to us. The moves stay
+above the split, since a move belongs to whichever side it names and the list is
+short. A count in the alert tone on the tab you are *not* on says that side
+needs looking at, so splitting the screen cannot hide a problem.
+
 Those rail links replaced a tab bar, and they have to work as well as tabs did:
 each one says whether its panel is open, opening one scrolls to it, and the
 panel is a titled section with a Close. The partner-invoice PDFs keep their own

@@ -2062,6 +2062,12 @@ function SlaPage() {
             download(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
           }}
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this event`}
+          clientAlert={paymentStatus(sel, selInvoices).variant === "overdue"}
+          clientNote={
+            (sel.client_reste_a_encaisser_ttc ?? 0) > 0.01
+              ? `${fmtCurrency(sel.client_reste_a_encaisser_ttc, sel.currency)} of this is still to come in.`
+              : null
+          }
           history={eventScreen.history}
           notes={<EventNotes eventRef={selRef} />}
           rail={[

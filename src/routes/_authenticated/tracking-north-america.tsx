@@ -2100,8 +2100,8 @@ function NaPage() {
       stats,
       caption: `Available cash is what the client paid, less what we have already disbursed, less our service fee. Amounts in ${ccyLabel(ccy)}.`,
       moves,
-      partnersLabel: `Suppliers · ${payable.length} payable${
-        provisions > 0 ? `, ${provisions} provision excluded` : ""
+      partnersLabel: `${payable.length} payable supplier${payable.length === 1 ? "" : "s"}${
+        provisions > 0 ? `, ${provisions} provision line excluded from what is payable` : ""
       }`,
       partnerRows,
       subtotal,
@@ -2197,7 +2197,9 @@ function NaPage() {
           caption={bookingScreen.caption}
           movesLabel="Next moves on this booking"
           moves={bookingScreen.moves}
-          partnersLabel={bookingScreen.partnersLabel}
+          partnerLabel="Supplier side"
+          partnersNote={bookingScreen.partnersLabel}
+          clientLabel="Client side"
           partners={bookingScreen.partnerRows}
           subtotal={bookingScreen.subtotal}
           invoices={bookingScreen.invoiceRows}
@@ -2206,6 +2208,14 @@ function NaPage() {
             downloadBlob(new Blob([entry.bytes], { type: "application/pdf" }), entry.name);
           }}
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this booking`}
+          clientAlert={Math.abs(sel.balance_ccy ?? 0) > 0.01}
+          clientNote={
+            (sel.balance_ccy ?? 0) > 0.01
+              ? `${fmtAmount(sel.balance_ccy)} ${ccyLabel(sel.currency_client)} is still to come in.`
+              : (sel.balance_ccy ?? 0) < -0.01
+                ? `${fmtAmount(Math.abs(sel.balance_ccy ?? 0))} ${ccyLabel(sel.currency_client)} was paid beyond what we invoiced — it goes back to the client.`
+                : null
+          }
           history={bookingScreen.history}
           notes={<EventNotes eventRef={selRef} />}
           rail={[

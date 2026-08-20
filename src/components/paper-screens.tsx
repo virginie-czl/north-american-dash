@@ -5,7 +5,7 @@
  * the page that owns the data — what lives here is the layout the design
  * specifies, so L'Oréal CA and Marketplace NA cannot drift apart.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   BreadcrumbBar,
   DownloadLink,
@@ -255,6 +255,9 @@ export type EventMove = {
   action?: { label: string; primary?: boolean; onClick: () => void };
 };
 
+/** The two halves of a booking: what we owe out, and what is owed to us. */
+export type Side = "partner" | "client";
+
 export type EventPartnerRow = {
   key: string;
   name: string;
@@ -288,7 +291,8 @@ export function EventScreen({
   meta,
   stats,
   moves,
-  partnersLabel = "Partners",
+  partnerLabel = "Partner side",
+  partnersNote,
   partners,
   subtotal,
   invoices,
@@ -299,10 +303,15 @@ export function EventScreen({
   notes,
   panel,
   panelTitle,
+  panelSide = "partner",
   onClosePanel,
   caption,
   titleNote,
   movesLabel = "Next moves on this event",
+  clientLabel = "Client side",
+  clientNote,
+  clientAlert,
+  defaultSide = "partner",
 }: {
   crumbs: Array<{ label: string; onClick?: () => void }>;
   onPrev?: () => void;
@@ -317,8 +326,10 @@ export function EventScreen({
   meta: string;
   stats: StatCell[];
   moves: EventMove[];
-  /** "Partners", or "Suppliers · 3 payable, 1 provision excluded". */
-  partnersLabel?: string;
+  /** The tab: "Partner side", or "Supplier side" on Marketplace NA. */
+  partnerLabel?: string;
+  /** Under the tabs: "3 payable, 1 provision excluded". */
+  partnersNote?: string | null;
   partners: EventPartnerRow[];
   /** Marketplace NA totals its supplier legs; L'Oréal does not. */
   subtotal?: { label: string; values: string[] };
@@ -340,13 +351,29 @@ export function EventScreen({
   /** The panel a rail link opened, rendered under the invoicing block. */
   panel?: ReactNode;
   panelTitle?: string;
+  /** Which tab the panel belongs under — emails and PDFs are partner-side. */
+  panelSide?: Side;
   onClosePanel?: () => void;
   /** A line under the stat strip, where a figure needs its definition. */
   caption?: string | null;
   /** Next to the title — the lock state on Marketplace NA. */
   titleNote?: ReactNode;
   movesLabel?: string;
+  /** "Client side" — named per tracker so the tab can carry its own word. */
+  clientLabel?: string;
+  /** A line under the invoices, where the client side needs a caveat. */
+  clientNote?: string | null;
+  /** The client side has something wrong on it — an overdue or a credit. */
+  clientAlert?: boolean;
+  /** Which side opens first. */
+  defaultSide?: Side;
 }) {
+  const [side, setSide] = useState<Side>(defaultSide);
+  // A rail link that opens a partner-side panel has to bring its side with it.
+  useEffect(() => {
+    if (panel) setSide(panelSide);
+  }, [panel, panelSide]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-paper-canvas font-paper text-paper-ink">
       <BreadcrumbBar
@@ -434,104 +461,163 @@ export function EventScreen({
             ))}
           </div>
 
-          <SectionLabel className="mt-11">{partnersLabel}</SectionLabel>
-          <div className="mt-4 border-t border-paper-rule">
-            {partners.map((p) => (
-              <div
-                key={p.key}
-                className={`flex items-start gap-6 border-b border-paper-hairline py-[18px] ${
-                  p.muted ? "opacity-55" : ""
+          {/* Two sides of the same booking. Stacked, they read as one long
+              column; split, each side answers its own question. */}
+          <div className="mt-11 flex items-center gap-7 border-b border-paper-rule">
+            {/* A count in the alert tone says the other side needs looking at,
+                so splitting the screen cannot hide a problem. */}
+            {(
+              [
+                {
+                  key: "partner" as const,
+                  label: partnerLabel,
+                  count: partners.length,
+                  alert: partners.some((p) => p.stateAlert || p.figures.some((f) => f.alert)),
+                },
+                {
+                  key: "client" as const,
+                  label: clientLabel,
+                  count: invoices.length,
+                  alert: !!clientAlert,
+                },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setSide(tab.key)}
+                className={`-mb-px inline-flex items-center gap-2 border-b pb-2.5 text-[15px] ${
+                  side === tab.key
+                    ? "border-paper-ink text-paper-ink"
+                    : "border-transparent text-paper-label"
                 }`}
               >
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[15px]">{p.name}</span>
-                  <span className="mt-[3px] block text-[12.5px] text-paper-muted">{p.contact}</span>
-                  <span
-                    className={`mt-1.5 block text-[13px] ${
-                      p.stateAlert ? "text-paper-alert" : "text-paper-body"
+                {tab.label}
+                <span
+                  className={`font-paper-mono text-[11.5px] ${
+                    tab.alert ? "text-paper-alert" : "text-paper-label"
+                  }`}
+                >
+                  {tab.count}
+                  {tab.alert ? " !" : ""}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {side === "partner" ? (
+            <div className="mt-4">
+              {partnersNote && (
+                <p className="mb-3 text-[12.5px] text-paper-muted">{partnersNote}</p>
+              )}
+              <div className="border-t border-paper-rule">
+                {partners.map((p) => (
+                  <div
+                    key={p.key}
+                    className={`flex items-start gap-6 border-b border-paper-hairline py-[18px] ${
+                      p.muted ? "opacity-55" : ""
                     }`}
                   >
-                    {p.state}
-                  </span>
-                  {p.note && (
-                    <span className="mt-1.5 block text-[12.5px] leading-relaxed text-paper-muted">
-                      {p.note}
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[15px]">{p.name}</span>
+                      <span className="mt-[3px] block text-[12.5px] text-paper-muted">
+                        {p.contact}
+                      </span>
+                      <span
+                        className={`mt-1.5 block text-[13px] ${
+                          p.stateAlert ? "text-paper-alert" : "text-paper-body"
+                        }`}
+                      >
+                        {p.state}
+                      </span>
+                      {p.note && (
+                        <span className="mt-1.5 block text-[12.5px] leading-relaxed text-paper-muted">
+                          {p.note}
+                        </span>
+                      )}
+                      {p.links && (
+                        <span className="mt-1.5 flex flex-wrap items-center gap-5">{p.links}</span>
+                      )}
                     </span>
-                  )}
-                  {p.links && (
-                    <span className="mt-1.5 flex flex-wrap items-center gap-5">{p.links}</span>
-                  )}
-                </span>
-                {p.figures.map((f) => (
-                  <span key={f.label} className="w-[130px] flex-none text-right">
-                    <span
-                      className={`block text-[10px] uppercase tracking-[0.14em] ${
-                        f.alert ? "text-paper-alert" : "text-paper-label"
-                      }`}
-                    >
-                      {f.label}
-                    </span>
-                    <span
-                      className={`mt-0.5 block whitespace-nowrap text-[15.5px] tabular-nums ${
-                        f.alert ? "text-paper-alert" : ""
-                      }`}
-                    >
-                      {f.value}
-                    </span>
-                    {f.note && (
-                      <span className="mt-0.5 block text-[11px] text-paper-label">{f.note}</span>
-                    )}
-                  </span>
+                    {p.figures.map((f) => (
+                      <span key={f.label} className="w-[130px] flex-none text-right">
+                        <span
+                          className={`block text-[10px] uppercase tracking-[0.14em] ${
+                            f.alert ? "text-paper-alert" : "text-paper-label"
+                          }`}
+                        >
+                          {f.label}
+                        </span>
+                        <span
+                          className={`mt-0.5 block whitespace-nowrap text-[15.5px] tabular-nums ${
+                            f.alert ? "text-paper-alert" : ""
+                          }`}
+                        >
+                          {f.value}
+                        </span>
+                        {f.note && (
+                          <span className="mt-0.5 block text-[11px] text-paper-label">
+                            {f.note}
+                          </span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
                 ))}
+                {partners.length === 0 && (
+                  <p className="py-5 text-[13.5px] text-paper-muted">
+                    No partner line on this event yet.
+                  </p>
+                )}
+                {subtotal && (
+                  <div className="flex items-baseline gap-6 border-b border-paper-rule-strong py-3.5">
+                    <span className="flex-1 text-[10px] uppercase tracking-[0.14em] text-paper-label">
+                      {subtotal.label}
+                    </span>
+                    {subtotal.values.map((v, i) => (
+                      <span
+                        key={i}
+                        className="w-[130px] flex-none text-right text-[15.5px] tabular-nums"
+                      >
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
-            {partners.length === 0 && (
-              <p className="py-5 text-[13.5px] text-paper-muted">
-                No partner line on this event yet.
-              </p>
-            )}
-            {subtotal && (
-              <div className="flex items-baseline gap-6 border-b border-paper-rule-strong py-3.5">
-                <span className="flex-1 text-[10px] uppercase tracking-[0.14em] text-paper-label">
-                  {subtotal.label}
-                </span>
-                {subtotal.values.map((v, i) => (
-                  <span
-                    key={i}
-                    className="w-[130px] flex-none text-right text-[15.5px] tabular-nums"
+            </div>
+          ) : (
+            <div className="mt-4">
+              <div className="flex items-center gap-4">
+                <SectionLabel>Invoices to the client</SectionLabel>
+                <DownloadLink onClick={onClientStatement} className="ml-auto text-[12.5px]">
+                  {clientStatementLabel}
+                </DownloadLink>
+              </div>
+              <div className="mt-4 border-t border-paper-rule">
+                {invoices.length === 0 && (
+                  <p className="py-5 text-[13.5px] text-paper-muted">
+                    No invoice has been issued on this event yet.
+                  </p>
+                )}
+                {invoices.map((inv) => (
+                  <div
+                    key={inv.id}
+                    className="grid grid-cols-[150px_1fr_150px] items-baseline gap-6 border-b border-paper-hairline py-4"
                   >
-                    {v}
-                  </span>
+                    <span className="font-paper-mono text-[13px]">{inv.ref}</span>
+                    <span className="text-[13px] text-paper-body">{inv.prose}</span>
+                    <span className="text-right text-[15.5px] tabular-nums">{inv.amount}</span>
+                  </div>
                 ))}
               </div>
-            )}
-          </div>
+              {clientNote && (
+                <p className="mt-4 text-[13px] leading-relaxed text-paper-muted">{clientNote}</p>
+              )}
+            </div>
+          )}
 
-          <div className="mt-11 flex items-center gap-4">
-            <SectionLabel>Client invoicing</SectionLabel>
-            <DownloadLink onClick={onClientStatement} className="ml-auto text-[12.5px]">
-              {clientStatementLabel}
-            </DownloadLink>
-          </div>
-          <div className="mt-4 border-t border-paper-rule">
-            {invoices.length === 0 && (
-              <p className="py-5 text-[13.5px] text-paper-muted">
-                No invoice has been issued on this event yet.
-              </p>
-            )}
-            {invoices.map((inv) => (
-              <div
-                key={inv.id}
-                className="grid grid-cols-[150px_1fr_150px] items-baseline gap-6 border-b border-paper-hairline py-4"
-              >
-                <span className="font-paper-mono text-[13px]">{inv.ref}</span>
-                <span className="text-[13px] text-paper-body">{inv.prose}</span>
-                <span className="text-right text-[15.5px] tabular-nums">{inv.amount}</span>
-              </div>
-            ))}
-          </div>
-
-          {panel && (
+          {panel && side === panelSide && (
             <div id="event-panel" className="mt-11 scroll-mt-6">
               <div className="flex items-center gap-4">
                 <SectionLabel>{panelTitle ?? "Elsewhere"}</SectionLabel>

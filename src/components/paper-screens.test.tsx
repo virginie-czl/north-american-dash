@@ -74,6 +74,7 @@ const event = renderToString(
       { label: "Client outstanding", value: "18 900,00" },
       { label: "Owed to partners", value: "12 480,00", alert: true },
     ]}
+    clientAlert
     caption="Amounts in $CA."
     moves={[
       {
@@ -98,6 +99,9 @@ const event = renderToString(
         links: <span>link</span>,
       },
     ]}
+    partnerLabel="Supplier side"
+    partnersNote="3 payable suppliers, 1 provision line excluded from what is payable"
+    clientLabel="Client side"
     subtotal={{ label: "Subtotal · $CA", values: ["69 960,00", "72 960,00", "6 420,00"] }}
     invoices={[{ id: "i", ref: "FA-2026-0412", prose: "Emitted 20 May", amount: "31 400,00" }]}
     onClientStatement={() => {}}
@@ -111,6 +115,26 @@ const event = renderToString(
     panel={<div>the PDFs</div>}
     panelTitle="Partner invoices — PDFs"
     onClosePanel={() => {}}
+  />,
+);
+
+const clientSide = renderToString(
+  <EventScreen
+    crumbs={[{ label: "Overview" }]}
+    eventLabel="master class"
+    reference="CA-2411-0847"
+    po={null}
+    meta="L'Oréal Canada"
+    stats={[{ label: "Client outstanding", value: "18 900,00" }]}
+    moves={[]}
+    partners={[]}
+    invoices={[{ id: "i", ref: "FA-2026-0412", prose: "Emitted 20 May", amount: "31 400,00" }]}
+    onClientStatement={() => {}}
+    clientStatementLabel="Client statement · L’Oréal Canada, this event"
+    history={[]}
+    rail={[]}
+    notes={<div>notes</div>}
+    defaultSide="client"
   />,
 );
 
@@ -157,10 +181,25 @@ const checks: Array<[string, boolean]> = [
   ["event renders the subtotal", event.includes("Subtotal")],
   ["event renders the caption", event.includes("Amounts in")],
   [
-    "the client statement link names the client",
-    event.includes("Client statement · L’Oréal Canada, this event"),
+    "the client side lists the invoices and names its statement",
+    clientSide.includes("FA-2026-0412") &&
+      clientSide.includes("Client statement · L’Oréal Canada, this event"),
   ],
   ["an open rail link says so", event.includes("showing")],
+  [
+    "the booking is split into a partner and a client side",
+    event.includes("Supplier side") && event.includes("Client side"),
+  ],
+  [
+    "the partner side is the one showing, with its own caption",
+    event.includes("Espace Canal") && event.includes("provision line excluded"),
+  ],
+  ["the client side is not rendered until it is picked", !event.includes("FA-2026-0412")],
+  [
+    "a side with something wrong on it is marked, even when hidden",
+    // Espace Canal's row carries an alert figure, so the partner tab is marked.
+    event.includes("text-paper-alert") && event.includes(" !"),
+  ],
   [
     "the panel it opened is titled and closable",
     event.includes('id="event-panel"') &&
