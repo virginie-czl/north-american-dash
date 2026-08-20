@@ -298,6 +298,8 @@ export function EventScreen({
   rail,
   notes,
   panel,
+  panelTitle,
+  onClosePanel,
   caption,
   titleNote,
   movesLabel = "Next moves on this event",
@@ -326,10 +328,19 @@ export function EventScreen({
   clientStatementLabel: string;
   history: Array<{ id: string; title: string; meta: string }>;
   /** Links to everything that lives elsewhere: emails, PDFs, comments. */
-  rail: Array<{ id: string; label: string; onClick: () => void; download?: boolean }>;
+  rail: Array<{
+    id: string;
+    label: string;
+    onClick: () => void;
+    download?: boolean;
+    /** The panel this link opens is showing. */
+    active?: boolean;
+  }>;
   notes: ReactNode;
   /** The panel a rail link opened, rendered under the invoicing block. */
   panel?: ReactNode;
+  panelTitle?: string;
+  onClosePanel?: () => void;
   /** A line under the stat strip, where a figure needs its definition. */
   caption?: string | null;
   /** Next to the title — the lock state on Marketplace NA. */
@@ -520,7 +531,19 @@ export function EventScreen({
             ))}
           </div>
 
-          {panel && <div className="mt-10">{panel}</div>}
+          {panel && (
+            <div id="event-panel" className="mt-11 scroll-mt-6">
+              <div className="flex items-center gap-4">
+                <SectionLabel>{panelTitle ?? "Elsewhere"}</SectionLabel>
+                {onClosePanel && (
+                  <PaperLink className="ml-auto text-[12.5px]" onClick={onClosePanel}>
+                    Close
+                  </PaperLink>
+                )}
+              </div>
+              <div className="mt-4 border-t border-paper-rule pt-5">{panel}</div>
+            </div>
+          )}
         </div>
 
         <aside className="px-8 pb-12 pt-8">
@@ -547,8 +570,14 @@ export function EventScreen({
                   {link.label}
                 </DownloadLink>
               ) : (
-                <PaperLink key={link.id} onClick={link.onClick}>
+                <PaperLink
+                  key={link.id}
+                  onClick={link.onClick}
+                  strong={link.active}
+                  className={link.active ? "underline" : ""}
+                >
                   {link.label}
+                  {link.active ? " — showing" : ""}
                 </PaperLink>
               ),
             )}

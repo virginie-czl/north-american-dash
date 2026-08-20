@@ -518,6 +518,13 @@ figures, the moves each with their own button, the partners as sentences rather
 than pills, the invoices, and a rail carrying the history, the notes, and the
 links to emails, PDFs and statements.
 
+Those rail links replaced a tab bar, and they have to work as well as tabs did:
+each one says whether its panel is open, opening one scrolls to it, and the
+panel is a titled section with a Close. The partner-invoice PDFs keep their own
+rule — signed links that expire in 15 minutes, so nothing is fetched until you
+ask — which is why that link says "load the PDFs" rather than promising a count
+it cannot know.
+
 Colour is spent only where something has breached, and the Naboo lime only on
 the single primary action per screen. Tokens live in `src/styles.css`
 (`--color-paper-*`, `--font-paper*`); the shared pieces are

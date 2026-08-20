@@ -103,8 +103,14 @@ const event = renderToString(
     onClientStatement={() => {}}
     clientStatementLabel="Client statement · L’Oréal Canada, this event"
     history={[{ id: "h", title: "PO received", meta: "14 July" }]}
-    rail={[{ id: "r", label: "Emails", onClick: () => {} }]}
+    rail={[
+      { id: "r", label: "Emails", onClick: () => {}, active: true },
+      { id: "d", label: "Partner invoices — load the PDFs", onClick: () => {} },
+    ]}
     notes={<div>notes</div>}
+    panel={<div>the PDFs</div>}
+    panelTitle="Partner invoices — PDFs"
+    onClosePanel={() => {}}
   />,
 );
 
@@ -153,6 +159,13 @@ const checks: Array<[string, boolean]> = [
   [
     "the client statement link names the client",
     event.includes("Client statement · L’Oréal Canada, this event"),
+  ],
+  ["an open rail link says so", event.includes("showing")],
+  [
+    "the panel it opened is titled and closable",
+    event.includes('id="event-panel"') &&
+      event.includes("Partner invoices") &&
+      event.includes("Close"),
   ],
   ["palette renders the match count", text(palette).includes("1 match")],
   ["palette says what it searches over", palette.includes("⌘K from any screen")],

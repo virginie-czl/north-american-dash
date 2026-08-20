@@ -1396,6 +1396,19 @@ function NaPage() {
   const selTotals = useMemo(() => sumPartners(selPartners), [selPartners]);
   const selInvoices = useMemo(() => parseNaInvoices(sel?.invoices_json ?? null), [sel]);
 
+  /**
+   * A rail link that opens a panel has to take you there — a panel appearing
+   * below the fold with no movement reads as a link that does nothing.
+   */
+  const openPanel = useCallback((which: "emails" | "docs") => {
+    setPanel((prev) => (prev === which ? null : which));
+    requestAnimationFrame(() =>
+      document
+        .getElementById("event-panel")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }, []);
+
   usePaletteShortcut(useCallback(() => setPaletteOpen(true), []));
 
   /**
@@ -2198,13 +2211,21 @@ function NaPage() {
           rail={[
             {
               id: "emails",
-              label: `Emails with suppliers${gmailConnection?.connected ? "" : " — Gmail not connected"}`,
-              onClick: () => setPanel((v) => (v === "emails" ? null : "emails")),
+              label: gmailConnection?.connected
+                ? `Emails with suppliers — ${
+                    selPartners.filter((p) => !p.is_provision && p.email).length
+                  } addresses`
+                : "Emails with suppliers — Gmail not connected",
+              onClick: () => openPanel("emails"),
+              active: panel === "emails",
             },
             {
               id: "docs",
-              label: "Supplier invoices — PDFs",
-              onClick: () => setPanel((v) => (v === "docs" ? null : "docs")),
+              // The links are signed and expire in 15 minutes, so the panel
+              // fetches on demand — the count cannot be known before that.
+              label: "Supplier invoices — load the PDFs",
+              onClick: () => openPanel("docs"),
+              active: panel === "docs",
             },
             {
               id: "all",
@@ -2213,6 +2234,8 @@ function NaPage() {
               onClick: downloadBookingStatements,
             },
           ]}
+          panelTitle={panel === "emails" ? "Emails with suppliers" : "Supplier invoices — PDFs"}
+          onClosePanel={() => setPanel(null)}
           panel={
             panel === "emails" ? (
               gmailConnection?.connected ? (

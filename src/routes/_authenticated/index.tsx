@@ -1912,6 +1912,19 @@ function SlaPage() {
     [navigate],
   );
 
+  /**
+   * A rail link that opens a panel has to take you there — a panel appearing
+   * below the fold with no movement reads as a link that does nothing.
+   */
+  const openPanel = useCallback((which: "emails" | "docs") => {
+    setPanel((prev) => (prev === which ? null : which));
+    requestAnimationFrame(() =>
+      document
+        .getElementById("event-panel")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }, []);
+
   usePaletteShortcut(useCallback(() => setPaletteOpen(true), []));
 
   /**
@@ -2054,15 +2067,21 @@ function SlaPage() {
           rail={[
             {
               id: "emails",
-              label: `Emails with partners${
-                gmailConnection?.connected ? "" : " — Gmail not connected"
-              }`,
-              onClick: () => setPanel((v) => (v === "emails" ? null : "emails")),
+              label: gmailConnection?.connected
+                ? `Emails with partners — ${
+                    selPartners.filter((p) => !p.is_cancelled && p.email).length
+                  } addresses`
+                : "Emails with partners — Gmail not connected",
+              onClick: () => openPanel("emails"),
+              active: panel === "emails",
             },
             {
               id: "docs",
-              label: "Partner invoices — PDFs",
-              onClick: () => setPanel((v) => (v === "docs" ? null : "docs")),
+              // The links are signed and expire in 15 minutes, so the panel
+              // fetches on demand — the count cannot be known before that.
+              label: "Partner invoices — load the PDFs",
+              onClick: () => openPanel("docs"),
+              active: panel === "docs",
             },
             {
               id: "all",
@@ -2071,6 +2090,8 @@ function SlaPage() {
               download: true,
             },
           ]}
+          panelTitle={panel === "emails" ? "Emails with partners" : "Partner invoices — PDFs"}
+          onClosePanel={() => setPanel(null)}
           panel={
             panel === "emails" ? (
               gmailConnection?.connected ? (
