@@ -68,11 +68,11 @@ import {
   usePaletteShortcut,
   useSyncedLabel,
 } from "@/components/paper";
-import { zipStored } from "@/lib/zip";
+import { handOver, useStatementDownload } from "@/lib/use-statement-download";
 import {
   archiveName,
-  clientStatement,
-  supplierStatement,
+  clientStatementData,
+  supplierStatementData,
   type StatementEvent,
 } from "@/lib/account-statements";
 import { useActionIndex, tagsForEvent, TAG_FILTER_GROUPS } from "@/lib/use-partner-actions";
@@ -556,39 +556,6 @@ function partnerLabel(p: PartnerLine): string {
   return name || "Unnamed provider";
 }
 
-/** Hands the browser a file without leaving anything behind. */
-/**
- * Open a statement and go straight to the print dialog, where "Save as PDF"
- * produces the file. The `#print` hash is what tells the document to do that —
- * the same file opened later out of a zip just renders.
- */
-function openStatement(entry: { name: string; bytes: Uint8Array<ArrayBuffer> }) {
-  const url = URL.createObjectURL(new Blob([entry.bytes], { type: "text/html;charset=utf-8" }));
-  const opened = window.open(`${url}#print`, "_blank");
-  if (!opened) {
-    // Pop-up blocked: fall back to handing over the file itself.
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = entry.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-  // The tab has the bytes; the URL can go once it has loaded.
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
-function download(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
 function statementEvent(row: SlaRow): StatementEvent {
   return {
     ref: row.readable_id ?? row.client_request_id ?? "—",
@@ -611,7 +578,7 @@ function supplierStatementsFor({ row, partners }: { row: SlaRow; partners: Partn
     .map((p) => {
       const due = Math.max(p.amount_due ?? 0, 0);
       const paid = Math.abs(p.amount_paid ?? 0);
-      return supplierStatement(event, {
+      return supplierStatementData(event, {
         name: partnerLabel(p),
         email: p.email,
         currency: p.currency ?? row.currency,
@@ -626,7 +593,7 @@ function clientStatementFor({ row }: { row: SlaRow; invoices?: InvoiceLine[] }) 
   // Every document, not the screens' filtered view: a statement that lists only
   // the positive invoices bills the client for amounts that were credited back.
   const invoices = parseAllInvoices(row.invoices_json);
-  return clientStatement(statementEvent(row), {
+  return clientStatementData(statementEvent(row), {
     invoiced: row.client_invoiced_ttc,
     collected: row.client_collected_total,
     outstanding: row.client_reste_a_encaisser_ttc,
@@ -802,6 +769,12 @@ function SlaPage() {
   const { data: gmailConnection, error: gmailError } = useGmailConnection();
   const { data: me } = useCurrentUser();
   const requestDialog = useRequestDialog();
+  // "Download statement" — the PDF itself, in Downloads.
+  const {
+    one: downloadStatement,
+    many: downloadStatementArchive,
+    progressLabel: buildingStatements,
+  } = useStatementDownload();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const rows = useMemo(() => {
     if (!poDates) return rawRows;
@@ -1729,17 +1702,17 @@ function SlaPage() {
         const paid = Math.abs(p.amount_paid ?? 0);
         const state = partnerState(facts, action, due > 0.01 ? breach : null);
         const manual = statusMap?.get(`${selRef}::${key}`)?.status;
-        const onStatement = () => {
-          const entry = supplierStatement(statementEvent(sel), {
-            name: partnerLabel(p),
-            email: p.email,
-            currency: p.currency ?? ccy,
-            payable: p.net_payable_ttc,
-            due,
-            paid,
-          });
-          openStatement(entry);
-        };
+        const onStatement = () =>
+          void downloadStatement(
+            supplierStatementData(statementEvent(sel), {
+              name: partnerLabel(p),
+              email: p.email,
+              currency: p.currency ?? ccy,
+              payable: p.net_payable_ttc,
+              due,
+              paid,
+            }),
+          );
         return {
           key,
           name: partnerLabel(p),
@@ -1860,6 +1833,7 @@ function SlaPage() {
     return { stats, moves, partnerRows, invoiceRows, history: history.slice(0, 6) };
   }, [
     sel,
+    downloadStatement,
     selLists,
     selRef,
     selPartners,
@@ -1991,23 +1965,22 @@ function SlaPage() {
     [listRows, selection],
   );
 
-  /** Every statement for the open event, as one archive. */
+  /** Every statement for the open event, as one archive of PDFs. */
   const downloadEventStatements = useCallback(() => {
     if (!selected) return;
-    const entries = [
-      ...supplierStatementsFor(selected),
-      clientStatementFor({ row: selected.row, invoices: selected.invoices }),
-    ];
-    download(
-      new Blob([zipStored(entries)], { type: "application/zip" }),
+    void downloadStatementArchive(
+      [
+        ...supplierStatementsFor(selected),
+        clientStatementFor({ row: selected.row, invoices: selected.invoices }),
+      ],
       `${(selected.row.readable_id ?? "event").replace(/[^\w-]/g, "-")}-account-statement.zip`,
     );
-  }, [selected]);
+  }, [selected, downloadStatementArchive]);
 
   /** "Download this list" — the rows exactly as they are on screen. */
   const exportListCsv = useCallback(
     (rows: PaperRow[], name: string, columns: [string, string, string]) => {
-      download(
+      handOver(
         new Blob([listCsv(rows, columns)], { type: "text/csv;charset=utf-8;" }),
         listFileName(name, new Date().toISOString().slice(0, 10)),
       );
@@ -2105,10 +2078,9 @@ function SlaPage() {
           moves={eventScreen.moves}
           partners={eventScreen.partnerRows}
           invoices={eventScreen.invoiceRows}
-          onClientStatement={() => {
-            const entry = clientStatementFor({ row: sel, invoices: selInvoices });
-            openStatement(entry);
-          }}
+          onClientStatement={() =>
+            void downloadStatement(clientStatementFor({ row: sel, invoices: selInvoices }))
+          }
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this event`}
           clientAlert={paymentStatus(sel, selInvoices).variant === "overdue"}
           clientNote={
@@ -2275,20 +2247,17 @@ function SlaPage() {
           statements={{
             suppliers: filtered.reduce((n, d) => n + supplierStatementsFor(d).length, 0),
             clients: filtered.length,
-            onSuppliers: () => {
-              const entries = filtered.flatMap((d) => supplierStatementsFor(d));
-              download(
-                new Blob([zipStored(entries)], { type: "application/zip" }),
+            building: buildingStatements,
+            onSuppliers: () =>
+              void downloadStatementArchive(
+                filtered.flatMap((d) => supplierStatementsFor(d)),
                 archiveName("supplier", new Date().toISOString().slice(0, 10)),
-              );
-            },
-            onClients: () => {
-              const entries = filtered.map((d) => clientStatementFor(d));
-              download(
-                new Blob([zipStored(entries)], { type: "application/zip" }),
+              ),
+            onClients: () =>
+              void downloadStatementArchive(
+                filtered.map((d) => clientStatementFor(d)),
                 archiveName("client", new Date().toISOString().slice(0, 10)),
-              );
-            },
+              ),
             onContactTodo: () => exportContactToBeDone(decorated, statusMap),
           }}
           noPoCount={listed.filter(({ item }) => !hasPurchaseOrder(item.row)).length}
@@ -2485,6 +2454,8 @@ function OverviewScreen({
   statements: {
     suppliers: number;
     clients: number;
+    /** `12 / 96` while the archive is being drawn, so the wait is legible. */
+    building: string | null;
     onSuppliers: () => void;
     onClients: () => void;
     onContactTodo: () => void;
@@ -2688,26 +2659,26 @@ function OverviewScreen({
         <div className="mt-3.5 flex flex-col gap-2">
           <button
             type="button"
-            disabled={statements.suppliers === 0}
+            disabled={statements.suppliers === 0 || statements.building !== null}
             onClick={statements.onSuppliers}
             className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
           >
             <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
             All supplier statements
             <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
-              {statements.suppliers} · zip
+              {statements.building ?? `${statements.suppliers} · zip`}
             </span>
           </button>
           <button
             type="button"
-            disabled={statements.clients === 0}
+            disabled={statements.clients === 0 || statements.building !== null}
             onClick={statements.onClients}
             className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
           >
             <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
             All client statements
             <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
-              {statements.clients} · zip
+              {statements.building ?? `${statements.clients} · zip`}
             </span>
           </button>
           <button

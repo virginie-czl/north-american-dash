@@ -21,7 +21,7 @@ import {
   type NaFinancialSummary,
 } from "@/lib/na-financial-summary.functions";
 import { partnerKey } from "@/lib/annotations.functions";
-import { zipStored } from "@/lib/zip";
+import { handOver, useStatementDownload } from "@/lib/use-statement-download";
 import { CommandPalette, type PaletteGroup } from "@/components/command-palette";
 import { EventNotes } from "@/components/paper-notes";
 import { listCsv, listFileName } from "@/lib/list-export";
@@ -44,8 +44,8 @@ import {
 } from "@/components/paper";
 import {
   archiveName,
-  clientStatement,
-  supplierStatement,
+  clientStatementData,
+  supplierStatementData,
   type StatementEvent,
 } from "@/lib/account-statements";
 import {
@@ -560,7 +560,7 @@ function statementEvent(row: NaRow): StatementEvent {
  */
 function naSupplierStatement(row: NaRow, p: ReturnType<typeof parseNaPartners>[number]) {
   const claw = partnerClawback(p);
-  return supplierStatement(statementEvent(row), {
+  return supplierStatementData(statementEvent(row), {
     name: p.name ?? "Prestataire inconnu",
     email: p.email,
     currency: p.currency,
@@ -592,7 +592,7 @@ function naSupplierStatements({
 function naClientStatement({ row }: { row: NaRow }, invoices: ReturnType<typeof parseNaInvoices>) {
   // `parseNaInvoices` already returns every document on the booking, cancelled
   // ones included, which is what a statement has to total.
-  return clientStatement(statementEvent(row), {
+  return clientStatementData(statementEvent(row), {
     invoiced: row.invoiced_ccy,
     collected: row.paid_ccy,
     outstanding: row.balance_ccy,
@@ -606,38 +606,6 @@ function naClientStatement({ row }: { row: NaRow }, invoices: ReturnType<typeof 
       amount: i.amount_ttc,
     })),
   });
-}
-
-/**
- * Open a statement and go straight to the print dialog, where "Save as PDF"
- * produces the file. The `#print` hash is what tells the document to do that —
- * the same file opened later out of a zip just renders.
- */
-function openStatement(entry: { name: string; bytes: Uint8Array<ArrayBuffer> }) {
-  const url = URL.createObjectURL(new Blob([entry.bytes], { type: "text/html;charset=utf-8" }));
-  const opened = window.open(`${url}#print`, "_blank");
-  if (!opened) {
-    // Pop-up blocked: fall back to handing over the file itself.
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = entry.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-  // The tab has the bytes; the URL can go once it has loaded.
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 function downloadCsv(lines: string[], filename: string) {
@@ -875,6 +843,12 @@ function NaPage() {
   const { data: gmailConnection } = useGmailConnection();
   const { progress: scanProgress, start: startScan } = useFactScan();
   const commissionRefundDialog = useNaCommissionRequestDialog();
+  // "Download statement" — the PDF itself, in Downloads.
+  const {
+    one: downloadStatement,
+    many: downloadStatementArchive,
+    progressLabel: buildingStatements,
+  } = useStatementDownload();
   const queryClient = useQueryClient();
   // Refreshing the mirror is explicit, so a cold instance never pays for Slack.
   const syncCards = useMutation({
@@ -1412,15 +1386,14 @@ function NaPage() {
   const downloadBookingStatements = useCallback(() => {
     if (!selected) return;
     const invoices = parseNaInvoices(selected.row.invoices_json ?? null);
-    const entries = [
-      ...naSupplierStatements({ row: selected.row, partners: selected.partners }),
-      naClientStatement({ row: selected.row }, invoices),
-    ];
-    downloadBlob(
-      new Blob([zipStored(entries)], { type: "application/zip" }),
+    void downloadStatementArchive(
+      [
+        ...naSupplierStatements({ row: selected.row, partners: selected.partners }),
+        naClientStatement({ row: selected.row }, invoices),
+      ],
       `${(selected.row.readable_id ?? "booking").replace(/[^\w-]/g, "-")}-account-statement.zip`,
     );
-  }, [selected]);
+  }, [selected, downloadStatementArchive]);
 
   /**
    * The filters that were always here, kept where they belong on a list screen:
@@ -2027,10 +2000,7 @@ function NaPage() {
           <>
             <DownloadLink
               className="text-[12.5px]"
-              onClick={() => {
-                const entry = naSupplierStatement(sel, p);
-                openStatement(entry);
-              }}
+              onClick={() => void downloadStatement(naSupplierStatement(sel, p))}
             >
               Supplier statement
             </DownloadLink>
@@ -2159,6 +2129,7 @@ function NaPage() {
     };
   }, [
     sel,
+    downloadStatement,
     selRef,
     selPartners,
     selInvoices,
@@ -2251,10 +2222,9 @@ function NaPage() {
           partners={bookingScreen.partnerRows}
           subtotal={bookingScreen.subtotal}
           invoices={bookingScreen.invoiceRows}
-          onClientStatement={() => {
-            const entry = naClientStatement({ row: sel }, selInvoices);
-            openStatement(entry);
-          }}
+          onClientStatement={() =>
+            void downloadStatement(naClientStatement({ row: sel }, selInvoices))
+          }
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this booking`}
           clientAlert={Math.abs(sel.balance_ccy ?? 0) > 0.01}
           clientNote={
@@ -2366,7 +2336,7 @@ function NaPage() {
           isLoading={isLoading}
           onBack={goToOverview}
           onDownload={() =>
-            downloadBlob(
+            handOver(
               new Blob([listCsv(naListRows, NA_LIST_META[activeList].columns)], {
                 type: "text/csv;charset=utf-8;",
               }),
@@ -2405,22 +2375,19 @@ function NaPage() {
           statements={{
             suppliers: filtered.reduce((n, d) => n + naSupplierStatements(d).length, 0),
             clients: filtered.length,
-            onSuppliers: () => {
-              const entries = filtered.flatMap((d) => naSupplierStatements(d));
-              downloadBlob(
-                new Blob([zipStored(entries)], { type: "application/zip" }),
+            building: buildingStatements,
+            onSuppliers: () =>
+              void downloadStatementArchive(
+                filtered.flatMap((d) => naSupplierStatements(d)),
                 archiveName("supplier", new Date().toISOString().slice(0, 10)),
-              );
-            },
-            onClients: () => {
-              const entries = filtered.map((d) =>
-                naClientStatement(d, parseNaInvoices(d.row.invoices_json ?? null)),
-              );
-              downloadBlob(
-                new Blob([zipStored(entries)], { type: "application/zip" }),
+              ),
+            onClients: () =>
+              void downloadStatementArchive(
+                filtered.map((d) =>
+                  naClientStatement(d, parseNaInvoices(d.row.invoices_json ?? null)),
+                ),
                 archiveName("client", new Date().toISOString().slice(0, 10)),
-              );
-            },
+              ),
             onRecover: () => exportRecoverCsv(sorted),
           }}
           onOpen={openList}
@@ -2552,6 +2519,8 @@ function NaOverviewScreen({
   statements: {
     suppliers: number;
     clients: number;
+    /** `12 / 96` while the archive is being drawn, so the wait is legible. */
+    building: string | null;
     onSuppliers: () => void;
     onClients: () => void;
     onRecover: () => void;
@@ -2749,26 +2718,26 @@ function NaOverviewScreen({
         <div className="mt-3.5 flex flex-col gap-2">
           <button
             type="button"
-            disabled={statements.suppliers === 0}
+            disabled={statements.suppliers === 0 || statements.building !== null}
             onClick={statements.onSuppliers}
             className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
           >
             <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
             All supplier statements
             <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
-              {statements.suppliers} · zip
+              {statements.building ?? `${statements.suppliers} · zip`}
             </span>
           </button>
           <button
             type="button"
-            disabled={statements.clients === 0}
+            disabled={statements.clients === 0 || statements.building !== null}
             onClick={statements.onClients}
             className="flex h-9 items-center gap-2.5 border border-paper-ink px-3 text-[13px] disabled:border-paper-rule-strong disabled:text-paper-faint"
           >
             <Download className="h-3.5 w-3.5 flex-none" strokeWidth={1.6} aria-hidden="true" />
             All client statements
             <span className="ml-auto font-paper-mono text-[11px] text-paper-label">
-              {statements.clients} · zip
+              {statements.building ?? `${statements.clients} · zip`}
             </span>
           </button>
           <button

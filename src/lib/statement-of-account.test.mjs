@@ -1,8 +1,8 @@
 import {
   money,
   netOffCancellingLines,
-  statementHtml,
   statementTotals,
+  statementVoice,
 } from "./statement-of-account.ts";
 
 let pass = 0,
@@ -116,103 +116,144 @@ t(
   ]).lines.length === 1,
 );
 
-// ── The document ───────────────────────────────────────────────────────────
-const html = statementHtml(seed);
-
-t("it is a standalone document", html.startsWith("<!doctype html>") && html.includes("</html>"));
-t(
-  "the only page rule is its margin",
-  (html.match(/@page/g) ?? []).length === 1 && html.includes("@page { margin: 0; }"),
-);
-t("Letter width, no viewport units", html.includes("width: 8.5in") && !/\d(vh|vw)\b/.test(html));
-t("both brand fonts are loaded", html.includes("Bricolage+Grotesque") && html.includes("Roboto"));
-t(
-  "the brand tokens are the ones specified",
-  html.includes("#101F34") &&
-    html.includes("#EFF779") &&
-    html.includes("#FAFAF8") &&
-    html.includes("#00B67A") &&
-    html.includes("#DC2626"),
-);
-t("figures are tabular", html.includes("font-variant-numeric: tabular-nums"));
+// ── The document's words ───────────────────────────────────────────────────
+const v = statementVoice(seed);
 
 t(
   "the running header states the document, booking, issue date and currency",
-  html.includes("Statement of account") &&
-    html.includes("Booking C-P222 · issued 31 July 2026 · USD"),
-);
-t(
-  "the header and footer repeat by being fixed",
-  (html.match(/position: fixed/g) ?? []).length === 2,
+  v.title === "Statement of account" &&
+    v.headerMeta === "Booking C-P222 · issued 31 July 2026 · USD",
+  v.headerMeta,
 );
 t(
   "the footer names the entity and the statement",
-  html.includes('Naboo Group · <a href="mailto:finance@naboo.app"') &&
-    html.includes("Statement C-P222 · 31 July 2026"),
-);
-
-t(
-  "the title carries the reference in gray",
-  html.includes('<h1>Statement of account <span class="ref">· C-P222</span></h1>'),
+  v.footerLeft === "Naboo Group · finance@naboo.app" &&
+    v.footerRight === "Statement C-P222 · 31 July 2026",
 );
 t(
   "the meta strip is the four cells asked for",
-  html.includes("Billed to") &&
-    html.includes("Altman Solon US, LP") &&
-    html.includes("Billing entity"),
+  v.meta.map(([label]) => label).join(", ") === "Billed to, Event, Booking, Billing entity" &&
+    v.meta[0][1] === "Altman Solon US, LP",
 );
-t(
-  "the meta strip, tiles and closing bar do not split across pages",
-  (html.match(/break-inside: avoid/g) ?? []).length === 3,
-);
-t("orphans and widows are set", html.includes("orphans: 3") && html.includes("widows: 3"));
 
 t(
   "the three tiles are there, with the due pill",
-  html.includes("Total invoiced") &&
-    html.includes("Total received") &&
-    html.includes("Balance due") &&
-    html.includes("Due 4 August 2026"),
+  v.tiles[0].label === "Total invoiced" &&
+    v.tiles[1].label === "Total received" &&
+    v.tiles[2].label === "Balance due" &&
+    v.tiles[2].pill === "Due 4 August 2026",
 );
 t(
-  "received is green and the balance sits on the yellow surface",
-  html.includes("figure-green") && html.includes("--yellow-surface"),
+  "the first tile counts the lines it actually lists",
+  v.tiles[0].caption === "4 lines · USD",
+  v.tiles[0].caption,
+);
+t(
+  "receipts are counted, and a total-only figure says so",
+  v.tiles[1].caption === "2 payments" &&
+    statementVoice({ ...seed, payments: [] }).tiles[1].caption === "Recorded as a total",
 );
 
-t("both tables use a repeating head", (html.match(/<thead>/g) ?? []).length === 2);
 t(
-  "a credit note is chipped and red",
-  html.includes('<span class="chip">Credit note</span>') &&
-    html.includes('class="num negative">−377.81'),
+  "the documents table is titled and qualified",
+  v.documents.title === "Invoices and credit notes" &&
+    v.documents.qualifier === "All amounts inclusive of tax, in USD",
 );
 t(
-  "each table closes on a total row",
-  (html.match(/class="total"/g) ?? []).length === 2 && html.includes(">300,909.90<"),
+  "each table closes on its own total",
+  v.documents.totalFigure === "300,909.90" && v.receipts.totalFigure === "277,577.51",
 );
 t(
-  "payments carry date, method and reference",
-  html.includes("26 Mar 2026") &&
-    html.includes("Bank transfer") &&
-    html.includes("NABI-FR26-00976"),
+  "a statement with no receipts explains the payments table rather than leaving it bare",
+  statementVoice({ ...seed, payments: [] }).receipts.qualifier.startsWith(
+    "Recorded as a total in the tracker",
+  ),
 );
 
 t(
   "the closing bar states the balance, the payee and the currency",
-  html.includes('class="closing-figure">23,332.39<') &&
-    html.includes("Payable to Naboo Group · due 4 August 2026 · reference C-P222"),
+  v.closing.figure === "23,332.39" &&
+    v.closing.sub === "Payable to Naboo Group · due 4 August 2026 · reference C-P222" &&
+    v.closing.currency === "USD",
 );
-t("the footnote links finance@naboo.app", html.includes('href="mailto:finance@naboo.app"'));
-t("nothing is said about netting when nothing was netted", !html.includes("netted off"));
+t("the footnote gives an address for a question", v.footnote.endsWith("finance@naboo.app."));
+t("nothing is said about netting when nothing was netted", !v.footnote.includes("netted off"));
 t(
   "a netted statement says what it left out",
-  statementHtml({
+  statementVoice({
     ...seed,
     lines: [
       ...seed.lines,
       { ref: "X", type: "invoice", amount: 4500 },
       { ref: "Y", type: "credit_note", amount: -4500 },
     ],
-  }).includes("2 documents that cancel each other in full — 1 group — are netted off"),
+  }).footnote.includes("2 documents that cancel each other in full — 1 group — are netted off"),
+);
+t(
+  "an omission the caller declares is said out loud",
+  statementVoice({
+    ...seed,
+    omissions: ["Two deposits are held against the group."],
+  }).footnote.includes("Two deposits are held against the group."),
+);
+
+// A settled statement must not ask to be paid.
+const paidUp = statementVoice({
+  ...seed,
+  payments: [...seed.payments, { paidOn: "1 Aug 2026", amount: 23332.39 }],
+});
+t(
+  "a settled statement says nothing is outstanding",
+  paidUp.settled &&
+    paidUp.closing.label === "Nothing outstanding" &&
+    paidUp.tiles[2].caption === "Settled in full",
+);
+t("a settled statement drops the due pill", paidUp.tiles[2].pill === null);
+t(
+  "a settled statement does not invite a payment",
+  !paidUp.closing.sub.includes("Payable to") && paidUp.closing.sub.startsWith("Settled in full"),
+);
+
+// A client who paid more than we billed is not "in arrears".
+const overpaid = statementVoice({
+  ...seed,
+  payments: [...seed.payments, { paidOn: "1 Aug 2026", amount: 40000 }],
+});
+t(
+  "an overpaid client reads as a credit balance",
+  overpaid.credit &&
+    overpaid.closing.label === "Credit balance" &&
+    overpaid.tiles[2].caption === "Paid beyond what we invoiced",
+);
+t(
+  "the figure drops its sign, because the label carries the direction",
+  overpaid.closing.figure === "16,667.61",
+  overpaid.closing.figure,
+);
+t("a credit balance is not given a due date", overpaid.tiles[2].pill === null);
+t(
+  "a credit balance says who refunds it",
+  overpaid.closing.sub.includes("To be refunded by Naboo Group"),
+);
+
+// ── The supplier voice ─────────────────────────────────────────────────────
+const supplier = statementVoice({ ...seed, side: "supplier", billedTo: "Hôtel Nelligan" });
+t(
+  "the supplier voice says payable, not invoiced",
+  supplier.meta[0][0] === "Payable to" &&
+    supplier.tiles[0].label === "Total payable" &&
+    supplier.tiles[1].label === "Total paid" &&
+    supplier.documents.title === "Amounts payable" &&
+    supplier.closing.label === "Balance to pay",
+);
+t("an accented supplier name survives", supplier.meta[0][1] === "Hôtel Nelligan");
+t(
+  "money owed back to us reads as a recovery",
+  statementVoice({
+    ...seed,
+    side: "supplier",
+    payments: [{ paidOn: "1 Jul 2026", amount: 400000 }],
+  }).closing.label === "Balance to recover",
 );
 
 // The hierarchy the back office draws: an invoice and the credit notes against
@@ -244,61 +285,6 @@ const partiallyCancelled = netOffCancellingLines([
 t(
   "a partially cancelled invoice keeps its whole group",
   partiallyCancelled.lines.length === 3 && partiallyCancelled.netted === 0,
-);
-
-// A settled statement must not ask to be paid.
-const paidUp = statementHtml({
-  ...seed,
-  payments: [...seed.payments, { paidOn: "1 Aug 2026", amount: 23332.39 }],
-});
-t(
-  "a settled statement says nothing is outstanding",
-  paidUp.includes("Nothing outstanding") && paidUp.includes("Settled in full"),
-);
-t("a settled statement drops the due pill", !paidUp.includes("Due 4 August 2026"));
-t("a settled statement does not invite a payment", !paidUp.includes("Payable to Naboo Group"));
-
-// A client who paid more than we billed is not "in arrears".
-const overpaid = statementHtml({
-  ...seed,
-  dueOn: "4 August 2026",
-  payments: [...seed.payments, { paidOn: "1 Aug 2026", amount: 40000 }],
-});
-t(
-  "an overpaid client reads as a credit balance",
-  overpaid.includes("Credit balance") && overpaid.includes("Paid beyond what we invoiced"),
-);
-t(
-  "the figure drops its sign, because the label carries the direction",
-  overpaid.includes(">16,667.61<") && !overpaid.includes("−16,667.61"),
-);
-t("a credit balance is not given a due date", !overpaid.includes("Due 4 August 2026"));
-t("a credit balance says who refunds it", overpaid.includes("To be refunded by Naboo Group"));
-t(
-  "the footer names the entity that issued the statement",
-  overpaid.includes("<span>Naboo Group ·"),
-);
-
-// ── Safety and the supplier voice ──────────────────────────────────────────
-t(
-  "a name cannot inject markup",
-  statementHtml({ ...seed, billedTo: '<script>alert("x")</script>' }).includes("&lt;script&gt;"),
-);
-const supplier = statementHtml({ ...seed, side: "supplier", billedTo: "Hôtel Nelligan" });
-t(
-  "the supplier voice says payable, not invoiced",
-  supplier.includes("Total payable") &&
-    supplier.includes("Payable to") &&
-    supplier.includes("Balance to pay"),
-);
-t("an accented supplier name survives", supplier.includes("Hôtel Nelligan"));
-t(
-  "money owed back to us reads as a recovery",
-  statementHtml({
-    ...seed,
-    side: "supplier",
-    payments: [{ paidOn: "1 Jul 2026", amount: 400000 }],
-  }).includes("Balance to recover"),
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -2,19 +2,19 @@
  * Account statements — one per supplier per event, and one per client per event.
  *
  * This is the adapter: it turns what the tracker holds about an event into the
- * `StatementOfAccount` the printable template renders. The document itself, its
- * brand and its print rules live in `statement-of-account.ts`; what lives here
- * is the mapping, and the honesty about what we do and do not hold.
+ * `StatementOfAccount` the document is drawn from. The figures and the wording
+ * live in `statement-of-account.ts`; what lives here is the mapping, and the
+ * honesty about what we do and do not hold.
  *
- * The output is an HTML document rather than a hand-built PDF: the design needs
- * Bricolage Grotesque, coloured cards and a header that repeats on every page,
- * which is a print engine's job. The PDF comes from the browser's own "Save as
- * PDF" — the template's print rules are written for exactly that.
+ * One rendering, one renderer: the shapes below go to `statement-pdf.ts`, which
+ * draws the file the download button hands over. There is no second template to
+ * keep in step with it. Nothing here imports the renderer — it weighs a megabyte
+ * with its font machinery, so the download loads it on the first click
+ * (`use-statement-download.ts`) rather than with the page.
  *
  * Pure: shapes in, a named file out. Nothing here knows about the DOM.
  */
-import { statementHtml, type StatementLine, type StatementOfAccount } from "./statement-of-account";
-import type { ZipEntry } from "./zip";
+import type { StatementLine, StatementOfAccount } from "./statement-of-account";
 
 export type StatementEvent = {
   ref: string;
@@ -166,7 +166,11 @@ function eventLabel(event: StatementEvent, side: "client" | "supplier"): string 
   return parts.filter(Boolean).join(" · ") || event.ref;
 }
 
-export function supplierStatement(event: StatementEvent, supplier: StatementSupplier): ZipEntry {
+/** The statement's data, before it is rendered as anything. */
+export function supplierStatementData(
+  event: StatementEvent,
+  supplier: StatementSupplier,
+): StatementOfAccount {
   const payable = supplier.payable ?? 0;
   const commission = supplier.commission ?? 0;
 
@@ -209,13 +213,13 @@ export function supplierStatement(event: StatementEvent, supplier: StatementSupp
     paymentReference: event.ref,
   };
 
-  return {
-    name: `${safeFileName(supplier.name)} — ${safeFileName(event.ref)}.html`,
-    bytes: encode(statementHtml(data)),
-  };
+  return data;
 }
 
-export function clientStatement(event: StatementEvent, client: StatementClient): ZipEntry {
+export function clientStatementData(
+  event: StatementEvent,
+  client: StatementClient,
+): StatementOfAccount {
   const invoices = client.invoices ?? [];
 
   /**
@@ -266,17 +270,12 @@ export function clientStatement(event: StatementEvent, client: StatementClient):
     paymentReference: event.po ? `${event.ref} · PO ${event.po}` : event.ref,
   };
 
-  return {
-    name: `${safeFileName(event.client)} — ${safeFileName(event.ref)}.html`,
-    bytes: encode(statementHtml(data)),
-  };
+  return data;
 }
 
-function encode(html: string): Uint8Array<ArrayBuffer> {
-  const encoded = new TextEncoder().encode(html);
-  const bytes = new Uint8Array(new ArrayBuffer(encoded.length));
-  bytes.set(encoded);
-  return bytes;
+/** `Bland AI — C-U332.pdf` — what lands in someone's Downloads folder. */
+export function statementFileName(data: StatementOfAccount): string {
+  return `${safeFileName(data.billedTo)} — ${safeFileName(data.bookingRef)}.pdf`;
 }
 
 /** `statements-client-2026-08-18.zip` */

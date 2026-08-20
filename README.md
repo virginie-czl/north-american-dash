@@ -470,21 +470,29 @@ longer to tie to the balance. Both are dropped from the listing and the document
 says how many pairs it netted off — removing them cannot move a total, which is
 what makes it safe. A *partial* credit note is never netted away.
 
-**It is an HTML print template** (`src/lib/statement-of-account.ts`), not a
-hand-built PDF, because the design needs what a print engine gives you: the
-brand faces, coloured surfaces, a running header and footer that repeat on every
-page and `<thead>` rows that repeat with a table. Opening a statement from the
-tracker goes straight to the print dialog, where "Save as PDF" produces the
-file. Letter, flowing, `@page { margin: 0 }` and nothing else; `break-inside:
-avoid` on the meta strip, the tiles and the closing bar; `orphans: 3; widows: 3`.
-Verified by printing a 46-line statement headless: 3 pages, header, footer and
-both table heads on each.
+**It is a PDF, drawn by the app** (`src/lib/statement-pdf.ts`, pdf-lib), and
+"Download statement" writes it straight to Downloads — one click, no tab, no
+print dialog, no destination folder to pick. The five brand faces travel inside
+the file (latin subsets, 250 KB, bundled at `src/assets/fonts/` and fetched once
+per session), so a statement opened on someone else's machine months later still
+reads in Bricolage Grotesque and Roboto. Letter, 44px margins, a running header
+and footer redrawn on every page, both table heads repeated after a break, and
+the closing bar kept on the same page as the note under it. 10 tests render real
+documents and read them back: one page for a short statement, two for sixty
+lines, US Letter, five embedded faces, and a glyph the subsets lack does not take
+the document down with it.
+
+The figures and every word the document says are decided in one place
+(`statementVoice`, `src/lib/statement-of-account.ts`) and drawn in another, so
+the wording is testable without a rasteriser: a settled statement must not ask to
+be paid, a client who paid beyond what we invoiced reads as a *credit balance*
+rather than arrears, and a supplier is *payable to* rather than *billed to*. 38
+tests on the figures and the voice.
 
 `src/lib/account-statements.ts` is the adapter from a tracker row to that
 document, and it is where the honesty about our own data lives — client receipts
 are held as a total rather than line by line, so the payments table says exactly
-that instead of implying nothing was paid. 40 tests on the template, 29 on the
-adapter.
+that instead of implying nothing was paid. 36 tests.
 
 Statements are taken one at a time from the event — next to each partner and
 above the invoice table — or as a zip of the whole filtered set from *Account
@@ -540,7 +548,9 @@ Three places, all the same generator:
   bar takes every statement for that file as one zip of PDFs; the rail lists it
   too, and each partner and the client have their own single-PDF link.
 - **On the overview** — the *Account statements* block takes the whole filtered
-  set: all supplier statements, all client statements.
+  set: all supplier statements, all client statements. Drawing a hundred PDFs
+  takes a few seconds, so the button counts them off (`12 / 96`) and yields the
+  frame between documents rather than freezing the tab.
 - **On a list** — "Download this list" exports the rows as they read on screen,
   as CSV, because that one is for a spreadsheet (`src/lib/list-export.ts`).
 
@@ -583,5 +593,5 @@ footnote says how many documents went. A *partially* cancelled invoice keeps its
 whole group on the page: the reduction is something the reader needs to see, and
 the remaining figures then tie to the back office's own "Remaining" line. For
 documents the data does not link, the older one-for-one amount match still
-applies. 49 tests on the template, 36 on the adapter, including C-U332 end to
-end.
+applies. 38 tests on the figures and the voice, 36 on the adapter and 10 on the
+renderer, including C-U332 end to end.
