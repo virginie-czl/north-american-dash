@@ -1887,6 +1887,7 @@ function NaPage() {
       // What we already sent them. The amounts stay put until they pay, so
       // without this the screen asks for the same money indefinitely.
       const askedThis = recover > 0.01 ? askedFor(selRef, p.name) : null;
+      const recap = financialSummaries?.get(`${selRef}::${key}`);
       return {
         key,
         name: p.is_provision ? `${p.name ?? "Provision"} — to be quoted` : (p.name ?? "—"),
@@ -1929,6 +1930,11 @@ function NaPage() {
                 : "Nothing owed either way.",
         stateAlert: recover > 0.01,
         muted: !!p.is_provision,
+        note: recap
+          ? `${recap.summary} — from ${recap.message_count} message${
+              recap.message_count === 1 ? "" : "s"
+            }, summarised by ${recap.generated_by ?? "us"}.`
+          : null,
         figures: p.is_provision
           ? [
               { label: "Payable to date", value: "—" },
@@ -1979,7 +1985,9 @@ function NaPage() {
               >
                 {summarize.isPending && summarize.variables?.partner_name === (p.name ?? p.email)
                   ? "Summarising…"
-                  : "Summarise our emails"}
+                  : recap
+                    ? "Re-summarise our emails"
+                    : "Summarise our emails"}
               </PaperLink>
             )}
             {recover > 0.01 && !askedThis && (
@@ -2100,6 +2108,7 @@ function NaPage() {
     commissionRefundDialog,
     summarize,
     markAsked,
+    financialSummaries,
   ]);
 
   /** The bookings of the list we came from, so ← Previous / Next → can walk it. */
@@ -2186,54 +2195,6 @@ function NaPage() {
           clientStatementLabel={`Client statement · ${sel.company_name ?? "the client"}, this booking`}
           history={bookingScreen.history}
           notes={<EventNotes eventRef={selRef} />}
-          railTop={
-            selPartners.filter((p) => !p.is_provision && p.email).length > 0 ? (
-              <>
-                <SectionLabel>What our emails say</SectionLabel>
-                <div className="mt-3 flex flex-col gap-3">
-                  {selPartners
-                    .filter((p) => !p.is_provision && p.email)
-                    .map((p) => {
-                      const key = partnerKey(p.name ?? p.email ?? "");
-                      const existing = financialSummaries?.get(`${selRef}::${key}`);
-                      return (
-                        <div key={key} className="border border-paper-rule-strong bg-white p-3.5">
-                          <div className="text-[12.5px] text-paper-label">{p.name ?? p.email}</div>
-                          <p className="mt-1.5 text-[13px] leading-relaxed text-paper-body">
-                            {existing?.summary ?? "Nothing summarised on this supplier yet."}
-                          </p>
-                          {existing && (
-                            <p className="mt-2 text-[11.5px] text-paper-label">
-                              {existing.message_count} message
-                              {existing.message_count === 1 ? "" : "s"} · summarised by{" "}
-                              {existing.generated_by ?? "—"}
-                            </p>
-                          )}
-                          <button
-                            type="button"
-                            disabled={summarize.isPending}
-                            onClick={() =>
-                              summarize.mutate({
-                                event_ref: selRef,
-                                partner_name: p.name ?? p.email ?? "",
-                                partner_email: p.email,
-                              })
-                            }
-                            className="mt-2 inline-block border-b border-paper-ink pb-0.5 text-[12.5px] disabled:border-paper-rule-strong disabled:text-paper-faint"
-                          >
-                            {summarize.isPending
-                              ? "Summarising…"
-                              : existing
-                                ? "Re-summarise"
-                                : "Summarise our emails"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                </div>
-              </>
-            ) : undefined
-          }
           rail={[
             {
               id: "emails",

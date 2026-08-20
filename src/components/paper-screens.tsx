@@ -262,6 +262,8 @@ export type EventPartnerRow = {
   contact: string;
   state: string;
   stateAlert?: boolean;
+  /** A second, quieter line — what our emails with them say, when we asked. */
+  note?: string | null;
   /** A line nobody has to act on — a provision leg, or a settled partner. */
   muted?: boolean;
   /** Two on L'Oréal (due / paid), three on Marketplace NA. */
@@ -294,7 +296,6 @@ export function EventScreen({
   clientStatementLabel,
   history,
   rail,
-  railTop,
   notes,
   panel,
   caption,
@@ -329,8 +330,6 @@ export function EventScreen({
   notes: ReactNode;
   /** The panel a rail link opened, rendered under the invoicing block. */
   panel?: ReactNode;
-  /** Above History — Marketplace NA puts the email recap there. */
-  railTop?: ReactNode;
   /** A line under the stat strip, where a figure needs its definition. */
   caption?: string | null;
   /** Next to the title — the lock state on Marketplace NA. */
@@ -443,6 +442,11 @@ export function EventScreen({
                   >
                     {p.state}
                   </span>
+                  {p.note && (
+                    <span className="mt-1.5 block text-[12.5px] leading-relaxed text-paper-muted">
+                      {p.note}
+                    </span>
+                  )}
                   {p.links && (
                     <span className="mt-1.5 flex flex-wrap items-center gap-5">{p.links}</span>
                   )}
@@ -520,8 +524,7 @@ export function EventScreen({
         </div>
 
         <aside className="px-8 pb-12 pt-8">
-          {railTop}
-          <SectionLabel className={railTop ? "mt-9" : ""}>History</SectionLabel>
+          <SectionLabel>History</SectionLabel>
           <div className="mt-3">
             {history.length === 0 && (
               <p className="py-3 text-[13px] text-paper-muted">Nothing recorded yet.</p>
