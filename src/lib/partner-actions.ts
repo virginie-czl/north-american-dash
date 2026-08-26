@@ -166,6 +166,9 @@ export type PartnerSituation = {
   taxTracked?: boolean;
 };
 
+/** Bank details, tax numbers, or both — the two things we ever ask a partner for. */
+export type PartnerNeeds = { bank: boolean; tax: boolean };
+
 export type PartnerAction = {
   code: ActionCode;
   /** How this partner is payable, when we hold the means. */
@@ -177,6 +180,16 @@ export type PartnerAction = {
   label: string;
   detail: string;
   tax: TaxRegistration;
+  /**
+   * What is still to be *asked* of this partner — which is not the same as what
+   * is missing. A tax number we requested last week is missing but not pending:
+   * the ask has happened, the next move is theirs, and asking again the next day
+   * is how a partner gets three copies of the same email.
+   *
+   * The action lists are built from this, so anything already requested drops
+   * off them on its own.
+   */
+  pending: PartnerNeeds;
 };
 
 /**
@@ -191,7 +204,27 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
   // tree treats registration as a non-issue throughout.
   const taxOk = s.taxTracked === false ? true : taxComplete(tax, s.country);
   const owes = s.outstanding > 0.01;
-  const base = { tax };
+
+  // How this partner could be paid, if at all. Read before the tree branches,
+  // because what is left to ask them depends on it.
+  const cardReady =
+    s.cardApprovedInSlack === true || s.cardOnThisEvent === "accepted" || s.cardEverAccepted;
+  const readiness: PaymentReadiness = cardReady
+    ? "card"
+    : s.bankDetails === "received"
+      ? "bank"
+      : "none";
+
+  /**
+   * What is left to ask. Bank details only when money is owed, a PO exists and
+   * we cannot pay them by any means we already hold — and only if we have not
+   * asked. Tax numbers whenever we do not hold one and have not asked for it.
+   */
+  const pending: PartnerNeeds = {
+    bank: owes && s.hasPo && readiness === "none" && s.bankDetails === "not_asked",
+    tax: !taxOk && !s.taxAsked,
+  };
+  const base = { tax, pending };
 
   // Money settled and registration on file: closed.
   if (!owes && taxOk) {
@@ -231,14 +264,6 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
   }
 
   // Something is owed. Can we pay at all?
-  const cardReady =
-    s.cardApprovedInSlack === true || s.cardOnThisEvent === "accepted" || s.cardEverAccepted;
-  const readiness: PaymentReadiness = cardReady
-    ? "card"
-    : s.bankDetails === "received"
-      ? "bank"
-      : "none";
-
   if (readiness !== "none") {
     if (!taxOk && !s.taxAsked) {
       return {
@@ -335,6 +360,18 @@ export function decidePartnerAction(s: PartnerSituation): PartnerAction {
   }
 
   if (needTax) {
+    // Bank details already requested, tax numbers not: the ask that remains is
+    // the tax one, and the label has to say so rather than asking twice.
+    if (!pending.bank) {
+      return {
+        ...base,
+        code: "ask_tax",
+        owner: "partner",
+        scanUseful: true,
+        label: "Demander les taxes",
+        detail: "Coordonnées bancaires déjà demandées ; il manque les numéros de taxes.",
+      };
+    }
     return {
       ...base,
       code: "ask_bank_and_tax",

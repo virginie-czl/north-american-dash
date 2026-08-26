@@ -49,7 +49,7 @@ import { PartnerEmails } from "@/components/partner-emails";
 import { PartnerInvoicePdfs } from "@/components/partner-invoice-pdfs";
 import { EventStickers, PartnerStickers } from "@/components/partner-fact-stickers";
 import { RequestInfoDialog, useRequestDialog } from "@/components/request-info-dialog";
-import { buildTargets, describeNeeds, needsOf } from "@/lib/partner-requests";
+import { buildTargets, describeNeeds, missingOf } from "@/lib/partner-requests";
 import { UserAvatar } from "@/components/user-avatar";
 import { useActionIndex, tagsForEvent, TAG_FILTER_GROUPS } from "@/lib/use-partner-actions";
 import { useFactScan, useGmailConnection, usePartnerFacts } from "@/lib/use-gmail";
@@ -1755,7 +1755,10 @@ function EventDetails({
                         {(() => {
                           if (!gmailConnection?.connected || !p.email) return null;
                           const action = actionFor(eventRef, p, Boolean(row.purchase_order_number));
-                          const needs = needsOf(action, p.country);
+                          // This page has no action lists, so the per-partner
+                          // button is the only way to ask: it offers whatever is
+                          // still missing, asked before or not.
+                          const needs = missingOf(action, p.country);
                           if (!needs) return null;
                           return (
                             <button

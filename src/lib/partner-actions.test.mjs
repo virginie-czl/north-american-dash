@@ -164,6 +164,55 @@ t(
 const a12 = decidePartnerAction(S({ outstanding: 5000, hasPo: false }));
 t("no PO → blocked, no scan", a12.code === "blocked_no_po" && !a12.scanUseful, a12.code);
 
+// ─── What is left to ask ───────────────────────────────────────────────────
+console.log("\n[pending]");
+
+const owed = { outstanding: 1000 };
+const p0 = decidePartnerAction(S(owed)).pending;
+t("never asked → both are pending", p0.bank && p0.tax, JSON.stringify(p0));
+
+const p1 = decidePartnerAction(S({ ...owed, bankDetails: "asked" })).pending;
+t("bank asked → only tax is pending", !p1.bank && p1.tax, JSON.stringify(p1));
+
+const p2 = decidePartnerAction(S({ ...owed, bankDetails: "asked", taxAsked: true })).pending;
+t("both asked → nothing is pending", !p2.bank && !p2.tax, JSON.stringify(p2));
+
+const p3 = decidePartnerAction(S({ ...owed, hasPo: false })).pending;
+t("no PO → no bank ask, whatever else is missing", !p3.bank, JSON.stringify(p3));
+
+const p4 = decidePartnerAction(S({ outstanding: 0, taxAsked: true })).pending;
+t("paid and the tax ask already made → nothing pending", !p4.bank && !p4.tax, JSON.stringify(p4));
+
+/**
+ * The invariant the action lists rest on: nothing already requested is ever
+ * pending again. Broken, it re-sends the same email every time someone opens
+ * the ask list — which is what happened to F-B802, asked for a tax number on
+ * 17 August, answered within the hour, asked again on the 26th.
+ */
+let violations = 0;
+for (const outstanding of [0, 1000]) {
+  for (const hasPo of [true, false]) {
+    for (const bankDetails of ["not_asked", "asked", "received"]) {
+      for (const taxAsked of [true, false]) {
+        for (const taxRaw of [null, "121107726RT0001"]) {
+          for (const cardEverAccepted of [true, false]) {
+            const s = S({ outstanding, hasPo, bankDetails, taxAsked, taxRaw, cardEverAccepted });
+            const { pending } = decidePartnerAction(s);
+            if (pending.bank && bankDetails !== "not_asked") violations++;
+            if (pending.tax && taxAsked) violations++;
+            if (pending.bank && (!hasPo || outstanding === 0)) violations++;
+          }
+        }
+      }
+    }
+  }
+}
+t(
+  "across every situation, nothing already asked is asked again",
+  violations === 0,
+  String(violations),
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
 

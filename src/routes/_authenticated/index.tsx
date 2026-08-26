@@ -377,7 +377,7 @@ const LIST_META: Record<
     detail: () => "One email per partner, covering all their bookings",
     unit: "to pay out",
     explanation:
-      "One email per partner, in their language, listing every booking of theirs and asking only for what is missing. Nothing sends until you confirm.",
+      "One email per partner, listing every booking of theirs and asking only for what we have not already asked for. A partner drops off this list the moment the request goes out, and reappears nowhere — the reply is chased from Waiting. Nothing sends until you confirm.",
     columns: ["Owed to partner", "Client outstanding", "Waiting"],
     unitNoun: "partners",
     primary: true,
@@ -426,7 +426,7 @@ const LIST_META: Record<
     detail: () => "Nothing to do until they answer",
     unit: "on hold",
     explanation:
-      "The ask is with the partner. Nothing to do until they answer — if one has gone quiet for too long, send it again from the ask list.",
+      "These partners were asked and have not answered — every request sent from this tracker is recorded, so they leave the ask list on their own. Nothing to do until they reply; tick anyone who has gone quiet too long and send the request again from here.",
     columns: ["Owed to partner", "Client outstanding", "Waiting"],
     unitNoun: "partners",
     quiet: true,
@@ -1033,29 +1033,33 @@ function SlaPage() {
     return null;
   }
 
-  // Providers on the visible rows still missing something. Grouped by address, so a
-  // provider on several bookings is contacted once.
-  const incompleteTargets = useMemo(
+  /** Every provider on the visible rows, as the request builder wants them. */
+  const requestable = useMemo(
     () =>
-      buildTargets(
-        filtered.flatMap(({ row: r, partners: ps }) => {
-          const ref = r.readable_id ?? r.client_request_id ?? "";
-          const hasPo = Boolean(r.purchase_order_number);
-          return ps.map((p) => ({
-            eventRef: ref,
-            eventDate: r.start_date ?? null,
-            name: p.name,
-            email: p.email,
-            country: p.country,
-            currency: p.currency,
-            amountDue: p.amount_due,
-            action: actionFor(ref, p, hasPo),
-            isCancelled: p.is_cancelled,
-          }));
-        }),
-      ),
+      filtered.flatMap(({ row: r, partners: ps }) => {
+        const ref = r.readable_id ?? r.client_request_id ?? "";
+        const hasPo = Boolean(r.purchase_order_number);
+        return ps.map((p) => ({
+          eventRef: ref,
+          eventDate: r.start_date ?? null,
+          name: p.name,
+          email: p.email,
+          country: p.country,
+          currency: p.currency,
+          amountDue: p.amount_due,
+          action: actionFor(ref, p, hasPo),
+          isCancelled: p.is_cancelled,
+        }));
+      }),
     [filtered, actionFor],
   );
+
+  // The asks nobody has made yet. Grouped by address, so a provider on several
+  // bookings is contacted once.
+  const incompleteTargets = useMemo(() => buildTargets(requestable), [requestable]);
+
+  // The same providers, for a reminder: asked already, still nothing back.
+  const reminderTargets = useMemo(() => buildTargets(requestable, "reminder"), [requestable]);
 
   /**
    * The work, split into one list per action type.
@@ -1073,18 +1077,20 @@ function SlaPage() {
       const hasPo = hasPurchaseOrder(r);
       const owed = unpaidPartners(ps);
 
-      /** Providers we cannot pay yet because something is missing. */
+      /** Providers with an ask still to make — never one already sent. */
       const toAsk = owed.filter(({ partner }) => {
         if (!partner.email) return false;
-        return needsOf(actionFor(ref, partner, hasPo), partner.country) != null;
+        return needsOf(actionFor(ref, partner, hasPo)) != null;
       });
+      /** Providers we have asked and have not heard back from. */
+      const awaiting = owed.filter(
+        ({ partner }) => actionFor(ref, partner, hasPo).code === "await_reply",
+      );
       /** Providers we hold everything for — the payout is ours to make. */
       const payable = owed.filter(
         ({ partner }) => actionFor(ref, partner, hasPo).code === "ours_pay",
       );
 
-      const outreach = partnerOutreach(ps, ref, hasPo);
-      const awaitingReply = outreach?.label.includes("⏳") === true;
       const invoiceSent = earliestSent(iv) != null;
       const overdue = paymentStatus(r, iv).variant === "overdue";
 
@@ -1093,13 +1099,15 @@ function SlaPage() {
       if (hasPo && payable.length > 0) keys.add("pay");
       if (hasPo && !invoiceSent) keys.add("invoice");
       if (overdue) keys.add("chase");
-      if (hasPo && awaitingReply) keys.add("waiting");
+      // Asked and unanswered, partner by partner — not "every partner on this
+      // event has been contacted", which counted people nobody had written to.
+      if (hasPo && awaiting.length > 0) keys.add("waiting");
 
       return {
         keys,
         toAsk,
+        awaiting,
         payable,
-        owed,
         invoiceSent,
         // Units the headline counts: partners for the partner lists, events for
         // the client ones.
@@ -1108,18 +1116,18 @@ function SlaPage() {
           pay: payable.length,
           invoice: 1,
           chase: 1,
-          waiting: owed.length,
+          waiting: awaiting.length,
         } as Record<ListKey, number>,
         amounts: {
           ask: toAsk.reduce((t, u) => t + u.remaining, 0),
           pay: payable.reduce((t, u) => t + u.remaining, 0),
           invoice: stillToInvoice(r),
           chase: Math.max(r.client_reste_a_encaisser_ttc ?? 0, 0),
-          waiting: owed.reduce((t, u) => t + u.remaining, 0),
+          waiting: awaiting.reduce((t, u) => t + u.remaining, 0),
         } as Record<ListKey, number>,
       };
     },
-    [actionFor, partnerOutreach],
+    [actionFor],
   );
 
   const listed = useMemo(
@@ -1294,14 +1302,14 @@ function SlaPage() {
       const ccy = r.currency ?? "CAD";
 
       if (activeList === "ask" || activeList === "waiting") {
-        const source = activeList === "ask" ? lists.toAsk : lists.owed;
+        const source = activeList === "ask" ? lists.toAsk : lists.awaiting;
         for (const { partner, remaining } of source) {
           const key = partnerKey(partner.name ?? partner.email ?? "");
           const action = actionFor(ref, partner, hasPo);
           const facts = factsMap?.get(`${ref}::${key}`);
           const state = partnerState(facts, action, breach);
           if (activeList === "ask") {
-            const needs = needsOf(action, partner.country);
+            const needs = needsOf(action);
             if (!needs) continue;
             out.push({
               id: `${ref}::${key}`,
@@ -1336,6 +1344,14 @@ function SlaPage() {
               a: fmtPaper(remaining),
               b: fmtPaper(clientOut),
               trail: daysLabel(facts?.contacted_at),
+              // A partner who has gone quiet is chased from here, since the ask
+              // list only holds asks that have never been made.
+              target: reminderTargets.find(
+                (t) =>
+                  t.eventRef === ref &&
+                  t.address === (partner.email ?? "").trim().toLowerCase() &&
+                  t.partnerName === (partner.name ?? partner.email ?? ""),
+              ),
             });
           }
         }
@@ -1627,7 +1643,7 @@ function SlaPage() {
     for (const { partner, remaining } of selLists.toAsk) {
       const key = partnerKey(partner.name ?? partner.email ?? "");
       const action = actionFor(selRef, partner, hasPo);
-      const needs = needsOf(action, partner.country);
+      const needs = needsOf(action);
       if (!needs) continue;
       const facts = factsMap?.get(`${selRef}::${key}`);
       const state = partnerState(facts, action, breach);
@@ -2165,16 +2181,21 @@ function SlaPage() {
             })
           }
           primary={
-            activeList === "ask" && gmailConnection?.connected
+            (activeList === "ask" || activeList === "waiting") && gmailConnection?.connected
               ? {
-                  label: `Review & send ${selectedTargets.length}`,
+                  // The waiting list sends the same request again, to a partner
+                  // who has not answered — the ask list holds only first asks.
+                  label:
+                    activeList === "waiting"
+                      ? `Remind ${selectedTargets.length}`
+                      : `Review & send ${selectedTargets.length}`,
                   disabled: selectedTargets.length === 0,
                   onClick: () => requestDialog.open(selectedTargets),
                 }
               : undefined
           }
           secondary={
-            activeList === "ask" && gmailConnection?.connected
+            (activeList === "ask" || activeList === "waiting") && gmailConnection?.connected
               ? {
                   label: "Create drafts",
                   disabled: selectedTargets.length === 0,

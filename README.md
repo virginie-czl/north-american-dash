@@ -136,6 +136,7 @@ Events are skipped when no email could change the answer:
 | Owed, partner accepted card before | À payer (carte) — ours | no |
 | No PO yet | Bloqué — nothing to ask | no |
 | Owed, nothing asked yet | Demander bancaire + taxes | yes |
+| Owed, bank asked, tax not | Demander les taxes | yes |
 | Asked, no reply yet | En attente de réponse | yes |
 | Asked, partner replied | Réponse à traiter | yes |
 
@@ -145,6 +146,20 @@ it needs to.
 **Card before bank.** A partner who has accepted a card payment on *any* event is
 never asked for an IBAN again — the tracker proposes the card instead. That memory
 is keyed on the partner, not the booking.
+
+**An ask that has been made is not an ask.** The action lists are built from
+`action.pending` — what is still to be *requested* — never from what is missing.
+That difference is the whole behaviour of the *Ask partners* list: a tax number
+requested last week is still missing, and listing it again sends the partner a
+second copy of the same email. F-B802 is the case that made it plain — asked for a
+tax number on 17 August, answered "I don't have one" within the hour, asked again
+on the 26th by the next batch. Every request sent from this tracker is recorded
+against the partner (`recordSentRequests`), a hand-set *En attente du bancaire*
+counts as an ask too, and either one takes the partner off the list. Chasing
+someone who has gone quiet happens from *Waiting*, which now holds exactly the
+partners who were asked and have not replied; `missingOf` builds those reminders
+from what we still do not hold. Drafts stay deliberately unrecorded: a draft is
+not a request, so a message created and never sent leaves the ask where it was.
 
 ### The headline figures on L'Oréal CA
 

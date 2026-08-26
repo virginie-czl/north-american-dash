@@ -8,6 +8,7 @@ import { decidePartnerAction, taxComplete, type PartnerAction } from "@/lib/part
 import { partnerKey } from "@/lib/annotations.functions";
 import { useQuery } from "@tanstack/react-query";
 import { usePartnerFacts, type PartnerFacts } from "@/lib/use-gmail";
+import { usePartnerStatuses } from "@/lib/use-annotations";
 import { fetchCardApprovals } from "@/lib/slack-cards.functions";
 
 export type ActionablePartner = {
@@ -29,6 +30,10 @@ export type ActionablePartner = {
 
 export function useActionIndex() {
   const { data: factsMap, error: factsError } = usePartnerFacts();
+  // The status someone set by hand on a partner. "En attente du bancaire" is a
+  // colleague saying they asked: it has to count as an ask, or the tracker keeps
+  // listing a partner they have already written to.
+  const { data: statusMap } = usePartnerStatuses();
 
   // Approved cards from #finance-paiement-by-card. Matched on the O- owner code, so
   // exact. A failure here must not break the page — the email signal still works.
@@ -63,15 +68,20 @@ export function useActionIndex() {
     ): PartnerAction => {
       const key = partnerKey(partner.name ?? partner.email ?? "");
       const facts: PartnerFacts | undefined = factsMap?.get(`${eventRef}::${key}`);
+      const manual = statusMap?.get(`${eventRef}::${key}`)?.status;
+      const askedByHand = manual === "waiting_bank";
+      // A scan that found nothing writes "not_asked"; the hand-set status still
+      // has to win over that, so this is a floor rather than a fallback.
+      const scanned = facts?.bank_details ?? "not_asked";
       return decidePartnerAction({
         outstanding: Math.max(partner.amount_due ?? 0, 0),
         hasPo,
         country: partner.country,
         taxRaw: partner.vat_raw,
         taxIdentifier: partner.tax_identifier,
-        bankDetails: facts?.bank_details ?? "not_asked",
+        bankDetails: scanned === "not_asked" && askedByHand ? "asked" : scanned,
         taxAsked: facts?.tax_info === "asked" || facts?.tax_info === "received",
-        contacted: facts?.contacted_at != null,
+        contacted: facts?.contacted_at != null || askedByHand,
         replied: facts?.replied_at != null,
         cardOnThisEvent: partner.cardOnThisEvent ?? facts?.card_payment ?? "unknown",
         cardEverAccepted: cardEverAccepted.has(key),
@@ -81,7 +91,7 @@ export function useActionIndex() {
         taxTracked: options?.taxTracked,
       });
     },
-    [factsMap, cardEverAccepted, cardApprovedCodes],
+    [factsMap, statusMap, cardEverAccepted, cardApprovedCodes],
   );
 
   /** True when at least one partner on the event still has an open question. */

@@ -44,23 +44,55 @@ export type PartnerInput = {
   eventClientLabel?: string;
 };
 
-/** What this partner still needs, or null when nothing is missing. */
-export function needsOf(action: PartnerAction, country: string | null): Needs | null {
+/**
+ * What is left to ask this partner, or null when the ask has already gone out.
+ *
+ * This is what the action lists are built from, and the distinction matters: a
+ * tax number we requested last week is still *missing*, but asking for it again
+ * the next morning is how a partner ends up with three copies of the same email.
+ * Use `missingOf` when the question really is "what do we not hold".
+ */
+export function needsOf(action: PartnerAction): Needs | null {
+  const { bank, tax } = action.pending;
+  if (!bank && !tax) return null;
+  return { bank, tax };
+}
+
+/**
+ * What we still do not hold, asked for or not — the basis for a reminder to a
+ * partner who has gone quiet.
+ */
+export function missingOf(action: PartnerAction, country: string | null): Needs | null {
   const taxMissing = !taxComplete(action.tax, country);
   const bankMissing =
-    action.code === "ask_bank" || action.code === "ask_bank_and_tax" || action.code === "ask_card"; // card-first: still might need bank if they decline
+    action.code === "ask_bank" ||
+    action.code === "ask_bank_and_tax" ||
+    action.code === "ask_card" || // card-first: still might need bank if they decline
+    // Asked and unanswered: the details are still not here.
+    (action.code === "await_reply" && action.payableBy == null);
   if (!taxMissing && !bankMissing) return null;
   return { bank: bankMissing, tax: taxMissing };
 }
 
-/** One request per partner × booking (not grouped). */
-export function buildTargets(partners: PartnerInput[]): RequestTarget[] {
+/**
+ * One request per partner × booking (not grouped).
+ *
+ * `"new"` builds the asks that have not been made. `"reminder"` builds a
+ * follow-up for a partner who was asked and has not answered — same message,
+ * addressed to what is still missing.
+ */
+export function buildTargets(
+  partners: PartnerInput[],
+  mode: "new" | "reminder" = "new",
+): RequestTarget[] {
+  const wanted = (p: PartnerInput) =>
+    mode === "new" ? needsOf(p.action) : missingOf(p.action, p.country);
   return partners
     .filter((p) => {
       if (p.isCancelled) return false;
       const address = (p.email ?? "").trim().toLowerCase();
       if (!address.includes("@")) return false;
-      return needsOf(p.action, p.country) != null;
+      return wanted(p) != null;
     })
     .map((p) => ({
       address: (p.email ?? "").trim().toLowerCase(),
@@ -70,7 +102,7 @@ export function buildTargets(partners: PartnerInput[]): RequestTarget[] {
       eventDate: p.eventDate,
       currency: p.currency,
       amountDue: p.amountDue,
-      needs: needsOf(p.action, p.country)!,
+      needs: wanted(p)!,
       eventClientLabel: p.eventClientLabel,
     }));
 }
