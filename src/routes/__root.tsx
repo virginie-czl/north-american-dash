@@ -113,6 +113,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     links: [
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
+      // The Adobe kit that carries the trackers' display face. In the head
+      // rather than @import-ed from the stylesheet, so it is fetched alongside
+      // our CSS instead of after it — a display face that lands late is a
+      // heading that visibly reflows.
+      { rel: "preconnect", href: "https://use.typekit.net" },
+      { rel: "preconnect", href: "https://p.typekit.net", crossOrigin: "anonymous" },
+      { rel: "stylesheet", href: "https://use.typekit.net/pxx3gpc.css" },
       {
         rel: "stylesheet",
         href: appCss,

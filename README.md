@@ -50,6 +50,26 @@ Deploys on Vercel out of the box: `vite.config.ts` forces the nitro `vercel` pre
 The same file sets `maxDuration: 60` on the function, because the trackers wait on
 BigQuery — see below.
 
+### The trackers' type
+
+L'Oréal CA and Marketplace NA set their headings in **fiona**, from the Adobe
+kit loaded in `__root.tsx` (`use.typekit.net/pxx3gpc.css`). It is a display face
+and it is used like one: page titles, section heads, the portfolio figure and the
+wordmark, nothing below 17px. Body text, table rows and columns of figures stay
+on Geist and Geist Mono — the kit ships both of its faces at a single weight, so
+anything asking for bold would be synthesised, and neither has tabular figures.
+
+Two things to know. **A new domain has to be authorised in Adobe Fonts**, or the
+kit will not serve; the rest of the stack in `--font-paper-display` (Bricolage
+Grotesque, then Aeonik) takes over on its own, so a page renders correctly either
+way — it just is not the brand. And the kit's other face, **cesso**, is one word
+away in that token if it is ever wanted: it was the first choice and lost because
+its 3 reads as a 5 at a glance, which on headings that carry a booking reference
+(`C-V304`) and a hero made of money is a mistake waiting to happen.
+
+Veolia is still on the old tokens (`--font-sans`, `--font-display`) and is
+untouched by this.
+
 ### Waiting on BigQuery
 
 `jobs.query` answers after a fixed wait whether or not the query has finished; a
